@@ -49,6 +49,12 @@ pub(crate) struct RuntimeExecutionContext {
     pub(super) hyper_resilience: Arc<crate::resilience::hyper_resilience::HyperResilienceEngine>,
     pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) memory_store: Arc<std::sync::Mutex<MemoryStore>>,
+    /// Fault-tolerance engine for real execution heartbeats/faults. `None` when
+    /// governance (and thus the harness bus) is disabled. When present, each
+    /// per-agent execution reports `report_heartbeat` on success and
+    /// `report_fault` on failure — the primary heartbeat source the background
+    /// recovery loop detects against.
+    pub(super) fault_tolerance: Option<Arc<crate::fault_tolerance::FaultToleranceEngine>>,
     pub(super) lazy_policy: super::LazyLoadPolicy,
     pub(super) adaptive_defaults: super::AdaptiveExecutionDefaults,
     pub(super) artifact_ledger: ArtifactLedger,
@@ -263,6 +269,11 @@ pub(crate) async fn build_execution_context(
         hyper_resilience: server.resilience.hyper_resilience.clone(),
         metrics: server.observability.metrics.clone(),
         memory_store: server.persistence.memory_store.clone(),
+        fault_tolerance: server
+            .governance_deps
+            .harness_bus
+            .as_ref()
+            .map(|hb| Arc::clone(&hb.fault_tolerance)),
         lazy_policy,
         adaptive_defaults: super::AdaptiveExecutionDefaults {
             recommended_failure_strategy: default_failure_strategy,
@@ -729,6 +740,58 @@ pub(crate) async fn execute_runtime_subtasks(
 // execute_single_subtask
 // ============================================================================
 
+/// Build `ContextFeatures` for the adaptive model selector from the executed
+/// subtask: UTC hour-of-day bucket, a coarse task-type derived from keywords,
+/// and a latency tier from the measured duration. This restores the
+/// per-context learning signal (previously only the global `record_result`
+/// was fed, so the UCB context arms never learned).
+fn model_context_features(
+    task: &str,
+    duration_ms: u64,
+) -> crate::intelligence::adaptive_selector::ContextFeatures {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let hour = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| (d.as_secs() % 86_400) / 3600)
+        .unwrap_or(12) as u32;
+    let time_bucket = match hour {
+        6..=11 => "morning",
+        12..=17 => "afternoon",
+        18..=23 => "evening",
+        _ => "night",
+    };
+    let lower = task.to_ascii_lowercase();
+    let task_type = if lower.contains("code")
+        || lower.contains("file")
+        || lower.contains("implement")
+        || lower.contains("refactor")
+        || lower.contains("function")
+        || lower.contains("test")
+    {
+        "code"
+    } else if lower.contains("research")
+        || lower.contains("explain")
+        || lower.contains("analyze")
+        || lower.contains("compare")
+    {
+        "reasoning"
+    } else {
+        "chat"
+    };
+    let latency_tier = if duration_ms < 500 {
+        "low"
+    } else if duration_ms < 2000 {
+        "medium"
+    } else {
+        "high"
+    };
+    crate::intelligence::adaptive_selector::ContextFeatures::new(
+        time_bucket,
+        task_type,
+        latency_tier,
+    )
+}
+
 async fn execute_single_subtask(
     task: String,
     subtask_description: String,
@@ -906,12 +969,20 @@ async fn execute_single_subtask(
             }
         }
 
+        let duration_ms = started.elapsed().as_millis() as u64;
+
         if let (Ok(mut selector), Some(model_id)) =
             (context.adaptive_selector.lock(), selected_model.clone())
         {
-            selector.record_result(&model_id, run_result.is_ok());
+            // Feed both the global and the per-context learning signal so the
+            // adaptive selector can learn from this execution in context
+            // (time-of-day / task-type / latency buckets).
+            selector.record_result_with_context(
+                &model_id,
+                run_result.is_ok(),
+                Some(&model_context_features(task.as_str(), duration_ms)),
+            );
         }
-        let duration_ms = started.elapsed().as_millis() as u64;
         let _ = context.outcome_tx.send(OutcomeEvent::AgentOutcome {
             phase_name: phase_name.to_string(),
             agent_name: agent_name.to_string(),
@@ -921,6 +992,45 @@ async fn execute_single_subtask(
         context
             .hyper_resilience
             .record_outcome(agent_name, run_result.is_ok(), duration_ms);
+
+        // Fault-tolerance signals from real execution: a failed agent run is
+        // reported as a fault on the agent node (so the recovery machinery can
+        // act on real failures), a successful run reports a heartbeat. These
+        // are the primary heartbeat source — the background recovery loop only
+        // detects and recovers. Unregistered nodes are skipped gracefully
+        // (debug log), never failing the request.
+        if let Some(ft) = context.fault_tolerance.as_ref() {
+            match &run_result {
+                Ok(_) => {
+                    if let Err(e) = ft.report_heartbeat(agent_name).await {
+                        tracing::debug!(
+                            target: "fault_tolerance",
+                            node = %agent_name,
+                            "heartbeat skipped (node not registered): {e}"
+                        );
+                    }
+                }
+                Err(err) => {
+                    let err_str = err.to_string();
+                    let (fault_type, severity) =
+                        if err_str.to_ascii_lowercase().contains("timed out") {
+                            (crate::fault_tolerance::FaultType::Hang, 6)
+                        } else {
+                            (crate::fault_tolerance::FaultType::Crash, 5)
+                        };
+                    if let Err(e) = ft
+                        .report_fault(agent_name, fault_type, severity, &err_str)
+                        .await
+                    {
+                        tracing::debug!(
+                            target: "fault_tolerance",
+                            node = %agent_name,
+                            "fault report skipped (node not registered): {e}"
+                        );
+                    }
+                }
+            }
+        }
 
         match run_result {
             Ok(response) if !response.trim().is_empty() => {

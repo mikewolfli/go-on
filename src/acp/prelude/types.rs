@@ -12,7 +12,11 @@ use serde::{Deserialize, Serialize};
 // Conversation types
 // ============================================================================
 
-/// Conversation checkpoint — architectural placeholder.
+/// A point-in-time snapshot of a conversation (messages + metacognitive-loop
+/// state) used for branching and rollback. Stored per-server in
+/// `ConversationState.checkpoints` (created via
+/// `checkpoint_pack::create_checkpoint_record`) and threaded through the
+/// chat `act` phase so a conversation can be resumed from a prior checkpoint.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConversationCheckpoint {
     pub checkpoint_id: String,

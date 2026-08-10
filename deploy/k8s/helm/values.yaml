@@ -88,7 +88,7 @@ probes:
 prometheus:
   scrape: true
   port: "8090"
-  path: "/metrics/prometheus"
+  path: "/metrics"
 
 # -- Environment variables from secrets
 envFrom:

@@ -826,7 +826,7 @@ pub(crate) fn compute_cors_response_headers(headers: &str, server: &AcpServer) -
         Some(c) => c,
         None => return String::new(),
     };
-    let origin = extract_header_value(headers, "origin");
+    let origin = super::protocol::extract_header_value(headers, "origin");
     let cors_headers = build_cors_headers(origin.as_deref(), &config);
     if cors_headers.is_empty() {
         return String::new();
@@ -856,7 +856,7 @@ async fn handle_cors_preflight(
             return Ok(());
         }
     };
-    let origin = extract_header_value(headers, "origin");
+    let origin = super::protocol::extract_header_value(headers, "origin");
     let allow_origin = origin.as_deref().filter(|o| is_origin_allowed(o, &config));
 
     if allow_origin.is_none() && !config.allowed_origins.contains(&"*".to_string()) {
@@ -870,7 +870,7 @@ async fn handle_cors_preflight(
         return Ok(());
     }
 
-    let rh = extract_header_value(headers, "access-control-request-headers");
+    let rh = super::protocol::extract_header_value(headers, "access-control-request-headers");
     let preflight_headers = build_preflight_response_headers(rh.as_deref(), &config);
     let origin_val = allow_origin.unwrap_or("*").to_string();
 
@@ -1037,12 +1037,6 @@ pub(crate) fn http_trace_context(method: &str) -> RequestTraceContext {
     trace.method = method.to_string();
     trace.request_id = request_id;
     trace
-}
-
-/// Helper to extract a header value from raw headers.
-/// Delegates to `protocol::extract_header_value` for consistency.
-fn extract_header_value(headers: &str, header_name: &str) -> Option<String> {
-    super::protocol::extract_header_value(headers, header_name)
 }
 
 #[cfg(test)]

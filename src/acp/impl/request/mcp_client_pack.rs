@@ -55,7 +55,7 @@ pub async fn mcp_client_connect_payload(params: Value) -> Result<Value> {
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("http transport requires 'base_url'"))?;
             let client = McpHttpClient::connect(base_url, client_id, config).await?;
-            McpClientHandle::Http(client)
+            McpClientHandle::Http(Box::new(client))
         }
         other => anyhow::bail!("unsupported MCP client transport '{other}' (stdio|http)"),
     };

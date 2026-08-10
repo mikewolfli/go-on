@@ -110,16 +110,33 @@ impl AppConfig {
         }
 
         let cfg = Self::load_inner(path)?;
-        if let (Ok(mut cache), Some(mtime)) = (config_cache().lock(), mtime) {
-            *cache = Some((path.to_path_buf(), mtime, Arc::new(cfg.clone())));
-        }
+        Self::fill_config_cache(path, mtime, &cfg);
         Ok(cfg)
     }
 
-    /// Uncached config load — always parses the file from disk. Used by
-    /// startup and explicit reload paths that must observe fresh content.
+    /// Uncached config load — always parses the file from disk (never reads
+    /// the mtime cache), so callers observe fresh file content. Used by
+    /// startup and explicit reload paths that must force a re-parse.
+    ///
+    /// On success the fresh parse also refreshes the mtime cache, so later
+    /// read-only `AppConfig::load` calls reuse it (e.g. the onboarding reload
+    /// in `main/mod.rs` reuses the startup parse when the file did not
+    /// change). Failed parses never touch the cache.
     pub fn load_uncached(path: &Path) -> Result<Self> {
-        Self::load_inner(path)
+        let mtime = fs::metadata(path).and_then(|meta| meta.modified()).ok();
+        let cfg = Self::load_inner(path)?;
+        Self::fill_config_cache(path, mtime, &cfg);
+        Ok(cfg)
+    }
+
+    /// Store a successfully parsed config in the mtime cache, keyed by the file's
+    /// current mtime. Shared by `load` and `load_uncached` so every successful
+    /// parse keeps the cache fresh for subsequent read-only loads. When the mtime
+    /// is unavailable (e.g. the file was just created), nothing is cached.
+    fn fill_config_cache(path: &Path, mtime: Option<std::time::SystemTime>, cfg: &AppConfig) {
+        if let (Ok(mut cache), Some(mtime)) = (config_cache().lock(), mtime) {
+            *cache = Some((path.to_path_buf(), mtime, Arc::new(cfg.clone())));
+        }
     }
 
     fn load_inner(path: &Path) -> Result<Self> {

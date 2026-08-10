@@ -327,9 +327,8 @@ temp-env = "0.3"
 criterion = { version = "0.8", features = ["html_reports"] }
 rcgen = { version = "0.14", features = ["pem"] }
 
-# Benchmarks use the default test harness, but both criterion benchmarks
-# provide their own main() via the criterion_main! macro. Setting harness = false
-# prevents the libtest harness from overriding criterion's entry point.
+# All four benchmarks use the default test harness setting `harness = false`
+# so their criterion_main! entry points are not overridden by libtest.
 [[bench]]
 name = "error_code_bench"
 harness = false

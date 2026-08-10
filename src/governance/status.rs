@@ -4,7 +4,7 @@
 //!
 //! 1. **`GovernanceStatus`** — aggregates health state from all governance
 //!    subsystems (rationalization, security, RBAC, runtime controls, audit,
-//!    voting) into a single snapshot for health endpoints and diagnostics.
+//!    drift) into a single snapshot for health endpoints and diagnostics.
 //!
 //! 2. **`quick_check_tool`** — a fast, synchronous gate that validates
 //!    whether a tool invocation is allowed before execution. This gate ensures
@@ -26,7 +26,7 @@
 ///
 /// Collects health state and counters from every governance component:
 /// rationalization guard, security governor, RBAC enforcer, runtime controls,
-/// audit logger, and the voting subsystem.
+/// audit logger, and the drift detection engine.
 ///
 /// This struct is the single point of integration for health endpoints.
 /// Each subsystem reports a `subsystem_health` map with per-component status.
@@ -46,7 +46,6 @@ pub struct GovernanceSubsystems {
     pub rbac: bool,
     pub runtime_controls: bool,
     pub audit: bool,
-    pub voting: bool,
     /// Drift detection engine health (independent slot — previously the drift
     /// counter was (wrongly) used to judge the audit subsystem).
     pub drift: bool,
@@ -60,7 +59,6 @@ impl Default for GovernanceSubsystems {
             rbac: true,
             runtime_controls: true,
             audit: true,
-            voting: true,
             drift: true,
         }
     }
@@ -107,9 +105,6 @@ impl GovernanceStatus {
         if profile.drift_detections > 50 {
             status.mark_degraded("drift");
         }
-        // (review_overrides has no producer — the review gate never resolves
-        // to an override — so the old `> 20 → degraded("voting")` branch was
-        // dead and removed; the voting subsystem stays healthy.)
 
         status
     }
@@ -122,7 +117,6 @@ impl GovernanceStatus {
             "rbac" => self.subsystems.rbac = false,
             "runtime_controls" => self.subsystems.runtime_controls = false,
             "audit" => self.subsystems.audit = false,
-            "voting" => self.subsystems.voting = false,
             "drift" => self.subsystems.drift = false,
             _ => {}
         }
@@ -131,7 +125,6 @@ impl GovernanceStatus {
             && self.subsystems.rbac
             && self.subsystems.runtime_controls
             && self.subsystems.audit
-            && self.subsystems.voting
             && self.subsystems.drift;
     }
 }
@@ -558,6 +551,25 @@ fn extract_path(args: &Value) -> Option<&str> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Default governance status invariants: the default profile must not be
+    /// healthy (no subsystems wired), and the core subsystems must be enabled
+    /// by default. Moved inline from the former
+    /// `tests/structural/test_server_startup_health.rs`.
+    #[test]
+    fn test_governance_status_defaults() {
+        let status = GovernanceStatus::default();
+        assert!(!status.healthy, "default governance must not be healthy");
+        assert!(
+            status.subsystems.rationalization,
+            "rationalization must be enabled by default"
+        );
+        assert!(
+            status.subsystems.security_governor,
+            "security_governor must be enabled by default"
+        );
+        assert!(status.subsystems.rbac, "rbac must be enabled by default");
+    }
 
     /// Audit health must come from a real audit signal (dropped entries), not
     /// the drift counter; drift gets its own independent slot.

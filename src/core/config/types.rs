@@ -452,6 +452,13 @@ pub struct RuntimeConfig {
     /// Cache directory used to persist imported skill manifests and index.
     #[serde(default = "super::defaults::default_runtime_skills_cache_dir")]
     pub skills_cache_dir: String,
+    /// Master switch for the self-evolution loop (BLUE56-B03). When `false`
+    /// (default) the EvolutionLoop is not started, so no LLM-generated patch
+    /// can be auto-applied to the project source. When explicitly enabled,
+    /// the loop runs with `AutoApproval` against the sandbox whitelist
+    /// (`src/**/*.rs`) — opt-in development mode only.
+    #[serde(default)]
+    pub evolution_enabled: bool,
     /// Allowed CORS origins for the ACP HTTP server.
     /// Empty list means CORS is disabled entirely.
     #[serde(default)]

@@ -280,14 +280,14 @@ npm run compile
 
 | Metric | Value |
 |:-------|:------|
-| Rust backend LOC | ~203K (451 modules) |
+| Rust backend LOC | ~202K (444 modules) |
 | GUI (EGUI) LOC | ~24K |
 | VS Code addon (TypeScript) LOC | ~17K |
 | SDK (Rust + Python + TypeScript) LOC | ~4K |
 | Built-in tools | 60+ |
 | AI providers | 37 |
 | Skills in marketplace | 34 |
-| Unit tests | ~1.7K (1,502 lib + 153 integration; see Verification below) |
+| Unit tests | ~1.7K (1,513 lib + 134 integration declarations; see Verification below) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 
 ## Build Profiles

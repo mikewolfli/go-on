@@ -7,6 +7,31 @@ use super::types::{
     AppConfig, ComplianceConfig, ReputationConfig, RuntimeConfig, StartupContextConfig,
 };
 
+#[cfg(test)]
+mod tests {
+    use super::RuntimeConfig;
+
+    /// Default startup invariants: the default runtime config must always be
+    /// well-formed (service name set, governance enabled, sane health interval).
+    /// Moved inline from the former `tests/structural/test_server_startup_health.rs`.
+    #[test]
+    fn test_default_runtime_config_is_well_formed() {
+        let config = RuntimeConfig::default();
+        assert!(
+            !config.otel_service_name.is_empty(),
+            "otel_service_name must be set"
+        );
+        assert!(
+            config.governance_enabled,
+            "governance must be enabled by default"
+        );
+        assert!(
+            config.health_interval_seconds > 0,
+            "health_interval_seconds must be positive"
+        );
+    }
+}
+
 pub(crate) use crate::core::providers::provider_specs;
 
 // Re-export default functions that are referenced by `#[serde(default = "...")]`
@@ -189,6 +214,7 @@ impl Default for RuntimeConfig {
             skills_require_sha256: default_runtime_skills_require_sha256(),
             skills_allow_floating_ref: false,
             skills_cache_dir: default_runtime_skills_cache_dir(),
+            evolution_enabled: false,
             cors_allowed_origins: Vec::new(),
             user_auth_enabled: false,
             user_auth_token_secret: default_runtime_user_auth_token_secret(),

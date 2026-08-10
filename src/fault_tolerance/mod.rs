@@ -424,6 +424,9 @@ fn load_sqlite(path: &std::path::Path) -> Option<FaultToleranceSnapshot> {
                     last_heartbeat_ms: row.1 as u64,
                     missed_beats: row.2 as u32,
                     status,
+                    // Restored records have not reported in this process yet;
+                    // liveness monitoring resumes on the next real heartbeat.
+                    has_reported: false,
                 };
                 heartbeats.insert(hb.node_id.clone(), hb);
             }
@@ -963,7 +966,13 @@ mod tests {
             .register_node("node-1")
             .await
             .expect("register node-1 for heartbeat detection test");
-        // Immediately after registration, no missed beats
+        // A registered node must report at least once before liveness is
+        // monitored (registration alone is not a liveness signal).
+        engine
+            .report_heartbeat("node-1")
+            .await
+            .expect("report first heartbeat");
+        // Immediately after reporting, no missed beats
         let offenders = engine.check_heartbeats().await;
         assert!(offenders.is_empty());
 
@@ -987,6 +996,28 @@ mod tests {
             "node-1 should be marked as offender after many missed beats, got: {:?}",
             offenders
         );
+    }
+
+    #[tokio::test]
+    async fn test_registered_but_never_reported_node_is_not_flagged() {
+        let engine = FaultToleranceEngine::new(make_config());
+        engine
+            .register_node("idle-node")
+            .await
+            .expect("register idle node");
+        // Wait well past the heartbeat timeout + max_missed window; the idle
+        // node (registered but never reporting) must never be flagged Offline.
+        for _ in 0..10 {
+            tokio::time::sleep(std::time::Duration::from_millis(110)).await;
+            let offenders = engine.check_heartbeats().await;
+            assert!(
+                offenders.is_empty(),
+                "idle node must not be flagged as offender, got: {:?}",
+                offenders
+            );
+        }
+        let profile = engine.profile().await;
+        assert_eq!(profile.offline_nodes, 0, "idle node must stay Online");
     }
 
     #[tokio::test]
@@ -1410,6 +1441,12 @@ mod tests {
             .register_node("node-1")
             .await
             .expect("register node-1 for recovery cycle test");
+        // The node must have reported at least once before liveness is
+        // monitored (registration alone is not a liveness signal).
+        engine
+            .report_heartbeat("node-1")
+            .await
+            .expect("report first heartbeat");
 
         // Force a missed heartbeat
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;

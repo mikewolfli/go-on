@@ -441,7 +441,8 @@ pub struct AcpServer {
     pub registries: RegistryContext,
     /// Persistence data stores
     pub persistence: PersistenceContext,
-    /// PromptAssembler — 8-layer prompt assembly (ARCH-03)
+    /// PromptAssembler — layered prompt assembly (ARCH-03; L1 system prompt +
+    /// L2 role identity — see prompt_layers.rs)
     pub prompt_assembler: crate::orchestration::prompt_layers::PromptAssembler,
     /// Prompt manager for prompt template management
     pub prompt_manager: PromptManager,
@@ -1104,6 +1105,9 @@ impl ServerBuilder {
         {
             let mut reg = skill_registry.write().unwrap_or_else(|e| e.into_inner());
             let _ = reg.register(Arc::new(crate::orchestration::skill::EchoSkill));
+            // Legacy alias advertised in tools.list ("echo_skill"): registered
+            // explicitly so the advertised name is deterministically executable.
+            let _ = reg.register(Arc::new(crate::orchestration::skill::EchoSkillAlias));
             let _ = reg.register(Arc::new(
                 crate::orchestration::skill::SkillCreatorSkill::new(skill_registry.clone()),
             ));

@@ -238,6 +238,11 @@ pub async fn delphi_debate(
     let mut history: Vec<DelphiRound> = Vec::new();
     let mut current_votes: HashMap<String, Vote> = HashMap::new();
     let mut previous_votes: HashMap<String, Vote> = HashMap::new();
+    // Tracks whether the debate ended early because convergence was detected
+    // (as opposed to running out of `max_rounds`). History length alone cannot
+    // distinguish these: with the caller-seeded round 0, `history.len() ==
+    // max_rounds` even when round 1 converged and broke early.
+    let mut converged = false;
 
     // Round 0 may already have been cast by the caller; seed the debate with
     // it so convergence is checked from round 1 onward without re-invoking
@@ -305,6 +310,7 @@ pub async fn delphi_debate(
         // Check convergence against previous round
         if round > 0 && is_converged(&round_votes, &previous_votes, config.convergence_ratio) {
             current_votes = round_votes;
+            converged = true;
             break;
         }
 
@@ -320,11 +326,12 @@ pub async fn delphi_debate(
         config.default_weight,
     );
 
-    let rounds_elapsed = history.len();
     DelphiResult {
         votes: current_votes,
-        rounds: rounds_elapsed,
-        converged: rounds_elapsed < config.max_rounds,
+        // Number of rounds that actually produced votes (including the
+        // caller-seeded round 0, whose votes were really cast by the voters).
+        rounds: history.len(),
+        converged,
         history,
         final_result,
         config: config.clone(),
@@ -659,6 +666,116 @@ mod tests {
     }
 
     // ── DelphiConfig defaults ──────────────────────────────────────────────
+
+    // ── delphi_debate convergence tests ────────────────────────────────────
+
+    /// Deterministic voter for delphi_debate tests: votes `approves` on every
+    /// call, so consecutive rounds are identical and the debate converges on
+    /// the second round.
+    struct ConstantVoter {
+        name: &'static str,
+        approves: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl AgentVoter for ConstantVoter {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        async fn vote(&self, _context: &str) -> Vote {
+            Vote {
+                approves: self.approves,
+                reasoning: "constant voter".to_string(),
+                confidence: 0.8,
+            }
+        }
+    }
+
+    fn seeded_approve_votes(names: &[&str]) -> HashMap<String, Vote> {
+        names
+            .iter()
+            .map(|n| {
+                (
+                    n.to_string(),
+                    Vote {
+                        approves: true,
+                        reasoning: "round 0".to_string(),
+                        confidence: 0.8,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_delphi_debate_converges_when_rounds_agree() {
+        // Round 0 is seeded by the caller (approve/approve); the loop runs
+        // round 1, the voters approve again, and the debate must report
+        // converged=true instead of the old always-false `history.len() <
+        // max_rounds` formula (2 < 2 is false).
+        let alice = ConstantVoter {
+            name: "alice",
+            approves: true,
+        };
+        let bob = ConstantVoter {
+            name: "bob",
+            approves: true,
+        };
+        let agents: Vec<&dyn AgentVoter> = vec![&alice, &bob];
+        let config = DelphiConfig {
+            max_rounds: 2,
+            ..DelphiConfig::default()
+        };
+        let result = delphi_debate(
+            &agents,
+            "proposal",
+            &HashMap::new(),
+            &config,
+            Some(seeded_approve_votes(&["alice", "bob"])),
+        )
+        .await;
+        assert!(
+            result.converged,
+            "identical consecutive rounds must converge"
+        );
+        assert_eq!(result.rounds, 2, "seeded round 0 + converged round 1");
+        assert!(result.final_result.approved);
+    }
+
+    #[tokio::test]
+    async fn test_delphi_debate_not_converged_when_rounds_disagree() {
+        // Round 1 voters reject while the seeded round 0 approved, so the
+        // unchanged fraction is 0/2 < convergence_ratio and the debate ends
+        // without convergence once max_rounds is exhausted.
+        let alice = ConstantVoter {
+            name: "alice",
+            approves: false,
+        };
+        let bob = ConstantVoter {
+            name: "bob",
+            approves: false,
+        };
+        let agents: Vec<&dyn AgentVoter> = vec![&alice, &bob];
+        let config = DelphiConfig {
+            max_rounds: 2,
+            ..DelphiConfig::default()
+        };
+        let result = delphi_debate(
+            &agents,
+            "proposal",
+            &HashMap::new(),
+            &config,
+            Some(seeded_approve_votes(&["alice", "bob"])),
+        )
+        .await;
+        assert!(
+            !result.converged,
+            "all votes changing between rounds must not converge"
+        );
+        assert_eq!(result.rounds, 2, "both rounds ran (max_rounds exhausted)");
+        assert!(!result.final_result.approved);
+    }
 
     // ── VoteResult sanity ──────────────────────────────────────────────────
 

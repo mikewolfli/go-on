@@ -84,35 +84,36 @@ impl Planner {
 
     /// Analyze task characteristics to determine adaptive planning context.
     fn analyze_task(task: &AgentTaskEnvelope) -> PlanningContext {
-        let objective_lower = task.objective.to_ascii_lowercase();
+        // Single authoritative analysis: `TaskRouter::analyze_task` owns the
+        // keyword-based classification (task type, complexity, capabilities,
+        // multi-module involvement). The former independent keyword tables
+        // (code/research/multiple detection) were deleted so no third
+        // classifier can drift from the router.
+        use crate::orchestration::task_router::{TaskRouter, TaskType};
+        let characteristics = TaskRouter::analyze_task(&task.objective);
 
-        // Detect complexity indicators from objective and input payload
-        let has_code = objective_lower.contains("code")
-            || objective_lower.contains("file")
-            || objective_lower.contains("implement")
-            || objective_lower.contains("function")
-            || objective_lower.contains("refactor")
-            || objective_lower.contains("class")
-            || objective_lower.contains("module")
-            || objective_lower.contains("build")
-            || objective_lower.contains("test");
+        let has_code = matches!(
+            &characteristics.task_type,
+            TaskType::BugFix
+                | TaskType::FeatureImplementation
+                | TaskType::Refactoring
+                | TaskType::TestImplementation
+                | TaskType::PerformanceOptimization
+                | TaskType::CodeReview
+        );
 
-        let has_research = objective_lower.contains("research")
-            || objective_lower.contains("search")
-            || objective_lower.contains("find")
-            || objective_lower.contains("analyze")
-            || objective_lower.contains("explain")
-            || objective_lower.contains("compare");
+        // TaskRouter has no dedicated research task type, so the research
+        // flag is approximated from the closest task-type signals (design/
+        // documentation tasks require analysis). These structural flags are
+        // informational (logged; `plan_to_dag` only consumes complexity and
+        // subtask_hints).
+        let has_research = matches!(
+            &characteristics.task_type,
+            TaskType::ArchitectureDesign | TaskType::Documentation
+        );
 
-        let has_multiple = objective_lower.contains(" and ")
-            || objective_lower.contains(",")
-            || objective_lower.contains("first")
-            || objective_lower.contains("then")
-            || objective_lower.contains("also")
-            || objective_lower.contains("both")
-            || objective_lower.contains("multiple");
-
-        // Extract subtask hints from task input or objective
+        // Extract subtask hints from task input or objective (TaskRouter has
+        // no equivalent capability, so this stays local).
         let mut subtask_hints: Vec<String> = Vec::new();
         if let Some(input_obj) = task.input.as_object() {
             if let Some(hints) = input_obj.get("subtasks").and_then(|v| v.as_array()) {
@@ -144,15 +145,8 @@ impl Planner {
             }
         }
 
-        // Determine complexity level via the single authoritative classifier
-        // (`TaskRouter::estimate_complexity`, 1–5). The former independent
-        // keyword/length/subtask-hint heuristics were removed so the three
-        // complexity classifiers (task_router, flow, planner) share one
-        // implementation; the structural flags above still drive the DAG
-        // shape inside `plan_to_dag`.
-        let complexity = match crate::orchestration::task_router::TaskRouter::estimate_complexity(
-            &task.objective,
-        ) {
+        // Map TaskRouter's 1–5 complexity onto the planner's complexity bands.
+        let complexity = match characteristics.complexity {
             1 | 2 => TaskComplexity::Simple,
             3 => TaskComplexity::Medium,
             _ => TaskComplexity::Complex,
@@ -162,7 +156,7 @@ impl Planner {
             complexity,
             has_code,
             has_research,
-            has_multiple_subtasks: has_multiple,
+            has_multiple_subtasks: characteristics.involves_multiple_modules,
             subtask_hints,
         }
     }
@@ -530,6 +524,40 @@ mod tests {
         );
         // Complex plan: research + parallel execution + review.
         assert!(plan.steps.len() >= 4);
+    }
+
+    /// The structural flags must be derived from TaskRouter's characteristics
+    /// (the delegation target) — they are informational, but must agree with
+    /// the router's task-type classification rather than a third keyword table.
+    #[test]
+    fn test_analyze_task_flags_derive_from_task_router() {
+        let envelope = |objective: &str| AgentTaskEnvelope {
+            task_id: "flags-1".into(),
+            phase: "coding".into(),
+            role: "coder".into(),
+            objective: objective.to_string(),
+            constraints: None,
+            evidence: None,
+            input: serde_json::json!({}),
+        };
+
+        let code_ctx = Planner::analyze_task(&envelope("Implement a new feature and write tests"));
+        assert!(
+            code_ctx.has_code,
+            "code-oriented task type must set has_code"
+        );
+        assert!(!code_ctx.has_research);
+
+        let design_ctx = Planner::analyze_task(&envelope("Design the API architecture"));
+        assert!(
+            design_ctx.has_research,
+            "design task type must set has_research"
+        );
+
+        let plain_ctx = Planner::analyze_task(&envelope("Greet the user"));
+        assert!(!plain_ctx.has_code);
+        assert!(!plain_ctx.has_research);
+        assert!(!plain_ctx.has_multiple_subtasks);
     }
 
     #[test]

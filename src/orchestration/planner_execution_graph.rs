@@ -46,9 +46,11 @@ pub fn build_execution_graph_from_plan(plan: &ExecutionPlan) -> ExecutionGraph {
         }
     }
 
-    // Note: parallel group fan-out wiring is a future enhancement
-    // when Planner produces structured parallel_groups.
-    // See ExecutionGraph::add_fan_out for the DAG wiring API.
+    // Note: parallel group fan-out wiring is a future enhancement when
+    // Planner produces structured parallel_groups. The DAG wires only the
+    // dependency edges above (`add_node` + `add_edge`); the fan-out/join
+    // machinery was removed from core_dag, so parallel_groups are not
+    // currently represented in the graph.
 
     graph
 }

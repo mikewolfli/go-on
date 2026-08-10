@@ -45,6 +45,7 @@ production_strict = false
 governance_enabled = true
 governance_policy_mode = "advisory"
 i18n_default_language = "en-US"
+evolution_enabled = false
 skills_enabled = true
 skills_import_enabled = false
 skills_allowed_sources = ["local:*"]

@@ -244,6 +244,7 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
         std::env::temp_dir().join("go-on-skill-market"),
         skill_registry.clone(),
     )
+    .await
     .map_err(|e| anyhow::anyhow!("failed to create skill market registry: {}", e))?;
 
     match cmd {

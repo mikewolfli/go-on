@@ -10,19 +10,21 @@
 use anyhow::{Context, Result};
 use tokio::task::spawn_blocking;
 
+#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+use crate::memory::pg_pool::{connect_postgres, create_pool, pool_get, resolve_pg_dsn, PgPoolPair};
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use futures_util::stream::{self, StreamExt};
 use indexmap::IndexSet;
-#[cfg(feature = "backend-postgres")]
-use postgres::Client as PgClient;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+#[cfg(feature = "backend-sqlite")]
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::memory::summarization::{MemorySummarizer, SummarizedMemory};
@@ -785,7 +787,7 @@ pub struct WarmStore {
     /// `None` when no PostgreSQL connection string was configured or the
     /// connection/DDL failed — the warm tier then acts as a no-op facade so
     /// the caller chain never panics (see `WarmStore::new`).
-    conn: Option<Arc<Mutex<PgClient>>>,
+    pool: Option<PgPoolPair>,
     max_entries: usize,
 }
 
@@ -794,7 +796,7 @@ impl std::fmt::Debug for WarmStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WarmStore")
             .field("max_entries", &self.max_entries)
-            .field("enabled", &self.conn.is_some())
+            .field("enabled", &self.pool.is_some())
             .finish()
     }
 }
@@ -807,9 +809,9 @@ impl WarmStore {
     }
 
     #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-    /// Whether the warm tier is active (postgres connection established).
+    /// Whether the warm tier is active (postgres pool established).
     fn is_enabled(&self) -> bool {
-        self.conn.is_some()
+        self.pool.is_some()
     }
 
     #[cfg(feature = "backend-sqlite")]
@@ -872,29 +874,40 @@ impl WarmStore {
     /// meaningless as a PostgreSQL DSN — passing it to `PgClient::connect`
     /// made warm-tier construction fail (or panic via `.expect` in the server
     /// recovery path) on every postgres build. The real connection string is
-    /// therefore resolved from the environment instead:
-    /// `GO_ON_PG_CONNECTION_STRING` → `DATABASE_URL` → `PG_DSN`.
+    /// resolved through the shared `pg_pool::resolve_pg_dsn` resolver (config
+    /// `connection_string` → `GO_ON_PG_CONNECTION_STRING` → `DATABASE_URL` →
+    /// `PG_DSN` → `GO_ON_DATABASE_URL`), the same single source the cache and
+    /// vector store use.
     ///
     /// When no connection string is available, or the connection/DDL fails,
-    /// the store degrades to a no-op facade (`conn: None`) with a clear
+    /// the store degrades to a no-op facade (`pool: None`) with a clear
     /// warning instead of returning an error — the callers in `src/acp` retry
     /// once and then `.expect()`, so an `Err` here would panic the server.
-    /// All business methods short-circuit on `conn: None` (see below).
+    /// All business methods short-circuit on `pool: None` (see below).
+    ///
+    /// Connections come from the shared `PgPoolPair` write pool (the same pool
+    /// infrastructure cache.rs / vector.rs use) instead of a single
+    /// `Mutex<PgClient>` direct connection.
     fn new(_db_conn_str: &Path, max_entries: usize) -> Result<Self> {
         let disabled = || {
             tracing::warn!(
-                "warm tier disabled under backend-postgres: no reachable PostgreSQL connection string (set GO_ON_PG_CONNECTION_STRING, DATABASE_URL or PG_DSN) — warm tier is a no-op; cold tier still works"
+                "warm tier disabled under backend-postgres: no reachable PostgreSQL connection string (set GO_ON_PG_CONNECTION_STRING, DATABASE_URL, PG_DSN or GO_ON_DATABASE_URL) — warm tier is a no-op; cold tier still works"
             );
             Ok(Self {
-                conn: None,
+                pool: None,
                 max_entries,
             })
         };
 
-        let Some(dsn) = resolve_pg_dsn() else {
+        let Some(dsn) = resolve_pg_dsn(None) else {
             return disabled();
         };
-        let mut client = match crate::memory::pg_pool::connect_postgres(&dsn) {
+        let write_dsn = dsn.clone();
+        // The pool creates connections lazily on first `pool_get`; a failed
+        // connect surfaces as a `pool_get` error below and degrades to the
+        // no-op facade, preserving the previous semantics.
+        let write_pool = create_pool(move || connect_postgres(&write_dsn), 4);
+        let mut client = match pool_get(&write_pool) {
             Ok(client) => client,
             Err(e) => {
                 tracing::warn!(
@@ -939,7 +952,10 @@ impl WarmStore {
         }
 
         Ok(Self {
-            conn: Some(Arc::new(Mutex::new(client))),
+            pool: Some(PgPoolPair {
+                write: write_pool.clone(),
+                read: write_pool,
+            }),
             max_entries,
         })
     }
@@ -952,8 +968,8 @@ impl WarmStore {
         #[cfg(feature = "backend-sqlite")]
         let conn = self.conn.clone();
         #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-        let conn = match self.conn.as_ref() {
-            Some(conn) => Arc::clone(conn),
+        let pool = match self.pool.as_ref() {
+            Some(pool) => pool.write.clone(),
             // No-op facade: no reachable PostgreSQL connection (see `new`).
             None => return Ok(()),
         };
@@ -962,10 +978,7 @@ impl WarmStore {
         let payload = UpsertPayload::from_entry(entry);
         spawn_blocking(move || {
             #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-            let mut conn = conn.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("warm store mutex poisoned, recovering");
-                poisoned.into_inner()
-            });
+            let mut conn = pool_get(&pool)?;
             #[cfg(feature = "backend-sqlite")]
             let conn = conn.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("warm store mutex poisoned, recovering");
@@ -996,14 +1009,16 @@ impl WarmStore {
         #[cfg(feature = "backend-sqlite")]
         let conn = self.conn.clone();
         #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-        let conn = match self.conn.as_ref() {
-            Some(conn) => Arc::clone(conn),
+        let pool = match self.pool.as_ref() {
+            Some(pool) => pool.write.clone(),
             None => return Ok(false),
         };
         let id = id.to_string();
         spawn_blocking(move || {
-            #[allow(unused_mut, reason = "mut needed by backend-postgres Client::execute")]
-            let mut conn = conn.lock().unwrap_or_else(|poisoned| {
+            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+            let mut conn = pool_get(&pool)?;
+            #[cfg(feature = "backend-sqlite")]
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("warm store mutex poisoned, recovering");
                 poisoned.into_inner()
             });
@@ -1033,15 +1048,13 @@ impl WarmStore {
         #[cfg(feature = "backend-sqlite")]
         let conn = self.conn.clone();
         #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-        let conn = match self.conn.as_ref() {
-            Some(conn) => Arc::clone(conn),
+        let pool = match self.pool.as_ref() {
+            Some(pool) => pool.write.clone(),
             None => return Ok(Vec::new()),
         };
         spawn_blocking(move || {
-            #[cfg(not(feature = "backend-sqlite"))]
-            let mut conn = conn
-                .lock()
-                .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
+            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+            let mut conn = pool_get(&pool)?;
             #[cfg(feature = "backend-sqlite")]
             let conn = conn
                 .lock()
@@ -1072,16 +1085,14 @@ impl WarmStore {
         #[cfg(feature = "backend-sqlite")]
         let conn = self.conn.clone();
         #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-        let conn = match self.conn.as_ref() {
-            Some(conn) => Arc::clone(conn),
+        let pool = match self.pool.as_ref() {
+            Some(pool) => pool.write.clone(),
             None => return Ok(Vec::new()),
         };
         let session_id = session_id.to_string();
         spawn_blocking(move || {
-            #[cfg(not(feature = "backend-sqlite"))]
-            let mut conn = conn
-                .lock()
-                .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
+            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+            let mut conn = pool_get(&pool)?;
             #[cfg(feature = "backend-sqlite")]
             let conn = conn
                 .lock()
@@ -1104,25 +1115,6 @@ impl WarmStore {
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
-}
-
-/// Resolve the PostgreSQL connection string for the warm tier.
-///
-/// The production call sites pass a SQLite file path (`warm.db`) that is
-/// meaningless under the `backend-postgres` build, so the DSN is read from
-/// the environment: `GO_ON_PG_CONNECTION_STRING` first, then the common
-/// `DATABASE_URL` / `PG_DSN` variables.
-#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-fn resolve_pg_dsn() -> Option<String> {
-    for var in ["GO_ON_PG_CONNECTION_STRING", "DATABASE_URL", "PG_DSN"] {
-        if let Ok(value) = std::env::var(var) {
-            let value = value.trim();
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
-        }
-    }
-    None
 }
 
 /// WarmStore stub for backends without a warm persistence layer.
@@ -1195,8 +1187,10 @@ impl MemoryPersistence {
     /// # Arguments
     /// * `db_path` - Path to the SQLite warm store database. Ignored under the
     ///   `backend-postgres` build — the warm tier then resolves the real
-    ///   connection string from `GO_ON_PG_CONNECTION_STRING` / `DATABASE_URL` /
-    ///   `PG_DSN` and degrades to a no-op when none is reachable.
+    ///   connection string through `pg_pool::resolve_pg_dsn` (config
+    ///   `connection_string` → `GO_ON_PG_CONNECTION_STRING` → `DATABASE_URL` →
+    ///   `PG_DSN` → `GO_ON_DATABASE_URL`) and degrades to a no-op when none is
+    ///   reachable.
     /// * `cold_base_path` - Path to the cold storage directory (e.g. `.goon/memory/cold`).
     /// * `policy` - Tiering policy; uses default if `None`.
     pub fn new(

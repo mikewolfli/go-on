@@ -88,25 +88,14 @@ Every PR that modifies `skills/` triggers the `skill-market.yml` workflow:
 | [web-scraper](web-scraper/SKILL.md) | web, scraping, data-extraction | Scrapes and extracts data from websites |
 | [**workflow-optimizer**](workflow-optimizer/SKILL.md) | workflow, optimization, pipeline | Analyzes and optimizes multi-step workflows |
 
-### External Agent Skills (installed at `~/.agents/skills`, not in this repo)
+### External Agent Skills
 
-The following global agent skills live in the user's `~/.agents/skills/` directory
-(auto-discovered by go-on on startup); they are **not** part of this repository's
-`skills/` marketplace. The list reflects what is actually installed on the
-developer machine at the time of writing:
-
-| Skill | Source | Description |
-|-------|--------|-------------|
-| grilling | productivity | Relentless one-at-a-time interview to stress-test plans/decisions |
-| grill-with-docs | engineering | Grilling + domain-modeling that produces ADRs and glossary |
-| code-review | engineering | Two-axis (Standards + Spec) code review with parallel sub-agents |
-| diagnosing-bugs | engineering | 6-phase structured debugging protocol |
-| domain-modeling | engineering | Build and sharpen domain model with glossary + ADRs |
-| wayfinder | engineering | Multi-session work planning via decision-ticket maps |
-
-> Note: previously-listed `handoff`, `research`, `triage`, and `implement` are
-> not installed in this workspace's `~/.agents/skills/` and have been removed
-> from this list. These skills (if desired) live outside this repository.
+Global agent skills installed at `~/.agents/skills/` (e.g. `grilling`,
+`diagnosing-bugs`, `domain-modeling`, `research`, `wayfinder`, …) are
+auto-discovered by go-on on startup. They are **not** part of this
+repository's `skills/` marketplace and are maintained in the user's own
+skills workspace. This directory only contains the 34 marketplace skills
+listed above.
 
 > The backend's `builtin_skills()` fallback (`src/orchestration/skill_market.rs`)
 > mirrors this list under the same 34 names, so the marketplace display names

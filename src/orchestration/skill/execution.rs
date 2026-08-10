@@ -390,6 +390,28 @@ impl Skill for EchoSkill {
     }
 }
 
+/// Legacy alias of [`EchoSkill`], registered under the name advertised in
+/// `tools.list` (`"echo_skill"`) so that the advertised name is
+/// deterministically executable — previously it was only reachable via
+/// fuzzy skill matching, which made the advertised-but-unregistered name
+/// non-deterministic.
+pub struct EchoSkillAlias;
+
+#[async_trait]
+impl Skill for EchoSkillAlias {
+    fn name(&self) -> &str {
+        "echo_skill"
+    }
+
+    fn description(&self) -> &str {
+        "Echo back structured input for skill pipeline diagnostics."
+    }
+
+    async fn execute(&self, input: &Value) -> Result<Value> {
+        Ok(input.clone())
+    }
+}
+
 /// Built-in skill-creator skill.
 ///
 /// Describes how to create new skills. This skill serves as a reference

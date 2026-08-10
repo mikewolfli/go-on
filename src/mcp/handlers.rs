@@ -16,7 +16,6 @@ use super::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
     McpListToolsResult, McpServer, JSONRPC_VERSION, MCP_VERSION,
 };
-use crate::protocol::rpc_protocol::RequestTraceContext;
 use crate::tool::ToolInput;
 
 /// Signals an invalid / missing parameter in an MCP request.
@@ -48,6 +47,17 @@ impl std::error::Error for McpCodeError {}
 
 fn invalid_params(msg: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(McpParamError(msg.into()))
+}
+
+/// Human-readable text for an MCP tool result: prefers the structured
+/// payload's `message` string (set by the workflow tools), otherwise falls
+/// back to the serialized JSON payload.
+fn mcp_tool_result_text(structured: &Value) -> String {
+    structured
+        .get("message")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| serde_json::to_string(structured).unwrap_or_default())
 }
 
 fn coded_error(code: i32, msg: impl Into<String>) -> anyhow::Error {
@@ -657,110 +667,6 @@ impl McpServer {
             tool_name, tool_input
         );
 
-        // Step 0: Workflow and skill creation tools (require ACP server)
-        if let Some(ref acp) = self.acp_server {
-            match tool_name.as_str() {
-                "workflow_execute" => {
-                    let task = tool_input
-                        .get("task")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| invalid_params("Missing required parameter: task"))?;
-                    let params = json!({
-                        "task": task,
-                        "phase": tool_input.get("phase").and_then(Value::as_str),
-                    });
-                    let trace = RequestTraceContext {
-                        trace_id: "mcp-call".to_string(),
-                        span_id: "workflow-execute".to_string(),
-                        method: tool_name.clone(),
-                        request_id: "mcp-tool-call".to_string(),
-                    };
-                    crate::acp::r#impl::request::exec_pack::handle_workflow_execute(
-                        acp, params, &trace,
-                    )
-                    .await?;
-                    record_tool_call_audit_with_protocol(
-                        &tool_name,
-                        &tool_input,
-                        true,
-                        "workflow executed via mcp",
-                        "mcp_stdio",
-                    );
-                    return Ok(serde_json::to_value(McpCallToolResult::new(
-                        vec![
-                            json!({"type": "text", "text": format!("Workflow executed for task: {}", task)}),
-                        ],
-                        Some(json!({"ok": true, "task": task})),
-                    ))?);
-                }
-                "workflow_ask" => {
-                    let task = tool_input
-                        .get("task")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| invalid_params("Missing required parameter: task"))?;
-                    let params = json!({
-                        "task": task,
-                        "auto_create_skills": tool_input.get("auto_create_skills").cloned().unwrap_or(json!(true)),
-                        "auto_create_workflow": true,
-                    });
-                    let trace = RequestTraceContext {
-                        trace_id: "mcp-call".to_string(),
-                        span_id: "workflow-ask".to_string(),
-                        method: tool_name.clone(),
-                        request_id: "mcp-tool-call".to_string(),
-                    };
-                    crate::acp::r#impl::request::workflow_pack::handle_workflow_ask(
-                        acp, params, &trace,
-                    )
-                    .await?;
-                    record_tool_call_audit_with_protocol(
-                        &tool_name,
-                        &tool_input,
-                        true,
-                        "workflow.ask executed via mcp",
-                        "mcp_stdio",
-                    );
-                    return Ok(serde_json::to_value(McpCallToolResult::new(
-                        vec![
-                            json!({"type": "text", "text": format!("Workflow.ask completed for: {}", task)}),
-                        ],
-                        Some(json!({"ok": true, "task": task})),
-                    ))?);
-                }
-                "workflow_generate" => {
-                    let task = tool_input
-                        .get("task")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| invalid_params("Missing required parameter: task"))?;
-                    let params = json!({"task": task});
-                    let trace = RequestTraceContext {
-                        trace_id: "mcp-call".to_string(),
-                        span_id: "workflow-generate".to_string(),
-                        method: tool_name.clone(),
-                        request_id: "mcp-tool-call".to_string(),
-                    };
-                    crate::acp::r#impl::request::workflow_pack::workflow_generate_payload(
-                        acp, params, &trace,
-                    )
-                    .await?;
-                    record_tool_call_audit_with_protocol(
-                        &tool_name,
-                        &tool_input,
-                        true,
-                        "workflow.generate executed via mcp",
-                        "mcp_stdio",
-                    );
-                    return Ok(serde_json::to_value(McpCallToolResult::new(
-                        vec![
-                            json!({"type": "text", "text": format!("Workflow generated for: {}", task)}),
-                        ],
-                        Some(json!({"ok": true, "task": task})),
-                    ))?);
-                }
-                _ => {} // Fall through to unified tool execution chain
-            }
-        }
-
         // Steps 1-4: Delegate to the unified tool-execution chain shared with
         // the ACP bridge (`execute_tool_call`). This single chain performs:
         //  1. HarnessBus sandbox / require_review / budget / RBAC checks
@@ -796,10 +702,7 @@ impl McpServer {
                 }
             };
             return Ok(serde_json::to_value(McpCallToolResult::new(
-                vec![json!({
-                    "type": "text",
-                    "text": serde_json::to_string(&structured)?,
-                })],
+                vec![json!({ "type": "text", "text": mcp_tool_result_text(&structured) })],
                 Some(structured),
             ))?);
         }

@@ -1820,43 +1820,25 @@ impl ToolRegistry {
         serde_json::json!({ "tools": matrix })
     }
 
-    /// Run a tool asynchronously with fallback chain support.
-    /// Uses `run_async` directly without `block_in_place` to comply with principle #23.
+    /// Run the fallback chain without governance hooks or metrics recording.
     ///
-    /// This is the only fallback-chain entry point. A synchronous variant was
-    /// previously maintained (lines ~1825-1888) but had zero production call
-    /// sites and duplicated this async path line-for-line; it has been removed.
-    #[tracing::instrument(level = "debug", skip(self, input), fields(tool = %name, success = false, latency_ms = 0u64, fallback_used = false))]
-    pub async fn run_with_fallback_async(
+    /// Shared by [`ToolRegistry::run_with_fallback_async`] (which wraps this
+    /// with pre/post hooks and execution metrics) and by
+    /// `orchestration::tool::executor::run_tool_with_fallback`, whose caller
+    /// (`execute_single_tool`) already runs the pre/post hooks itself — the
+    /// former duplicate fallback loop in the executor was deleted to keep a
+    /// single implementation.
+    pub(crate) async fn run_fallback_chain_async(
         &self,
         name: &str,
         input: &ToolInput,
     ) -> Result<ToolOutput> {
-        let start = std::time::Instant::now();
-
         let Some(primary) = self.get_arc(name) else {
-            let elapsed = start.elapsed().as_millis() as u64;
-            tracing::warn!(target: "tool_execution", tool = %name, latency_ms = elapsed, "tool not found");
             anyhow::bail!("{}", tf("error.tool_not_found", &[("name", name)]));
         };
 
-        // ── Pre-execute hooks (async) ───────
-        self.hooks.run_pre_async(name, input).await?;
-
         let mut last_result = primary.run_async(input.clone()).await?;
-        let elapsed = start.elapsed().as_millis() as u64;
-
-        // ── Post-execute hooks ─────────────────────────────────────────
-        self.hooks.run_post(name, input, &last_result, elapsed);
-
         if last_result.success {
-            record_tool_execution(
-                "tool_execution_total",
-                name,
-                true,
-                elapsed,
-                serde_json::to_string(&input.payload).ok().map(|s| s.len()),
-            );
             return Ok(last_result);
         }
 
@@ -1868,28 +1850,54 @@ impl ToolRegistry {
             if let Some(fb) = self.get_arc(&fb_name) {
                 let mut fb_result = fb.run_async(input.clone()).await?;
                 if fb_result.success {
-                    let elapsed = start.elapsed().as_millis() as u64;
                     fb_result.audit_log = Some(format!(
                         "primary '{name}' failed, fallback '{fb_name}' succeeded"
                     ));
-                    record_tool_execution(
-                        "tool_execution_total",
-                        name,
-                        true,
-                        elapsed,
-                        serde_json::to_string(&input.payload).ok().map(|s| s.len()),
-                    );
                     return Ok(fb_result);
                 }
                 last_result = fb_result;
             }
         }
+        Ok(last_result)
+    }
 
+    /// Run a tool asynchronously with fallback chain support.
+    /// Uses `run_async` directly without `block_in_place` to comply with principle #23.
+    ///
+    /// This is the only fallback-chain entry point. A synchronous variant was
+    /// previously maintained (lines ~1825-1888) but had zero production call
+    /// sites and duplicated this async path line-for-line; it has been removed.
+    ///
+    /// The post-execute hooks run against the final result (primary success or
+    /// the last fallback attempt) so they observe the outcome that is actually
+    /// returned.
+    #[tracing::instrument(level = "debug", skip(self, input), fields(tool = %name, success = false, latency_ms = 0u64, fallback_used = false))]
+    pub async fn run_with_fallback_async(
+        &self,
+        name: &str,
+        input: &ToolInput,
+    ) -> Result<ToolOutput> {
+        let start = std::time::Instant::now();
+
+        let Some(_primary) = self.get_arc(name) else {
+            let elapsed = start.elapsed().as_millis() as u64;
+            tracing::warn!(target: "tool_execution", tool = %name, latency_ms = elapsed, "tool not found");
+            anyhow::bail!("{}", tf("error.tool_not_found", &[("name", name)]));
+        };
+
+        // ── Pre-execute hooks (async) ───────
+        self.hooks.run_pre_async(name, input).await?;
+
+        let last_result = self.run_fallback_chain_async(name, input).await?;
         let elapsed = start.elapsed().as_millis() as u64;
+
+        // ── Post-execute hooks ─────────────────────────────────────────
+        self.hooks.run_post(name, input, &last_result, elapsed);
+
         record_tool_execution(
             "tool_execution_total",
             name,
-            false,
+            last_result.success,
             elapsed,
             serde_json::to_string(&input.payload).ok().map(|s| s.len()),
         );

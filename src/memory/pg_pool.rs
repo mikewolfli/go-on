@@ -73,33 +73,27 @@ pub(crate) struct PgPoolPair {
 
 /// Acquire a connection from a pool by blocking the current thread.
 ///
-/// Uses `Handle::try_current()` with a fallback to a temporary runtime when
-/// no Tokio context is active (principle #24). Callers in async contexts should
-/// use `spawn_blocking` + `pool_get`; sync callers during startup call it directly.
-/// Shared fallback runtime for callers outside any Tokio context.
+/// Always blocks on the dedicated shared fallback runtime rather than on
+/// `Handle::try_current().block_on(...)`. `try_current()` succeeds inside an
+/// async context (e.g. a synchronous constructor such as `ResponseCache::
+/// new_with_replica` invoked from a runtime worker thread), and `Handle::
+/// block_on` panics there with "Cannot block the current thread from within a
+/// runtime" (principle #20). A separate current-thread runtime is safe to
+/// block on from any thread — runtime worker, blocking pool, or plain sync.
 /// Created once and reused to avoid per-call runtime construction overhead.
 #[cfg(feature = "backend-postgres")]
 static FALLBACK_RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
 
 #[cfg(feature = "backend-postgres")]
 pub(crate) fn pool_get(pool: &PgPool) -> Result<deadpool::managed::Object<PgClientManager>> {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => handle
-            .block_on(pool.get())
-            .map_err(|e| anyhow::anyhow!("pool get failed: {e}")),
-        Err(_) => {
-            // No runtime active — use the shared fallback runtime.
-            // Created once and reused for all subsequent sync-path calls.
-            let rt = FALLBACK_RT.get_or_init(|| {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("failed to build fallback runtime for pool get")
-            });
-            rt.block_on(pool.get())
-                .map_err(|e| anyhow::anyhow!("pool get failed: {e}"))
-        }
-    }
+    let rt = FALLBACK_RT.get_or_init(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build fallback runtime for pool get")
+    });
+    rt.block_on(pool.get())
+        .map_err(|e| anyhow::anyhow!("pool get failed: {e}"))
 }
 
 /// Build a single [`PgPool`] from a connection factory.
@@ -243,4 +237,34 @@ pub(crate) fn connect_postgres(url: &str) -> Result<Client> {
             Ok(Client::connect(url, NoTls)?)
         }
     }
+}
+
+/// Resolve the PostgreSQL connection string from a single canonical source.
+///
+/// Priority: explicit config `connection_string` → `GO_ON_PG_CONNECTION_STRING`
+/// → `DATABASE_URL` → `PG_DSN` → `GO_ON_DATABASE_URL`.
+///
+/// The cache, vector store, and memory warm tier all resolve their DSN through
+/// this one function so the fallback order stays consistent across backends.
+#[cfg(feature = "backend-postgres")]
+pub(crate) fn resolve_pg_dsn(config_connection_string: Option<&str>) -> Option<String> {
+    if let Some(dsn) = config_connection_string.map(str::trim) {
+        if !dsn.is_empty() {
+            return Some(dsn.to_string());
+        }
+    }
+    for var in [
+        "GO_ON_PG_CONNECTION_STRING",
+        "DATABASE_URL",
+        "PG_DSN",
+        "GO_ON_DATABASE_URL",
+    ] {
+        if let Ok(value) = std::env::var(var) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
 }

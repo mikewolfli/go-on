@@ -373,10 +373,10 @@ pub async fn new_acp_server(
     // Register each agent as a monitored node in the fault-tolerance engine so
     // the 30s recovery cycle in start_background_tasks has a real node set to
     // check (previously the engine was created but no node was ever registered
-    // — the recovery loop ran against an always-empty heartbeat table). The
-    // heartbeat task in start_background_tasks keeps these nodes Online; if an
-    // agent's heartbeat lapses the engine reports it Offline / creates a
-    // FaultEvent and the recovery cycle can plan a reintegration.
+    // — the recovery loop ran against an always-empty heartbeat table). Agents
+    // are registered as monitored nodes; liveness is only evaluated for nodes
+    // that have actually reported a heartbeat (has_reported), so idle agents
+    // stay Online without spurious faults.
     if let Some(hb) = server.governance_deps.harness_bus.as_ref() {
         for name in registry.names() {
             if let Err(e) = hb.fault_tolerance.register_node(&name).await {

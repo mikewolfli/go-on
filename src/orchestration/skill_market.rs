@@ -188,22 +188,29 @@ pub struct SkillMarketRegistry {
 
 // ── GitHub index parsing helpers ─────────────────────────────────────────
 
+/// The skill-index schema version understood by `fetch_github_index`'s
+/// mapping logic. Indexes carrying a different version are parsed but logged
+/// as potentially incompatible.
+const SUPPORTED_SKILL_INDEX_SCHEMA: &str = "1.0";
+
 /// Internal index structure for `goon-skill-index.yaml` / `.json` parsing.
+///
+/// Unknown fields are tolerated (serde ignores them) so a forward-incompatible
+/// remote index does not brick the whole skill market; the `schema_version`
+/// field is validated on parse (see `fetch_github_index`) and a version
+/// mismatch is logged loudly.
 #[derive(Deserialize)]
 struct SkillIndex {
-    // Deserialization-only fields: required by the index schema but not read
-    // by the mapping logic (kept for forward-compatible schema validation).
-    #[allow(dead_code)]
+    /// Index schema version, validated on parse (see `fetch_github_index`).
     schema_version: String,
     updated_at: String,
-    #[allow(dead_code)]
+    /// Index maintainers, surfaced for observability on parse.
     maintainers: Option<Vec<MaintainerEntry>>,
     skills: Vec<SkillIndexEntry>,
 }
 
 #[derive(Deserialize)]
 struct MaintainerEntry {
-    #[allow(dead_code)]
     github: String,
 }
 
@@ -242,7 +249,7 @@ fn parse_index_json_or_yaml(text: &str) -> Result<SkillIndex> {
 
 impl SkillMarketRegistry {
     /// Create a new SkillMarketRegistry.
-    pub fn new(
+    pub async fn new(
         registry_url: &str,
         cache_dir: PathBuf,
         skill_registry: Arc<StdRwLock<SkillRegistry>>,
@@ -255,7 +262,7 @@ impl SkillMarketRegistry {
             skill_registry,
         };
         // Try to restore persisted installations from disk.
-        if let Err(e) = registry.restore_installations() {
+        if let Err(e) = registry.restore_installations().await {
             tracing::warn!(error = %e, "failed to restore marketplace installations");
         }
         Ok(registry)
@@ -279,14 +286,17 @@ impl SkillMarketRegistry {
     }
 
     /// Restore installation records from disk (called once at construction).
-    fn restore_installations(&self) -> Result<()> {
+    /// Async so the tokio lock is acquired with `.write().await` — the
+    /// synchronous `blocking_write` would panic when `new()` runs inside the
+    /// runtime (e.g. from the `go-on skill` CLI commands).
+    async fn restore_installations(&self) -> Result<()> {
         let path = self.installations_path();
         if !path.exists() {
             return Ok(()); // First start — nothing to restore.
         }
         let data = std::fs::read_to_string(&path)?;
         let restored: Vec<SkillInstallation> = serde_json::from_str(&data)?;
-        let mut installations = self.installations.blocking_write();
+        let mut installations = self.installations.write().await;
         *installations = restored;
         tracing::info!(
             count = installations.len(),
@@ -679,6 +689,30 @@ impl SkillMarketRegistry {
         let items: Vec<SkillMarketItem> = {
             let index: SkillIndex = parse_index_json_or_yaml(&text)
                 .context("failed to parse GitHub skill index (tried JSON, then YAML)")?;
+
+            // Schema validation: the mapping below understands schema "1.0". A
+            // future schema bump changes field semantics, so surface it instead
+            // of silently mapping the payload.
+            if index.schema_version != SUPPORTED_SKILL_INDEX_SCHEMA {
+                tracing::warn!(
+                    target: "skill_market",
+                    version = %index.schema_version,
+                    "skill index schema version differs from the supported {}; parsing may be incomplete",
+                    SUPPORTED_SKILL_INDEX_SCHEMA
+                );
+            }
+
+            // Maintainers are index metadata (not mapping inputs); read them
+            // here for parse-time observability (each entry's `github` handle).
+            if let Some(maintainers) = index.maintainers.as_ref() {
+                let handles: Vec<&str> = maintainers.iter().map(|m| m.github.as_str()).collect();
+                tracing::debug!(
+                    target: "skill_market",
+                    maintainers = ?handles,
+                    updated_at = %index.updated_at,
+                    "parsed community skill index"
+                );
+            }
 
             index
                 .skills
@@ -1477,7 +1511,7 @@ mod tests {
         }
     }
 
-    fn test_registry() -> SkillMarketRegistry {
+    async fn test_registry() -> SkillMarketRegistry {
         let cache_dir = tempfile::tempdir()
             .expect("create temp dir")
             .path()
@@ -1488,19 +1522,20 @@ mod tests {
         // availability — keeps the suite deterministic and fast. The
         // tests exercise the fallback-to-builtin path.
         SkillMarketRegistry::new("http://127.0.0.1:1", cache_dir, skill_registry)
+            .await
             .expect("test registry creation should succeed")
     }
 
     #[tokio::test]
     async fn test_refresh_populates_skills() {
-        let registry = test_registry();
+        let registry = test_registry().await;
         let count = registry.refresh().await.expect("refresh should succeed");
         assert!(count > 0, "should have at least one built-in skill");
     }
 
     #[tokio::test]
     async fn test_list_skills() {
-        let registry = test_registry();
+        let registry = test_registry().await;
         registry.refresh().await.expect("refresh");
         let skills = registry.list_skills().await;
         assert!(!skills.is_empty());
@@ -1508,7 +1543,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_skills() {
-        let registry = test_registry();
+        let registry = test_registry().await;
         registry.refresh().await.expect("refresh");
 
         let results = registry.search_skills("code").await;
@@ -1520,7 +1555,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_filter_by_tag() {
-        let registry = test_registry();
+        let registry = test_registry().await;
         registry.refresh().await.expect("refresh");
 
         let git_skills = registry.list_skills_by_tag("git").await;
@@ -1532,7 +1567,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_install_and_uninstall_skill() {
-        let registry = test_registry();
+        let registry = test_registry().await;
         registry.refresh().await.expect("refresh");
 
         let installation = registry
@@ -1553,7 +1588,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_install_duplicate_fails() {
-        let registry = test_registry();
+        let registry = test_registry().await;
         registry.refresh().await.expect("refresh");
 
         registry
@@ -1566,16 +1601,59 @@ mod tests {
 
     #[tokio::test]
     async fn test_install_nonexistent_fails() {
-        let registry = test_registry();
+        let registry = test_registry().await;
         registry.refresh().await.expect("refresh");
 
         let result = registry.install_skill("nonexistent-skill").await;
         assert!(result.is_err(), "installing unknown skill should fail");
     }
 
+    /// Restoring persisted installations must work inside the tokio runtime
+    /// (regression for the `blocking_write` panic in `restore_installations`
+    /// when the installation file already exists — e.g. any `go-on skill *`
+    /// CLI command after a first install).
+    #[tokio::test]
+    async fn test_restores_existing_installations_from_disk() {
+        let cache_dir = tempfile::tempdir()
+            .expect("create temp dir")
+            .path()
+            .join("market");
+        std::fs::create_dir_all(&cache_dir).expect("create market dir");
+        let installation = SkillInstallation {
+            name: "code-review".to_string(),
+            version: "1.0.0".to_string(),
+            source: SkillSource::Registry {
+                name: "code-review".to_string(),
+                version: "1.0.0".to_string(),
+            },
+            installed_path: cache_dir.join("code-review"),
+            installed_at_ms: 1,
+            enabled: true,
+        };
+        std::fs::write(
+            cache_dir.join("marketplace-installations.json"),
+            serde_json::to_vec(&vec![installation]).expect("serialize"),
+        )
+        .expect("write installations file");
+
+        let skill_registry = Arc::new(StdRwLock::new(SkillRegistry::default()));
+        let registry =
+            SkillMarketRegistry::new("http://127.0.0.1:1", cache_dir.clone(), skill_registry)
+                .await
+                .expect("registry construction with existing file must not panic");
+
+        let restored = registry.installations.read().await;
+        assert_eq!(
+            restored.len(),
+            1,
+            "installations must be restored from disk"
+        );
+        assert_eq!(restored[0].name, "code-review");
+    }
+
     #[tokio::test]
     async fn test_enable_disable_skill() {
-        let registry = test_registry();
+        let registry = test_registry().await;
         registry.refresh().await.expect("refresh");
         registry
             .install_skill("test-generator")
@@ -1603,6 +1681,60 @@ mod tests {
             .find(|i| i.name == "test-generator")
             .unwrap();
         assert!(tg.enabled);
+    }
+
+    /// `SkillIndex` is a real schema-validated deserialization target: legal
+    /// indexes parse, unknown fields are tolerated for forward compatibility,
+    /// and `schema_version` is validated on the public parse path (no more
+    /// silent `#[allow(dead_code)]` placeholder fields).
+    #[test]
+    fn test_skill_index_schema_validation() {
+        let legal = r#"{
+            "schema_version": "1.0",
+            "updated_at": "2026-05-01",
+            "maintainers": [{"github": "alice"}],
+            "skills": [{
+                "name": "code-review",
+                "description": "review",
+                "author": "team",
+                "repository": "github.com/x/y",
+                "version": "1.0.0"
+            }]
+        }"#;
+        let parsed: SkillIndex = serde_json::from_str(legal).expect("legal index must parse");
+        assert_eq!(parsed.schema_version, SUPPORTED_SKILL_INDEX_SCHEMA);
+        assert_eq!(parsed.maintainers.as_ref().unwrap().len(), 1);
+        assert_eq!(parsed.skills.len(), 1);
+
+        // Unknown top-level key -> tolerated (forward compatibility): the
+        // known fields still parse and the entry parses fine.
+        let unknown_top_level = r#"{
+            "schema_version": "1.0",
+            "updated_at": "2026-05-01",
+            "maintainers": [],
+            "skills": [],
+            "extra_field": true
+        }"#;
+        assert!(
+            serde_json::from_str::<SkillIndex>(unknown_top_level).is_ok(),
+            "unknown top-level field must be tolerated"
+        );
+
+        // Unknown field inside a maintainer entry -> tolerated too.
+        let unknown_maintainer_field = r#"{
+            "schema_version": "1.0",
+            "updated_at": "2026-05-01",
+            "maintainers": [{"github": "alice", "email": "a@b.c"}],
+            "skills": []
+        }"#;
+        assert!(
+            serde_json::from_str::<SkillIndex>(unknown_maintainer_field).is_ok(),
+            "unknown maintainer field must be tolerated"
+        );
+
+        // The public parse entry point surfaces the same behavior.
+        assert!(parse_index_json_or_yaml(legal).is_ok());
+        assert!(parse_index_json_or_yaml(unknown_top_level).is_ok());
     }
 
     #[test]

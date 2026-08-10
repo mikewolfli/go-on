@@ -1,7 +1,8 @@
 //! F-GAP-08: Runtime adaptive controls
 //!
 //! # Status
-//! Complete implementation ready for CapabilityBus integration (ARCH-13).
+//! Integrated into `PolicyEvaluator` via the harness bus (ARCH-13);
+//! `OnlineControllerState` is consumed by `harness_bus/evaluator.rs`.
 
 use std::collections::{HashMap, VecDeque};
 

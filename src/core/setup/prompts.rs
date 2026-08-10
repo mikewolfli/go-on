@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 
 use super::config_gen::{CustomAgentSpec, LocalModelOptions};
 use super::secrets::SecretMode;
-use super::{SetupLevel, SetupOptions, SetupProfile, ADAPTIVE_TEMPLATE};
+use super::{SetupLevel, SetupOptions, SetupProfile};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Public entry points
@@ -49,10 +49,9 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
         Some(level) => level,
         None => prompt_setup_level()?,
     };
-    let template_name = ADAPTIVE_TEMPLATE;
-
-    let _ = super::config_gen::find_template(template_name)
-        .ok_or_else(|| anyhow::anyhow!("template file '{}' not found", template_name))?;
+    // The adaptive config is generated in code by
+    // `config_gen::generate_adaptive_config_toml` below — there is no
+    // on-disk template file to look up, so no existence check is needed.
 
     let secret_mode = match options.secret_mode {
         Some(value) => value,

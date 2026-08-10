@@ -21,9 +21,6 @@ pub(crate) use crate::core::providers::{
     provider_spec_by_agent_type, provider_spec_by_name, provider_specs,
 };
 
-// Filename for the adaptive config template.
-pub(crate) const ADAPTIVE_TEMPLATE: &str = "config.toml.autopilot-adaptive";
-
 // Re-export config-gen types and functions moved to `config_gen` sub-module.
 pub use config_gen::{
     apply_recommended_to_config, recommendation_snapshot_for_config, CustomAgentSpec,

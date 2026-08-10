@@ -2,6 +2,18 @@
 
 ## [Unreleased] - 2026-08-10
 
+### 第 43 轮 — 超级深度/广度扫描 XI：统一链路与收敛（2026-08-10，docs/log/log-20260810-4.md）
+
+- **MCP 客户端双实现合并**为 `McpClientCore` + 可插拔 `McpTransport`（stdio/http 共享全部方法）。
+- **workflow 工具统一执行链**：`workflow_execute/ask/generate` 移入 `execute_tool_call` 统一链（删除 native MCP 特判），两臂行为一致；补人读 `message` 与审计。
+- **tool fallback 链合并**、**任务分类器去重**（Planner 委托 TaskRouter）、**SSE 帧复用**、**auto_migrate 三处触发收敛**为单一后台任务。
+- **Delphi 收敛恒 false 修复**；**fault_tolerance 心跳语义修复**（`has_reported`，注册未上报不误判 Offline）+ 真实执行信号接入。
+- **echo_skill 广告-执行闭环**（注册 `EchoSkillAlias`）；**skill_market CLI 崩溃修复**（blocking_write→await，配回归测试）；**selector context 学习信号接通**；**VoteMode::Legacy 真简单多数**；**GLOBAL_VOTERS 可替换化**（测试确定性）。
+- **自进化循环门禁**：`runtime.evolution_enabled`（默认 false），杜绝无门禁 AutoApproval 改写源码。
+- **死代码/假保留清理**：`preferred_agent_from_request`/`review_overrides`/`ADAPTIVE_TEMPLATE`/`find_template`/`adaptive` 死臂/unused re-export（multimodal 29 项等）；远程 skill index 移除 `deny_unknown_fields`（宽容 + schema 校验）。
+- **GUI 重试状态集对齐**（408/429/全 5xx）；**vscode reconnect 测试重写**（真实 backoffDelayMs）；**skills/ 收敛**（删 11 符号链接，目录=34=builtin 数）；**结构性测试迁入 src**；**部署修复**（Dockerfile 数据目录、compose 卷+PG DSN、k8s `/metrics`、ps1 bug）；config 幽灵键清理。
+- 验证：4 profile + clippy 零警告；lib 1513/0；全部集成套件通过；vscode tsc / GUI / SDK 干净。
+
 ### 第 41 轮 — 超级深度/广度扫描 + 依赖审计（2026-08-10，docs/log/log-20260810-1.md）
 
 - `$/cancel_request` / `session/cancel` 取消语义真实化；Council 投票真实参与路由决策；SelfModelCore 假持久化清理；metacognitive llm_agent 假注入链整体删除；熔断器状态机三份合并；工具分类三份映射合并；Cold tier 接通读取（warm 不足回退冷层）；fault_tolerance 状态可恢复；配置双源合并；i18n 启动断点修复；`.goon` 路径统一；大量死代码清理。

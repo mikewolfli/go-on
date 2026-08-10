@@ -422,6 +422,18 @@ macro_rules! spawn_blocking_vec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SqliteVectorMode {
     SqliteVec,
+    // In profiles where the JSON fallback is compile-time disabled (anything
+    // except `local` without simple-server/multi-users-server) the variant is
+    // never constructed — keep the match arm in `search` reachable without a
+    // dead_code warning instead of faking a construction at runtime.
+    #[cfg_attr(
+        not(all(
+            feature = "local",
+            not(feature = "simple-server"),
+            not(feature = "multi-users-server")
+        )),
+        allow(dead_code)
+    )]
     JsonFallback,
 }
 
@@ -1227,9 +1239,6 @@ fn resolve_sqlite_vector_mode(conn: &Connection) -> Result<SqliteVectorMode> {
                 not(feature = "multi-users-server")
             )))]
             {
-                // Keep variant reachable across profile combinations so dead_code
-                // does not fire when fallback is compile-time disabled.
-                let _fallback_marker = SqliteVectorMode::JsonFallback;
                 Err(anyhow::anyhow!(
                     "sqlite-vec is required for this build profile but failed to initialize: {}",
                     err
@@ -1580,7 +1589,7 @@ use crate::memory::embedding_provider::{
 use crate::memory::pg_migrate::run_migrations;
 #[cfg(feature = "backend-postgres")]
 use crate::memory::pg_pool::{
-    connect_postgres, create_pool, create_pool_pair, pool_get, PgPoolPair,
+    connect_postgres, create_pool, create_pool_pair, pool_get, resolve_pg_dsn, PgPoolPair,
 };
 
 #[cfg(feature = "backend-postgres")]
@@ -1634,6 +1643,11 @@ impl VectorStore {
     ///
     /// When `read_replica_url` is `Some`, read queries use the replica pool;
     /// when `None`, the primary pool is used for both reads and writes.
+    ///
+    /// The DSN is resolved through the canonical `pg_pool::resolve_pg_dsn`
+    /// resolver (config `connection_string` → `GO_ON_PG_CONNECTION_STRING` →
+    /// `DATABASE_URL` → `PG_DSN` → `GO_ON_DATABASE_URL`), keeping the fallback
+    /// order identical to the response cache and memory warm tier.
     pub fn new_with_replica(
         url: &str,
         read_replica_url: Option<String>,
@@ -1644,8 +1658,13 @@ impl VectorStore {
             anyhow::bail!("vector.dimensions must be greater than 0 for pgvector backend");
         }
 
+        let url = resolve_pg_dsn(Some(url)).ok_or_else(|| {
+            anyhow::anyhow!(
+                "no PostgreSQL connection string configured (set config vector.connection_string, GO_ON_PG_CONNECTION_STRING, DATABASE_URL, PG_DSN or GO_ON_DATABASE_URL)"
+            )
+        })?;
         let max_pool_size = 8;
-        let write_url = url.to_string();
+        let write_url = url;
         let write_connect = move || connect_postgres(&write_url);
 
         let pool = match &read_replica_url {
@@ -1709,13 +1728,18 @@ impl VectorStore {
 
     /// Create a new vector store configured from environment variables.
     ///
-    /// Reads `GO_ON_DATABASE_URL` (connection string) and
+    /// Reads the connection string from the canonical `pg_pool::resolve_pg_dsn`
+    /// resolver (config `connection_string` → `GO_ON_PG_CONNECTION_STRING` →
+    /// `DATABASE_URL` → `PG_DSN` → `GO_ON_DATABASE_URL`) and
     /// `GO_ON_EMBEDDING_BACKEND` (embedding provider) from the environment.
     ///
     /// This is the recommended entry point for production deployments.
     pub fn new_with_env(max_entries: usize) -> Result<Self> {
-        let url = std::env::var("GO_ON_DATABASE_URL")
-            .map_err(|_| anyhow::anyhow!("GO_ON_DATABASE_URL must be set for postgres backend"))?;
+        let url = resolve_pg_dsn(None).ok_or_else(|| {
+            anyhow::anyhow!(
+                "no PostgreSQL connection string configured (set GO_ON_PG_CONNECTION_STRING, DATABASE_URL, PG_DSN or GO_ON_DATABASE_URL) for postgres backend"
+            )
+        })?;
         let provider = crate::memory::embedding_provider::embedding_provider_from_env();
         let dimensions = provider.dimensions();
         Self::new(&url, dimensions, max_entries).map(|s| s.with_embedding_provider(provider))
@@ -1796,6 +1820,11 @@ impl VectorStore {
             let query_vec = embed_with_check(query, self.dimensions, &self.embedding_provider)?;
             let query_embedding = Vector::from(query_vec);
             let now = now_ts();
+            // Mirror the SQLite path: cap the scan at max_entries but never
+            // below the requested top_k (previously a hardcoded LIMIT 300
+            // silently truncated results for top_k > 300 and scanned 300 rows
+            // even when max_entries < 300).
+            let limit = self.max_entries.max(top_k);
             let mut client = pool_get(&self.pool.read)?;
             let rows = client.query(
                 &format!(
@@ -1804,10 +1833,10 @@ impl VectorStore {
                      FROM vector_memory
                      WHERE phase = {p}1
                      ORDER BY embedding <=> {p}2
-                     LIMIT 300",
+                     LIMIT {p}3",
                     p = PARAM_PREFIX,
                 ),
-                &[&phase, &query_embedding],
+                &[&phase, &query_embedding, &(limit as i64)],
             )?;
 
             let mut scored: Vec<(String, f32, String)> = Vec::new();

@@ -30,34 +30,15 @@ use crate::orchestration::tool::{RetryPolicy, ToolInput, ToolOutput, ToolRegistr
 
 /// Execute a tool, consulting the registry's fallback chain when the primary
 /// reports failure (`success=false`). Hooks, SSE, metrics, and retries are
-/// handled by the caller; this only adds the fallback semantics that
-/// `ToolRegistry::run_with_fallback_async` provides (without re-running hooks).
+/// handled by the caller (`execute_single_tool` runs the pre/post hooks
+/// itself); this delegates to the registry's hook-free fallback chain so the
+/// two former fallback implementations cannot drift.
 async fn run_tool_with_fallback(
     registry: &ToolRegistry,
     name: &str,
     input: &ToolInput,
 ) -> anyhow::Result<ToolOutput> {
-    let Some(primary) = registry.get_arc(name) else {
-        anyhow::bail!("tool not found: {name}");
-    };
-    let mut last = primary.run_async(input.clone()).await?;
-    if last.success {
-        return Ok(last);
-    }
-    for fallback_name in registry
-        .profile(name)
-        .map(|p| p.fallback_chain.clone())
-        .unwrap_or_default()
-    {
-        if let Some(fb_tool) = registry.get_arc(&fallback_name) {
-            let fb_result = fb_tool.run_async(input.clone()).await?;
-            if fb_result.success {
-                return Ok(fb_result);
-            }
-            last = fb_result;
-        }
-    }
-    Ok(last)
+    registry.run_fallback_chain_async(name, input).await
 }
 
 /// Configuration for concurrent tool execution.

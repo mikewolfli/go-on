@@ -223,6 +223,10 @@ pub(crate) const ACP_METHODS: &[&str] = &[
     "mcp.sampling.createMessage",
     "mcp.tools.call",
     "mcp.tools.list",
+    // Distributed-memory bus ingest. The handler arm is gated on
+    // `sub-bus-distributed-memory` (request.rs), so under `local` this entry
+    // resolves to MethodNotFound — the whitelist entry keeps the method name
+    // stable across profiles for hub/worker interop.
     "memory.ingest",
     "metrics",
     "metrics.errors.summary",

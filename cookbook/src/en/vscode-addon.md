@@ -64,8 +64,8 @@ Example workspace-level settings:
 ```json
 {
   "go-on.runtime.protocolMode": "from_config",
-  "go-on.runtime.executablePath": "D:/Workspace/RustWorkspace/go-on/target/debug/go-on.exe",
-  "go-on.runtime.configPath": "D:/Workspace/RustWorkspace/go-on/config.toml"
+  "go-on.executablePath": "D:/Workspace/RustWorkspace/go-on/target/debug/go-on.exe",
+  "go-on.configPath": "D:/Workspace/RustWorkspace/go-on/config.toml"
 }
 ```
 

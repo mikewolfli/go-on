@@ -91,6 +91,7 @@ otel_endpoint = "http://localhost:4317"
 otel_service_name = "go-on-multi"
 otel_sample_ratio = 0.5
 trace_slow_top_n = 50
+evolution_enabled = false
 
 # ── Skills ────────────────────────────────────────────────────────────
 skills_enabled = false

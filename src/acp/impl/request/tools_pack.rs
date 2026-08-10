@@ -43,6 +43,18 @@ pub(super) fn open_skill_import_store(server: &AcpServer) -> Result<SkillImportS
     )
 }
 
+/// Build a minimal `RequestTraceContext` for special-tool handlers that
+/// require one (workflow_* tools). Tool execution has no JSON-RPC request
+/// envelope, so the trace id is derived from the tool name.
+fn request_trace_context(method: &str) -> crate::protocol::rpc_protocol::RequestTraceContext {
+    crate::protocol::rpc_protocol::RequestTraceContext {
+        trace_id: format!("tool:{method}"),
+        span_id: "tool.special".to_string(),
+        method: method.to_string(),
+        request_id: "tool-call".to_string(),
+    }
+}
+
 pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Value> {
     let mut tools = vec![
         json!({
@@ -461,6 +473,9 @@ pub(crate) fn is_bridge_special_tool(name: &str) -> bool {
             | "skill-finder"
             | "import_skill"
             | "github_search_skills"
+            | "workflow_execute"
+            | "workflow_ask"
+            | "workflow_generate"
     )
 }
 
@@ -712,6 +727,81 @@ pub(crate) async fn execute_tool_call(
                 .and_then(|v| v.as_str())
                 .unwrap_or("en");
             Ok(build_prompts_get_tool(&server.prompt_manager, lang, id))
+        }
+        // Workflow orchestration tools: dispatched to the same handlers the
+        // native MCP arm used to special-case, so the ACP bridge
+        // (`mcp.tools.call` / `tools/call`) and the native MCP arm share one
+        // execution chain and return the same structured payload.
+        "workflow_execute" => {
+            let task = arguments
+                .get("task")
+                .and_then(|v| v.as_str())
+                .context("missing required field: task")?;
+            let params = json!({
+                "task": task,
+                "phase": arguments.get("phase").and_then(|v| v.as_str()),
+            });
+            super::exec_pack::handle_workflow_execute(server, params, &request_trace_context(name)).await?;
+            record_tool_call_audit_with_protocol(
+                name,
+                arguments,
+                true,
+                "workflow executed via unified tool chain",
+                "tools.call",
+            );
+            Ok(json!({
+                "ok": true,
+                "task": task,
+                "message": format!("Workflow executed for task: {}", task),
+            }))
+        }
+        "workflow_ask" => {
+            let task = arguments
+                .get("task")
+                .and_then(|v| v.as_str())
+                .context("missing required field: task")?;
+            let params = json!({
+                "task": task,
+                "auto_create_skills": arguments.get("auto_create_skills").cloned().unwrap_or(json!(true)),
+                "auto_create_workflow": true,
+            });
+            super::workflow_pack::handle_workflow_ask(server, params, &request_trace_context(name)).await?;
+            record_tool_call_audit_with_protocol(
+                name,
+                arguments,
+                true,
+                "workflow.ask executed via unified tool chain",
+                "tools.call",
+            );
+            Ok(json!({
+                "ok": true,
+                "task": task,
+                "message": format!("Workflow.ask completed for: {}", task),
+            }))
+        }
+        "workflow_generate" => {
+            let task = arguments
+                .get("task")
+                .and_then(|v| v.as_str())
+                .context("missing required field: task")?;
+            super::workflow_pack::workflow_generate_payload(
+                server,
+                json!({ "task": task }),
+                &request_trace_context(name),
+            )
+            .await?;
+            record_tool_call_audit_with_protocol(
+                name,
+                arguments,
+                true,
+                "workflow.generate executed via unified tool chain",
+                "tools.call",
+            );
+            Ok(json!({
+                "ok": true,
+                "task": task,
+                "message": format!("Workflow generated for: {}", task),
+            }))
         }
         "skill-finder" => {
             let query = arguments

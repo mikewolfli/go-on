@@ -556,7 +556,7 @@ use crate::memory::pg_migrate::run_migrations;
 // backends share a single `sslmode`-aware connect path.
 #[cfg(feature = "backend-postgres")]
 use crate::memory::pg_pool::{
-    connect_postgres, create_pool, create_pool_pair, pool_get, PgPoolPair,
+    connect_postgres, create_pool, create_pool_pair, pool_get, resolve_pg_dsn, PgPoolPair,
 };
 
 #[cfg(feature = "backend-postgres")]
@@ -597,14 +597,24 @@ impl ResponseCache {
     ///
     /// When `read_replica_url` is `Some`, read queries use the replica pool;
     /// when `None`, the primary pool is used for both reads and writes.
+    ///
+    /// The DSN is resolved through the canonical `pg_pool::resolve_pg_dsn`
+    /// resolver (config `connection_string` → `GO_ON_PG_CONNECTION_STRING` →
+    /// `DATABASE_URL` → `PG_DSN` → `GO_ON_DATABASE_URL`), keeping the fallback
+    /// order identical to the vector store and memory warm tier.
     pub fn new_with_replica(
         url: &str,
         read_replica_url: Option<String>,
         default_ttl_seconds: u64,
         max_entries: usize,
     ) -> Result<Self> {
+        let url = resolve_pg_dsn(Some(url)).ok_or_else(|| {
+            anyhow::anyhow!(
+                "no PostgreSQL connection string configured (set config cache.connection_string, GO_ON_PG_CONNECTION_STRING, DATABASE_URL, PG_DSN or GO_ON_DATABASE_URL)"
+            )
+        })?;
         let max_pool_size = 8;
-        let write_url = url.to_string();
+        let write_url = url;
         let write_connect = move || connect_postgres(&write_url);
 
         let pool = match &read_replica_url {

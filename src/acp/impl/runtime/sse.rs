@@ -50,6 +50,28 @@ pub(crate) async fn write_sse_event(
     Ok(())
 }
 
+/// Write a single SSE event frame with a pre-serialized `data:` payload.
+///
+/// Some consumers (e.g. the MCP SSE endpoint) broadcast already-serialized
+/// JSON-RPC strings and must not re-encode them through [`write_sse_event`]
+/// (that would add JSON quoting around the payload). This writes the same
+/// `event: <name>\ndata: <raw>\n\n` frame layout so the framing logic lives
+/// in one place.
+pub(crate) async fn write_sse_raw_event(
+    socket: &mut (impl tokio::io::AsyncWrite + Unpin),
+    event: &str,
+    data: &str,
+) -> Result<()> {
+    let mut frame = String::with_capacity(event.len() + data.len() + 8);
+    frame.push_str("event: ");
+    frame.push_str(event);
+    frame.push_str("\ndata: ");
+    frame.push_str(data);
+    frame.push_str("\n\n");
+    tcp_write_timeout(socket, frame.as_bytes()).await?;
+    Ok(())
+}
+
 /// Flush pending SSE data to the socket.
 /// Call this periodically during streaming (e.g. every 10 events or every 10ms).
 pub(crate) async fn flush_sse(socket: &mut (impl tokio::io::AsyncWrite + Unpin)) -> Result<()> {

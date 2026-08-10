@@ -14,7 +14,7 @@ services:
     ports:
       - "127.0.0.1:8090:8090"
     volumes:
-      - go-on-data:/opt/go-on
+      - go-on-data:/var/lib/go-on
       - ../../config/config.simple-server.toml:/opt/go-on/config.toml:ro
     environment:
       - RUST_LOG=warn

@@ -17,6 +17,7 @@ use tracing::{debug, info, warn};
 
 use crate::acp::r#impl::cors::{build_preflight_response_headers, is_origin_allowed};
 use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
+use crate::acp::r#impl::runtime::sse::write_sse_raw_event;
 use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
 use crate::governance::rbac::{AccessDecision, Permission, Principal};
@@ -1091,14 +1092,9 @@ async fn handle_mcp_sse_connection(
 
     // ── Initial endpoint event ─────────────────────────────────────────
     // Advertise the JSON-RPC POST endpoint so the client knows where to
-    // send its requests.
-    let endpoint_event = "event: endpoint\ndata: /mcp\n\n".to_string();
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        socket.write_all(endpoint_event.as_bytes()),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("timeout writing SSE endpoint event"))??;
+    // send its requests. Frame written via the shared SSE framing helper
+    // (same `event: <name>\ndata: <raw>\n\n` layout as the ACP runtime).
+    write_sse_raw_event(socket, "endpoint", "/mcp").await?;
     socket.flush().await?;
 
     // ── Subscribe to broadcast channel ─────────────────────────────────
@@ -1118,14 +1114,7 @@ async fn handle_mcp_sse_connection(
             result = rx.recv() => {
                 match result {
                     Ok(payload) => {
-                        let frame = format!("event: message\ndata: {}\n\n", payload);
-                        if tokio::time::timeout(
-                            std::time::Duration::from_secs(30),
-                            socket.write_all(frame.as_bytes()),
-                        )
-                        .await
-                        .is_err()
-                        {
+                        if write_sse_raw_event(socket, "message", &payload).await.is_err() {
                             // Client disconnected
                             break;
                         }
@@ -1150,14 +1139,7 @@ async fn handle_mcp_sse_connection(
                     "params": {}
                 });
                 let payload = serde_json::to_string(&heartbeat_event).unwrap_or_default();
-                let frame = format!("event: message\ndata: {}\n\n", payload);
-                if tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    socket.write_all(frame.as_bytes()),
-                )
-                .await
-                .is_err()
-                {
+                if write_sse_raw_event(socket, "message", &payload).await.is_err() {
                     break;
                 }
                 let _ = socket.flush().await;
@@ -1264,7 +1246,7 @@ mod tests {
     async fn test_mcp_stdio_server_creation() {
         let agent_registry = Arc::new(AgentRegistry::new());
         let tool_registry = Arc::new(ToolRegistry::new());
-        let _server = McpStdioServer::new(
+        let server = McpStdioServer::new(
             agent_registry,
             tool_registry,
             "go-on".to_string(),
@@ -1272,7 +1254,48 @@ mod tests {
             None,
         );
 
-        // Server was created successfully
+        // Real handshake behavior on the inner MCP server: initialize must
+        // negotiate the protocol version and advertise capabilities, and a
+        // subsequent ping must be answered — proving the server is functional
+        // after construction, not merely constructible.
+        let initialize = server
+            .mcp_server
+            .handle_request(JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                method: "initialize".to_string(),
+                params: Some(json!({ "protocolVersion": "2024-11-05" })),
+                id: Some(json!(0)),
+            })
+            .await
+            .expect("initialize must produce a response");
+        assert!(
+            initialize.error.is_none(),
+            "initialize must not error, got: {:?}",
+            initialize.error
+        );
+        let result = initialize.result.expect("initialize must carry a result");
+        assert_eq!(result["protocolVersion"], "2024-11-05");
+        assert_eq!(result["serverInfo"]["name"], "go-on");
+        assert!(
+            result["capabilities"].is_object(),
+            "initialize must advertise capabilities"
+        );
+
+        let ping = server
+            .mcp_server
+            .handle_request(JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                method: "ping".to_string(),
+                params: Some(json!({})),
+                id: Some(json!(1)),
+            })
+            .await
+            .expect("ping must produce a response");
+        assert!(
+            ping.error.is_none() && ping.result.is_some(),
+            "ping must be answered after initialize, got: {:?}",
+            ping
+        );
     }
 
     #[tokio::test]

@@ -43,13 +43,7 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry
     //    synchronous std::fs I/O, so it runs on a blocking thread instead of
     //    stalling the async runtime.
     let lang_dir = if config.enable_i18n {
-        Some(
-            config
-                .config_path
-                .parent()
-                .map(|p| p.join("languages"))
-                .unwrap_or_else(|| Path::new("config/languages").to_path_buf()),
-        )
+        Some(languages_dir_for(&config.config_path))
     } else {
         None
     };
@@ -142,6 +136,18 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry
     Ok(skill_registry)
 }
 
+/// Resolve the languages directory for a given config path.
+///
+/// Falls back to `config/languages` when the config path has no parent.
+/// Shared by `perform_bootstrap` and `init_i18n_only` so the derivation
+/// cannot drift between the two call sites.
+fn languages_dir_for(config_path: &Path) -> std::path::PathBuf {
+    config_path
+        .parent()
+        .map(|p| p.join("languages"))
+        .unwrap_or_else(|| Path::new("config/languages").to_path_buf())
+}
+
 /// Initialize the global I18N manager without the hot-reload watcher.
 ///
 /// Used by one-shot CLI paths (`--init`, `--status`, `--diagnose`,
@@ -156,9 +162,6 @@ pub fn init_i18n_only(config_path: &Path) -> Result<()> {
     if crate::i18n::runtime::I18N.get().is_some() {
         return Ok(());
     }
-    let lang_dir = config_path
-        .parent()
-        .map(|p| p.join("languages"))
-        .unwrap_or_else(|| Path::new("config/languages").to_path_buf());
+    let lang_dir = languages_dir_for(config_path);
     crate::i18n::runtime::init_i18n(&lang_dir)
 }

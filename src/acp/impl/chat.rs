@@ -1200,12 +1200,12 @@ pub(crate) async fn apply_review_gate_assemble(
                 .await
                 {
                     tracing::warn!("memory_promotion: bridge_store failed: {}", e);
-                    return;
                 }
-                // Trigger persistence tier migration (warm/cold) on the real store.
-                if let Err(e) = mp.auto_migrate().await {
-                    tracing::warn!("memory_promotion: auto_migrate failed: {}", e);
-                }
+                // No tier migration here: the 5-minute `memory_auto_migrate`
+                // background task (src/acp/background.rs) is the sole owner of
+                // the full-table auto_migrate scan. The entry stays in the hot
+                // tier until its TTL expires, preserving "new memories short-term
+                // hot, TTL expiry migrates to warm/cold" semantics.
             });
         } else {
             // No persistence available (e.g. no backend feature) — fall back

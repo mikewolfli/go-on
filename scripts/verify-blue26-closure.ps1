@@ -19,7 +19,7 @@ if ($guiSmokeMissing) {
 
 $blue26 = Get-Content -Path $blue26Path -Raw -Encoding UTF8
 $addonSmoke = Get-Content -Path $addonSmokePath -Raw -Encoding UTF8
-$guiSmoke = Get-Content -Path $guiSmokePath -Raw -Encoding UTF8
+$guiSmoke = if ($guiSmokeMissing) { "" } else { Get-Content -Path $guiSmokePath -Raw -Encoding UTF8 }
 $contract = Get-Content -Path $contractPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
 $errors = New-Object System.Collections.Generic.List[string]

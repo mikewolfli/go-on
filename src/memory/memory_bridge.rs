@@ -12,14 +12,18 @@
 //! | Operation | MemoryStore | MemoryPersistence |
 //! |---|---|---|
 //! | `bridge_store` | `store()` | `store()` |
-//! | `bridge_promote` | `promote()` | `auto_migrate()` |
+//! | `bridge_promote` | `promote()` | — (tier migration runs in the 5-minute
+//!   background task; see below) |
 //!
 //! # Background auto-migration
 //!
 //! The auto-migrate background task is now spawned inside
 //! `start_background_tasks()` (src/acp/background.rs) using the server's
 //! existing `MemoryPersistence`, rather than creating a redundant instance
-//! during server startup.
+//! during server startup. It is the **only** full-table tier-migration scan:
+//! `bridge_promote` only promotes in-memory classes and never scans the warm
+//! table, keeping "new memories stay hot until TTL expiry migrates them"
+//! semantics.
 
 use std::sync::Mutex;
 
@@ -107,22 +111,21 @@ pub async fn bridge_store(
     Ok(())
 }
 
-/// Bridge for `promote()` — promotes in-memory entries and triggers tier migration.
+/// Bridge for `promote()` — promotes in-memory memory-class levels only.
 ///
-/// 1. Runs `MemoryStore::promote()` to move entries between memory classes.
-/// 2. Triggers `MemoryPersistence::auto_migrate()` to move entries between tiers.
+/// Runs `MemoryStore::promote()` to move entries between memory classes
+/// (Observation → Episodic → Semantic → ProjectState).
+///
+/// Persistence tier migration (hot → warm / warm → cold) is deliberately NOT
+/// triggered here: it is a full-table scan, and the single 5-minute background
+/// task (`memory_auto_migrate` in src/acp/background.rs) is the sole owner of
+/// that scan. New memories stay in the hot tier until their TTL expires.
 ///
 /// Returns the [`MemoryPromotionReport`] from the in-memory promotion.
-///
-/// # Errors
-///
-/// Returns an error if `auto_migrate()` fails.  The in-memory promotion will
-/// still have been applied.
 pub async fn bridge_promote(
     memory_store: &Mutex<MemoryStore>,
-    persistence: &MemoryPersistence,
 ) -> anyhow::Result<MemoryPromotionReport> {
-    // Step 1: promote in-memory classes
+    // Promote in-memory classes
     let report = {
         let mut store = memory_store.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("memory bridge mutex poisoned during promote");
@@ -130,9 +133,6 @@ pub async fn bridge_promote(
         });
         store.promote()
     };
-
-    // Step 2: trigger persistence tier migration
-    let _migration_report = persistence.auto_migrate().await?;
 
     Ok(report)
 }
@@ -196,8 +196,9 @@ mod tests {
             .await
             .expect("bridge_store should succeed");
 
-        // Promote via the bridge
-        let report = bridge_promote(&store, &persistence)
+        // Promote via the bridge (in-memory class promotion only; tier
+        // migration is owned by the background auto-migrate task)
+        let report = bridge_promote(&store)
             .await
             .expect("bridge_promote should succeed");
         // The entry with usefulness 0.80 from Observation should promote to Episodic

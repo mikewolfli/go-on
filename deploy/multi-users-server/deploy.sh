@@ -29,6 +29,9 @@ echo "Install dir: ${INSTALL_DIR}/backend"
 
 # 1. Create directories
 sudo mkdir -p "${INSTALL_DIR}/backend"
+# Data directory used by the config template (cache/vector/memory stores).
+sudo mkdir -p /var/lib/go-on
+sudo chown "go-on:go-on" /var/lib/go-on
 # Ensure go-on user exists (matches systemd service User=go-on)
 sudo id -u go-on &>/dev/null || sudo useradd -r -s /sbin/nologin go-on
 sudo chown "go-on:go-on" "${INSTALL_DIR}" -R

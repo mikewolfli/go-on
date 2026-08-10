@@ -176,8 +176,8 @@ async fn run() -> Result<()> {
 
     // GAP-46-12: Plugin info is now built inline as a simple PluginInfo list.
     // SessionCompressor is fully wired into the chat pipeline (compress method
-    // called from session.rs). The #[cfg_attr(not(test), allow(dead_code))]
-    // on SessionCompressor struct covers test-only fields.
+    // called from session.rs); all of its fields are read by the compression
+    // logic, so no dead-code allowance is needed on the struct.
     // Parse command-line arguments
     let mut cli = cli::Cli::parse();
     if let Some(command) = cli.command.take() {

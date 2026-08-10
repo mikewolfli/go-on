@@ -1,7 +1,6 @@
 //! End-to-end pipeline benchmarks for go-on.
 //!
 //! Measures throughput and latency of the critical paths:
-//! - ToolRegistry lookup + governance check (every tool execution)
 //! - Skill registry lookup + discovery (skills/list + skills/find)
 //!
 //! Run with: cargo bench --bench pipeline_bench
@@ -14,8 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use std::hint::black_box;
 use go_on::orchestration::skill::SkillRegistry;
+use std::hint::black_box;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 1. Skill registry lookup

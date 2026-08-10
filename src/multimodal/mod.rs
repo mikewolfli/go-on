@@ -12,8 +12,10 @@
 //!
 //! # Re-exports
 //!
-//! This module re-exports the principal types from each sub-module so that
-//! consumers can import everything from `go_on::multimodal::*`.
+//! Convenience re-exports of the principal types that the chat pipeline and
+//! integration tests import directly from `go_on::multimodal`. The full type
+//! surface remains available under each sub-module (e.g.
+//! `go_on::multimodal::document_parser::ParsedContent`).
 
 pub mod audio_processor;
 pub mod code_repo_analyzer;
@@ -27,15 +29,16 @@ pub mod excel_writer;
 #[cfg(feature = "document-ppt")]
 pub mod ppt_processor;
 
+// Internal use of sub-module types (previously brought into scope by the
+// removed re-exports; now explicit so the imports stay visible).
+use code_repo_analyzer::RepoAnalyzer;
+use video_processor::{VideoProcessor, VideoProcessorConfig};
+
 // ── Re-exports from document_parser ────────────────────────────────────────
 #[allow(unused_imports)] // public API surface — used by external consumers
 pub use document_parser::DocumentParser;
 #[allow(unused_imports)]
 pub use document_parser::DocumentParserError;
-#[allow(unused_imports)]
-pub use document_parser::ParsedContent;
-#[allow(unused_imports)]
-pub use document_parser::Table;
 
 // ── Re-exports from audio_processor ────────────────────────────────────────
 #[allow(unused_imports)] // public API surface — used by external consumers
@@ -45,77 +48,11 @@ pub use audio_processor::AudioProcessor;
 #[allow(unused_imports)]
 pub use audio_processor::AudioProcessorConfig;
 #[allow(unused_imports)]
-pub use audio_processor::AudioProcessorError;
-#[allow(unused_imports)]
 pub use audio_processor::SttBackend;
-#[allow(unused_imports)]
-pub use audio_processor::TranscriptSegment;
-#[allow(unused_imports)]
-pub use audio_processor::Transcription;
 
 // ── Re-exports from code_repo_analyzer ──────────────────────────────────────
 #[allow(unused_imports)] // public API surface — used by external consumers
-pub use code_repo_analyzer::Answer;
-#[allow(unused_imports)]
-pub use code_repo_analyzer::AnswerCoverage;
-#[allow(unused_imports)]
-pub use code_repo_analyzer::RepoAnalyzer;
-#[allow(unused_imports)]
-pub use code_repo_analyzer::RepoAnalyzerError;
-#[allow(unused_imports)]
-pub use code_repo_analyzer::RepoContext;
-#[allow(unused_imports)]
-pub use code_repo_analyzer::RepoMap;
-#[allow(unused_imports)]
-pub use code_repo_analyzer::SourceRef;
-#[allow(unused_imports)]
-pub use code_repo_analyzer::SymbolKind;
-#[allow(unused_imports)]
-pub use code_repo_analyzer::TypeEntry;
-#[allow(unused_imports)]
-pub use code_repo_analyzer::TypeIndex;
-#[allow(unused_imports)]
 pub use code_repo_analyzer::REPO_PREFIX;
-
-// ── Re-exports from video_processor ─────────────────────────────────────────
-#[allow(unused_imports)] // public API surface — used by external consumers
-pub use video_processor::Frame;
-#[allow(unused_imports)]
-pub use video_processor::FullVideoResult;
-#[allow(unused_imports)]
-pub use video_processor::SceneDescription;
-#[allow(unused_imports)]
-pub use video_processor::VideoFormat;
-#[allow(unused_imports)]
-pub use video_processor::VideoProcessor;
-#[allow(unused_imports)]
-pub use video_processor::VideoProcessorConfig;
-#[allow(unused_imports)]
-pub use video_processor::VideoProcessorError;
-#[allow(unused_imports)]
-pub use video_processor::VideoProgress;
-#[allow(unused_imports)]
-pub use video_processor::MAX_DURATION_SECS;
-#[allow(unused_imports)]
-pub use video_processor::MAX_FILE_SIZE_MB;
-
-// ── Re-exports from excel_processor (feature-gated) ──────────────────────
-#[cfg(feature = "document-excel")]
-#[allow(unused_imports)] // only needed when feature is enabled
-pub use excel_processor::parse_excel_bytes;
-
-// ── Re-exports from excel_writer (feature-gated) ──────────────────────────
-#[cfg(feature = "document-excel-write")]
-#[allow(unused_imports)] // only needed when feature is enabled
-pub use excel_writer::write_excel_bytes;
-#[cfg(feature = "document-excel-write")]
-#[allow(unused_imports)]
-pub use excel_writer::WriteExcelConfig;
-
-// ── Re-exports from ppt_processor (feature-gated) ────────────────────────
-#[cfg(feature = "document-ppt")]
-#[allow(unused_imports)] // only needed when feature is enabled
-pub use ppt_processor::parse_pptx_bytes;
 
 /// Represents a multimodal input payload that can be routed to an appropriate
 /// processor (document parser, ASR pipeline, vision model, etc.).

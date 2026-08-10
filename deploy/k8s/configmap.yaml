@@ -45,7 +45,6 @@ data:
     entry_rate_limit_rpm = 5000
     entry_rate_limit_burst = 1000
     production_strict = true
-    i18n_enabled = true
     i18n_default_language = "en-US"
     skills_enabled = false
     skills_import_enabled = false

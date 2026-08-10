@@ -2,6 +2,57 @@
 
 ## [Unreleased] - 2026-08-10
 
+### Round 43 — Super-Deep/Broad Scan XI: 统一链路与收敛 (2026-08-10, docs/log/log-20260810-4.md)
+
+#### 链路级去重合并
+
+- **MCP 客户端双实现合并**：`McpStdioClient`/`McpHttpClient` 收敛为 `McpClientCore` + 可插拔 `McpTransport`（stdio/http 共享 initialize/notify/request/list_tools/call_tool）；HTTP 复用进程级共享 client。
+- **workflow 工具统一执行链**：`workflow_execute/ask/generate` 从 native MCP 特判移入 `execute_tool_call` 统一链（`is_bridge_special_tool` + match 臂），两臂（adaptive/native MCP）行为一致，含人读 `message` 字段与审计补齐。
+- **tool fallback 链合并**：executor 与 registry 两套 fallback 收敛为 `run_fallback_chain_async`（hooks 不重复执行）。
+- **任务分类器去重**：`Planner::analyze_task` 委托 `TaskRouter::analyze_task`，删除独立关键词表。
+- **SSE 帧/信号监听复用**：MCP SSE 帧改 `write_sse_raw_event`；`extract_header_value` 转发壳删除；`try_consume` 委托 `try_consume_n`。
+- **auto_migrate 三处触发收敛**为单一 5 分钟后台任务（请求路径只做单条 promote）。
+- **`memory.ingest` 双实现/79 处 profile cfg 分支**：已审计记录（详见日志 §6），hub 手写 HTTP 解析与 cfg 矩阵列为设计债务观察。
+
+#### 行为修复（真实 bug）
+
+- **Delphi 收敛恒 false 修复**：`converged` 改为真实收敛标记（配双向测试）。
+- **fault_tolerance 心跳语义修复**：新增 `has_reported`，注册但未上报的节点不再被误判 Offline（消除空闲节点故障 churn）；真实执行信号（成功 heartbeat/失败 fault）接入 `execute_single_subtask`。
+- **echo_skill 广告-执行闭环**：注册 `EchoSkillAlias`（`echo_skill`），tools.list 广告名全部确定性可执行。
+- **skill_market CLI 崩溃修复**：`restore_installations` 由 `blocking_write`（runtime 内必 panic）改 `.write().await`，`SkillMarketRegistry::new` 改 async，配回归测试。
+- **自适应模型选择器 context 学习信号接通**：`record_result_with_context` 接入执行路径（时间/任务类型/延迟分桶）。
+- **VoteMode::Legacy 真简单多数**（与 Weighted 行为区分，配测试）。
+- **GLOBAL_VOTERS 改为可替换 RwLock**（hub 测试确定性，消除测试顺序/并行污染）。
+- **语义缓存实际已接线确认**（put 存在于 fallback 路径；autonomy 主路径不填充列为非阻断观察）。
+
+#### 安全加固
+
+- **自进化循环门禁**：`runtime.evolution_enabled`（默认 false）——EvolutionLoop 不再无条件 AutoApproval 自动改写 `src/**/*.rs`；4 个 config toml + zed-config 显式登记。
+
+#### 死代码/假保留清理
+
+- 删除 `preferred_agent_from_request`、`review_overrides` 死字段；`ADAPTIVE_TEMPLATE` 死常量；`find_template` 死检查（`--setup` 不再误报模板缺失）；`adaptive` 死臂（dispatch 前已解析）；`AcpMethodNames`/unused re-export 审计（multimodal 29 项、acp/hub 数项）；`_fallback_marker` 运行时代码改 `cfg_attr`；决策时自证成功信号删除。
+- `deny_unknown_fields` 从远程 skill index 移除（未知字段宽容 + schema_version 校验，远程容错）。
+
+#### 三端/文档/部署
+
+- **GUI 重试状态集对齐**：`is_retryable_status` = 408/429/全 5xx，与三 SDK/契约一致；契约补充 GUI RPC 错误码重试说明。
+- **vscode reconnect 测试重写**：测真实 `backoffDelayMs`（1000ms 基/30s 上限，区间断言），删除过时 2000ms/300s 自实现。
+- **skills/ 收敛**：删除 11 个符号链接（9 外部技能 + 2 坏链），目录数 = 34 = builtin_skills 数；skills/README 修正。
+- **结构性测试迁移**：纯默认值断言迁入 `src/` 内联单元测试（defaults.rs/status.rs），tests/structural 保留真实子系统测试。
+- **部署修复**：Dockerfile 创建 `/var/lib/go-on`；compose 卷路径对齐 + multi-users 注入 `GO_ON_PG_CONNECTION_STRING` 激活 PG；deploy.sh 建数据目录；k8s 抓取路径 `/metrics`；ps1 GUI smoke 读取 bug 修复。
+- **config 幽灵键清理**：k8s configmap `i18n_enabled` 删除；README/zh-CN 统计对齐（444 模块/1513 lib/134 集成）；cookbook 三语 VS Code 键名修正；DEVELOPMENT_RULES 陈旧路径修正。
+
+#### Verification
+
+```
+cargo check 4 profiles + workspace + GUI → zero errors/warnings
+cargo clippy --all-targets -D warnings → zero warnings
+cargo test --lib → 1513 passed / 0 failed
+structural 11/11 · acp_runtime_rpc 27/27 · protocol_consistency 26/26 · transport_parity 8/8 · e2e 18/18 · cli 9/9 · config_validation 11/11 · pua_smoke 6/6 · protocol_parity 5/5 · openai_compat 3/3 · i18n 18/18
+vscode tsc --noEmit → zero errors · Rust SDK check → zero warnings
+```
+
 ### Round 41 — Super-Deep/Broad Scan + Dependency Audit (2026-08-10, docs/log/log-20260810-1.md)
 
 #### Link Closure & Dedup

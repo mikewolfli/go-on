@@ -12,6 +12,11 @@
 //! - **http** — speaks JSON-RPC over HTTP to a remote MCP server (the
 //!   standard MCP "streamable HTTP" transport).
 //!
+//! Both transports share one protocol-flow core (`McpClientCore`) — the
+//! transport-specific read/write primitives live in the internal
+//! `McpTransport` enum, so `initialize`/`notify`/`request`/`list_tools`/
+//! `call_tool` exist in a single implementation.
+//!
 //! The protocol flow follows the MCP spec: `initialize` → `tools/list` →
 //! `tools/call`. Notifications (`notifications/initialized`) are sent after
 //! initialize per spec, but the client does not require the server to
@@ -100,13 +105,211 @@ impl Default for McpClientConfig {
     }
 }
 
-/// MCP client over stdio (spawns an external server process).
-pub struct McpStdioClient {
+/// Shared MCP client core — one implementation of the JSON-RPC protocol
+/// flow (`initialize` / `notify` / `request` / `list_tools` / `call_tool`)
+/// over a pluggable transport. Previously `McpStdioClient` and
+/// `McpHttpClient` carried near-identical copies of these methods (differing
+/// only in transport primitives and error strings); the transport is now the
+/// only thing that varies.
+struct McpClientCore {
+    transport: McpTransport,
+    server_name: String,
+    config: McpClientConfig,
+}
+
+/// Internal transport abstraction for the MCP client core.
+///
+/// - `Stdio` writes JSON-RPC lines to the child process stdin and reads
+///   line-delimited responses from its stdout (matching request ids).
+/// - `Http` POSTs JSON-RPC payloads to a remote server (streamable HTTP
+///   transport) and parses the JSON response envelope.
+///
+/// The stdio variant carries a `Child` plus two mutexed handles (larger than
+/// the Http arm), so it is boxed to keep the enum small.
+enum McpTransport {
+    Stdio(Box<StdioTransport>),
+    Http {
+        http: &'static reqwest::Client,
+        base_url: String,
+    },
+}
+
+/// Stdio transport state: the child process and its stdin/stdout handles.
+struct StdioTransport {
     child: tokio::process::Child,
     stdin: Mutex<tokio::process::ChildStdin>,
     stdout: tokio::sync::Mutex<tokio::io::Lines<BufReader<tokio::process::ChildStdout>>>,
-    server_name: String,
-    config: McpClientConfig,
+}
+
+impl McpTransport {
+    /// Transport label used in error messages ("stdio" / "HTTP").
+    fn transport_name(&self) -> &'static str {
+        match self {
+            McpTransport::Stdio { .. } => "stdio",
+            McpTransport::Http { .. } => "HTTP",
+        }
+    }
+
+    /// Send a JSON-RPC payload. For requests (payload carries an `id`) the
+    /// matching response envelope is returned; notifications return `None`.
+    async fn exchange(&self, payload: &Value, timeout_duration: Duration) -> Result<Option<Value>> {
+        match self {
+            McpTransport::Stdio(stdio) => {
+                let mut line = serde_json::to_string(payload)?;
+                line.push('\n');
+                {
+                    let mut stdin = stdio.stdin.lock().await;
+                    stdin.write_all(line.as_bytes()).await?;
+                    stdin.flush().await?;
+                }
+
+                // Notifications (no id) do not expect a response.
+                let Some(id) = payload.get("id").and_then(Value::as_u64) else {
+                    return Ok(None);
+                };
+
+                // Read lines until we find the response matching our id (skip
+                // server notifications / other responses).
+                let mut stdout = stdio.stdout.lock().await;
+                loop {
+                    let read = timeout(timeout_duration, async {
+                        let next = stdout.next_line().await?;
+                        Ok::<Option<String>, anyhow::Error>(next)
+                    })
+                    .await
+                    .context("MCP request timed out")??;
+                    let Some(read) = read else {
+                        anyhow::bail!("MCP server closed stdout while awaiting response");
+                    };
+                    let value: Value = serde_json::from_str(&read)?;
+                    if value.get("id").and_then(Value::as_u64) == Some(id) {
+                        return Ok(Some(value));
+                    }
+                }
+            }
+            McpTransport::Http { http, base_url } => {
+                let method = payload.get("method").and_then(Value::as_str).unwrap_or("");
+                let resp = http
+                    .post(base_url)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json, text/event-stream")
+                    .timeout(timeout_duration)
+                    .json(payload)
+                    .send()
+                    .await
+                    .with_context(|| format!("MCP HTTP request '{method}' failed"))?;
+                if !resp.status().is_success() {
+                    anyhow::bail!("MCP HTTP server returned status {}", resp.status());
+                }
+                // Notifications do not expect a response body.
+                if payload.get("id").is_none() {
+                    return Ok(None);
+                }
+                let value: Value = resp
+                    .json()
+                    .await
+                    .with_context(|| format!("MCP HTTP response '{method}' parse failed"))?;
+                Ok(Some(value))
+            }
+        }
+    }
+}
+
+impl Drop for McpTransport {
+    fn drop(&mut self) {
+        // kill_on_drop(true) handles process cleanup; also try graceful kill.
+        if let McpTransport::Stdio(stdio) = self {
+            let _ = stdio.child.start_kill();
+        }
+    }
+}
+
+impl McpClientCore {
+    /// Perform the MCP initialize handshake and send the initialized
+    /// notification (best-effort).
+    async fn initialize(&self) -> Result<()> {
+        let request = self.request(
+            "initialize",
+            Some(json!({
+                "protocolVersion": CLIENT_MCP_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "go-on", "version": env!("CARGO_PKG_VERSION") },
+            })),
+        );
+        let result = timeout(self.config.init_timeout, request)
+            .await
+            .with_context(|| {
+                format!(
+                    "MCP {} initialize handshake timed out",
+                    self.transport.transport_name()
+                )
+            })??;
+        let protocol_version = result
+            .get("protocolVersion")
+            .and_then(Value::as_str)
+            .unwrap_or(CLIENT_MCP_VERSION);
+        tracing::info!(
+            server = %self.server_name,
+            protocol_version,
+            "MCP client initialized"
+        );
+        // Best-effort notification (spec requires it; servers tolerate absence).
+        let _ = self
+            .notify("notifications/initialized", Some(json!({})))
+            .await;
+        Ok(())
+    }
+
+    /// Send a notification (no response expected).
+    async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params.unwrap_or_else(|| json!({})),
+        });
+        self.transport
+            .exchange(&payload, self.config.request_timeout)
+            .await?;
+        Ok(())
+    }
+
+    /// Send a JSON-RPC request and await its response.
+    async fn request(&self, method: &str, params: Option<Value>) -> Result<Value> {
+        let id = NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed);
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params.unwrap_or_else(|| json!({})),
+        });
+        let envelope = self
+            .transport
+            .exchange(&payload, self.config.request_timeout)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "MCP {} transport returned no response for '{}'",
+                    self.transport.transport_name(),
+                    method
+                )
+            })?;
+        if let Some(error) = envelope.get("error") {
+            anyhow::bail!(
+                "MCP error {}: {}",
+                error.get("code").and_then(Value::as_i64).unwrap_or(-1),
+                error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+            );
+        }
+        Ok(envelope.get("result").cloned().unwrap_or(Value::Null))
+    }
+}
+
+/// MCP client over stdio (spawns an external server process).
+pub struct McpStdioClient {
+    inner: McpClientCore,
 }
 
 impl McpStdioClient {
@@ -137,109 +340,25 @@ impl McpStdioClient {
             .take()
             .ok_or_else(|| anyhow::anyhow!("MCP server stdout not available"))?;
 
-        let mut client = Self {
-            child,
-            stdin: Mutex::new(stdin),
-            stdout: tokio::sync::Mutex::new(BufReader::new(stdout).lines()),
-            server_name: server_name.to_string(),
-            config,
+        let client = Self {
+            inner: McpClientCore {
+                transport: McpTransport::Stdio(Box::new(StdioTransport {
+                    child,
+                    stdin: Mutex::new(stdin),
+                    stdout: tokio::sync::Mutex::new(BufReader::new(stdout).lines()),
+                })),
+                server_name: server_name.to_string(),
+                config,
+            },
         };
 
-        client.initialize().await?;
+        client.inner.initialize().await?;
         Ok(client)
-    }
-
-    /// Perform the MCP initialize handshake and send the initialized
-    /// notification (best-effort).
-    async fn initialize(&mut self) -> Result<()> {
-        let request = self.request(
-            "initialize",
-            Some(json!({
-                "protocolVersion": CLIENT_MCP_VERSION,
-                "capabilities": {},
-                "clientInfo": { "name": "go-on", "version": env!("CARGO_PKG_VERSION") },
-            })),
-        );
-        let result = timeout(self.config.init_timeout, request)
-            .await
-            .context("MCP stdio initialize handshake timed out")??;
-        let protocol_version = result
-            .get("protocolVersion")
-            .and_then(Value::as_str)
-            .unwrap_or(CLIENT_MCP_VERSION);
-        tracing::info!(
-            server = %self.server_name,
-            protocol_version,
-            "MCP client initialized"
-        );
-        // Best-effort notification (spec requires it; servers tolerate absence).
-        let _ = self
-            .notify("notifications/initialized", Some(json!({})))
-            .await;
-        Ok(())
-    }
-
-    /// Send a notification (no response expected).
-    async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        let payload = json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params.unwrap_or_else(|| json!({})),
-        });
-        let mut line = serde_json::to_string(&payload)?;
-        line.push('\n');
-        let mut stdin = self.stdin.lock().await;
-        stdin.write_all(line.as_bytes()).await?;
-        stdin.flush().await?;
-        Ok(())
     }
 
     /// Send a JSON-RPC request and await its response.
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<Value> {
-        let id = NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed);
-        let payload = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params.unwrap_or_else(|| json!({})),
-        });
-        let mut line = serde_json::to_string(&payload)?;
-        line.push('\n');
-
-        {
-            let mut stdin = self.stdin.lock().await;
-            stdin.write_all(line.as_bytes()).await?;
-            stdin.flush().await?;
-        }
-
-        // Read lines until we find the response matching our id (skip server
-        // notifications / other responses).
-        let mut stdout = self.stdout.lock().await;
-        loop {
-            let read = timeout(self.config.request_timeout, async {
-                let next = stdout.next_line().await?;
-                Ok::<Option<String>, anyhow::Error>(next)
-            })
-            .await
-            .context("MCP request timed out")??;
-            let Some(read) = read else {
-                anyhow::bail!("MCP server closed stdout while awaiting response");
-            };
-            let value: Value = serde_json::from_str(&read)?;
-            if value.get("id").and_then(Value::as_u64) == Some(id) {
-                if let Some(error) = value.get("error") {
-                    anyhow::bail!(
-                        "MCP error {}: {}",
-                        error.get("code").and_then(Value::as_i64).unwrap_or(-1),
-                        error
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("unknown")
-                    );
-                }
-                return Ok(value.get("result").cloned().unwrap_or(Value::Null));
-            }
-        }
+        self.inner.request(method, params).await
     }
 
     /// List tools exposed by the remote MCP server.
@@ -249,10 +368,6 @@ impl McpStdioClient {
     }
 
     /// Call a tool on the remote MCP server.
-    ///
-    /// Returns the raw result value (the `result` field of the JSON-RPC
-    /// response, which contains `content`, `structuredContent`, and
-    /// `isError` per the MCP spec).
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value> {
         self.request(
             "tools/call",
@@ -262,19 +377,9 @@ impl McpStdioClient {
     }
 }
 
-impl Drop for McpStdioClient {
-    fn drop(&mut self) {
-        // kill_on_drop(true) handles process cleanup; also try graceful stdin close.
-        let _ = self.child.start_kill();
-    }
-}
-
 /// MCP client over HTTP (streamable HTTP transport).
 pub struct McpHttpClient {
-    http: reqwest::Client,
-    base_url: String,
-    server_name: String,
-    config: McpClientConfig,
+    inner: McpClientCore,
 }
 
 impl McpHttpClient {
@@ -285,103 +390,30 @@ impl McpHttpClient {
         server_name: &str,
         config: McpClientConfig,
     ) -> Result<Self> {
-        let http = reqwest::Client::builder()
-            .timeout(config.request_timeout)
-            .build()
-            .context("build MCP HTTP client")?;
+        // Reuse the process-wide shared reqwest client (single connection
+        // pool, one place for timeouts/user-agent) instead of building a new
+        // client per connection. Per-request timeouts still come from
+        // `McpClientConfig` via `.timeout()` on the request builder, so the
+        // shared client's 30s default is only a ceiling.
+        let http = crate::shared::http_client::http_client()
+            .map_err(|e| anyhow::anyhow!("MCP HTTP shared client unavailable: {e}"))?;
         let client = Self {
-            http,
-            base_url: base_url.trim_end_matches('/').to_string(),
-            server_name: server_name.to_string(),
-            config,
+            inner: McpClientCore {
+                transport: McpTransport::Http {
+                    http,
+                    base_url: base_url.trim_end_matches('/').to_string(),
+                },
+                server_name: server_name.to_string(),
+                config,
+            },
         };
-        client.initialize().await?;
+        client.inner.initialize().await?;
         Ok(client)
-    }
-
-    async fn initialize(&self) -> Result<()> {
-        let result = timeout(
-            self.config.init_timeout,
-            self.request(
-                "initialize",
-                Some(json!({
-                    "protocolVersion": CLIENT_MCP_VERSION,
-                    "capabilities": {},
-                    "clientInfo": { "name": "go-on", "version": env!("CARGO_PKG_VERSION") },
-                })),
-            ),
-        )
-        .await
-        .context("MCP HTTP initialize handshake timed out")??;
-        let protocol_version = result
-            .get("protocolVersion")
-            .and_then(Value::as_str)
-            .unwrap_or(CLIENT_MCP_VERSION);
-        tracing::info!(
-            server = %self.server_name,
-            protocol_version,
-            "MCP HTTP client initialized"
-        );
-        let _ = self
-            .notify("notifications/initialized", Some(json!({})))
-            .await;
-        Ok(())
-    }
-
-    async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        let payload = json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params.unwrap_or_else(|| json!({})),
-        });
-        let _ = self
-            .http
-            .post(&self.base_url)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream")
-            .json(&payload)
-            .send()
-            .await?;
-        Ok(())
     }
 
     /// Send a JSON-RPC request and await its JSON response.
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<Value> {
-        let id = NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed);
-        let payload = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params.unwrap_or_else(|| json!({})),
-        });
-        let resp = self
-            .http
-            .post(&self.base_url)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream")
-            .timeout(self.config.request_timeout)
-            .json(&payload)
-            .send()
-            .await
-            .with_context(|| format!("MCP HTTP request '{method}' failed"))?;
-        if !resp.status().is_success() {
-            anyhow::bail!("MCP HTTP server returned status {}", resp.status());
-        }
-        let value: Value = resp
-            .json()
-            .await
-            .with_context(|| format!("MCP HTTP response '{method}' parse failed"))?;
-        if let Some(error) = value.get("error") {
-            anyhow::bail!(
-                "MCP error {}: {}",
-                error.get("code").and_then(Value::as_i64).unwrap_or(-1),
-                error
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-            );
-        }
-        Ok(value.get("result").cloned().unwrap_or(Value::Null))
+        self.inner.request(method, params).await
     }
 
     /// List tools exposed by the remote MCP server.
@@ -408,8 +440,8 @@ impl McpHttpClient {
 pub enum McpClientHandle {
     /// stdio transport (external server process).
     Stdio(Box<McpStdioClient>),
-    /// HTTP transport (remote server).
-    Http(McpHttpClient),
+    /// HTTP transport (remote server). Boxed so both variants stay small.
+    Http(Box<McpHttpClient>),
 }
 
 impl McpClientHandle {

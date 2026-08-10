@@ -37,8 +37,6 @@
 
 pub mod discovery;
 pub mod server;
-
-#[allow(unused_imports)]
-pub use discovery::HubDiscovery;
-#[allow(unused_imports)]
-pub use server::HubServer;
+// Note: `HubDiscovery` / `HubServer` are consumed via their sub-module paths
+// (`crate::hub::discovery::HubDiscovery`, `crate::hub::server::HubServer`),
+// so no re-exports are kept here.

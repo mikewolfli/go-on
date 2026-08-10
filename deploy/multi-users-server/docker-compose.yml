@@ -43,7 +43,7 @@ services:
     ports:
       - "127.0.0.1:8090:8090"
     volumes:
-      - go-on-data:/opt/go-on
+      - go-on-data:/var/lib/go-on
       - ../../config/config.multi-users-server.toml:/opt/go-on/config.toml:ro
     environment:
       - RUST_LOG=warn
@@ -52,6 +52,11 @@ services:
       - DB_USER=goon
       - DB_PASS=${DB_PASS:?must be set}
       - DB_NAME=goon
+      # DSN for cache/vector/warm-tier stores (unified resolution chain:
+      # config connection_string → GO_ON_PG_CONNECTION_STRING → DATABASE_URL
+      # → PG_DSN → GO_ON_DATABASE_URL). This activates the PostgreSQL backend
+      # that the compose file already provisions.
+      - GO_ON_PG_CONNECTION_STRING=postgres://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable
       - GO_ON_ENTRY_API_KEY=${GO_ON_ENTRY_API_KEY:?must be set}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:?must be set}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}

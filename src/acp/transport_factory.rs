@@ -257,10 +257,16 @@ pub async fn dispatch_server(
     )
     .await;
 
+    // The caller (main/server.rs) resolves the "adaptive" configured mode to
+    // either "acp_stdio" or "acp_http" before invoking this function, so
+    // "adaptive" can never reach the dispatch match below.
+    debug_assert!(
+        protocol_mode != "adaptive",
+        "caller must resolve adaptive to acp_stdio/acp_http before dispatch"
+    );
+
     match protocol_mode {
-        "acp_stdio" | "adaptive" => {
-            crate::acp::r#impl::runtime::run_acp_server(Arc::new(acp_server)).await
-        }
+        "acp_stdio" => crate::acp::r#impl::runtime::run_acp_server(Arc::new(acp_server)).await,
         "acp_http" => {
             crate::acp::r#impl::runtime::run_acp_http_server(
                 Arc::new(acp_server),

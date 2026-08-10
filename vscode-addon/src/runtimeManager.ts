@@ -48,10 +48,10 @@ export class GoOnManager {
   private stdoutBuffer = "";
   private lineBuffer = "";
   /**
-   * Removed fixed limit (was 3). Now uses unlimited exponential backoff
+   * Removed fixed limit (was 3). Now uses bounded exponential backoff
    * to support long-running multi-agent workflows (10+ min).
-   * Backoff: min(2000 * 2^attempt, 300000)ms with 30% jitter.
-   * @see https://github.com/go-on/go-on/issues/connection-resilience
+   * Backoff: min(1000 * 2^attempt, 30000)ms with 30% jitter — see
+   * `utils/backoffDelayMs` (shared with reconnect.ts / stateSync.ts).
    */
   private _shutdownInProgress = false;
   /**

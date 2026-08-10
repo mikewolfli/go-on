@@ -24,6 +24,9 @@ pub mod transport_factory;
 
 // Explicit re-exports of items that external consumers need.
 // Avoid `pub use prelude::*;` to make dead-code detection easier.
+// Note: keep the full list — each entry also keeps the corresponding
+// prelude re-export chain "used" in the binary crate (removing any entry
+// surfaces unused-import warnings in `prelude/mod.rs` / `prelude/re_exports.rs`).
 #[allow(unused_imports)]
 pub use prelude::{
     // re-exported for ACP consumer public API surface
@@ -48,9 +51,9 @@ pub use prelude::{
     ServerStatus,
     MAX_CHECKPOINTS_PER_CONVERSATION,
 };
-// `AcpServer` / `ServerBuilder` are re-exported for downstream consumers; allow unused here.
-#[allow(unused_imports)]
-pub use server::AcpServer; // re-exported for downstream consumers
+// `ServerBuilder` is re-exported for downstream consumers (referenced by the
+// ACP dispatch tests); `AcpServer` is only used via the `server` sub-module
+// path, so it is no longer re-exported here.
 #[allow(unused_imports)]
 pub use server::ServerBuilder; // re-exported for downstream consumers
 

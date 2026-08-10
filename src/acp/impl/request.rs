@@ -108,8 +108,7 @@ pub(crate) use self::checkpoint_pack::persist_checkpoint_metacognitive_loop;
 use self::checkpoint_pack::*;
 use self::config_pack::*;
 use self::diagnostic_pack::*;
-#[allow(unused_imports)] // sub-modules re-export many items; parent only uses subset
-use self::exec_pack::*;
+use self::exec_pack::*; // glob needed: request.rs calls exec_pack items bare (e.g. handle_workflow_execute)
 pub use self::governance_pack::build_knowledge_refinement_profile;
 pub use self::governance_pack::build_learning_profile;
 pub(crate) use self::governance_pack::inject_platform_profiles_if_absent;
@@ -2651,14 +2650,6 @@ mod tests {
         assert_eq!(summary.recovered_total, 1);
         assert_eq!(summary.components_tracked, 2);
     }
-
-    // ── ACP method dispatch ───────────────────────────────────────────
-
-    // ── get_protocol_mode ─────────────────────────────────────────────
-
-    // ── handle_request unknown method ─────────────────────────────────
-
-    // ── dispatch error context ────────────────────────────────────────
 
     #[test]
     fn attach_request_dispatch_context_adds_method() {

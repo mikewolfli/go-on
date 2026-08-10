@@ -90,6 +90,12 @@ pub struct HeartbeatRecord {
     pub last_heartbeat_ms: u64,
     pub missed_beats: u32,
     pub status: NodeStatus,
+    /// Whether this node has reported at least one heartbeat in this process.
+    /// Registration alone is not a liveness signal: a node that was
+    /// registered (e.g. every agent at server startup) but never actively
+    /// reported must not be treated as failing while idle. In-memory only;
+    /// defaults to false when records are restored from the persistence DB.
+    pub has_reported: bool,
 }
 
 /// Configuration for the fault tolerance engine.

@@ -1,33 +1,24 @@
 import * as assert from "node:assert";
 
+import { backoffDelayMs } from "../../utils";
+
 /**
- * V2: Reconnection with exponential backoff tests.
+ * Reconnection backoff tests.
  *
- * These tests validate the ReconnectManager backoff logic.
- * Since ReconnectManager imports vscode, we test the backoff
- * formula directly via a minimal testable class, and validate
- * the state machine contract.
+ * These tests validate the REAL shared backoff implementation
+ * (`utils/backoffDelayMs`) used by `runtime/reconnect.ts` and
+ * `stateSync.ts`, plus the ReconnectManager-style state machine
+ * contract (attempts / reset / cancel / schedule).
+ *
+ * The formula under test (contracts/cross-client-sync.md):
+ * `delay = min(1000 * 2^attempt, 30000) * (0.7 + random() * 0.3)`.
+ * Because jitter is random, deterministic assertions use the
+ * guaranteed min/max range for each attempt.
  */
 
-// ── Minimal testable backoff implementation ──
-// Mirrors the exponential backoff from runtime/reconnect.ts
-
-const BASE_DELAY = 2000;
-const MAX_DELAY = 300000;
-const JITTER_MIN = 0.7;
-const JITTER_MAX = 1.0;
-
-function calculateBackoff(attempt: number): number {
-  const baseDelay = BASE_DELAY * Math.pow(2, attempt);
-  const cappedDelay = Math.min(baseDelay, MAX_DELAY);
-  const jitter = JITTER_MIN + Math.random() * (JITTER_MAX - JITTER_MIN);
-  return Math.round(cappedDelay * jitter);
-}
-
-function calculateBackoffDeterministic(attempt: number, jitter = 0.85): number {
-  const baseDelay = BASE_DELAY * Math.pow(2, attempt);
-  const cappedDelay = Math.min(baseDelay, MAX_DELAY);
-  return Math.round(cappedDelay * jitter);
+function expectedRange(attempt: number): [number, number] {
+  const capped = Math.min(1000 * Math.pow(2, attempt), 30_000);
+  return [Math.round(capped * 0.7), capped];
 }
 
 class TestableReconnectManager {
@@ -49,15 +40,12 @@ class TestableReconnectManager {
     this.scheduledDelays = [];
   }
 
-  backoffMs(attempt: number, fixedJitter?: number): number {
-    if (fixedJitter !== undefined) {
-      return calculateBackoffDeterministic(attempt, fixedJitter);
-    }
-    return calculateBackoff(attempt);
+  backoffMs(attempt: number): number {
+    return backoffDelayMs(attempt);
   }
 
-  schedule(fixedJitter?: number): void {
-    const delay = this.backoffMs(this._attempts, fixedJitter);
+  schedule(): void {
+    const delay = this.backoffMs(this._attempts);
     this.scheduledDelays.push(delay);
     this._timer = setTimeout(() => {
       void this.doAttempt();
@@ -79,72 +67,87 @@ class TestableReconnectManager {
 }
 
 suite("reconnect", () => {
-  suite("ReconnectManager backoff calculation", () => {
-    test("backoff for attempt 0 is approximately 2000ms", () => {
-      const backoff = calculateBackoffDeterministic(0, 1.0);
-      assert.strictEqual(backoff, 2000);
+  suite("backoffDelayMs (real shared implementation)", () => {
+    test("attempt 0 delays within [700ms, 1000ms]", () => {
+      for (let i = 0; i < 50; i++) {
+        const backoff = backoffDelayMs(0);
+        const [min, max] = expectedRange(0);
+        assert.ok(backoff >= min && backoff <= max, `attempt 0 delay ${backoff} outside [${min}, ${max}]`);
+      }
     });
 
-    test("backoff for attempt 1 is approximately 4000ms", () => {
-      const backoff = calculateBackoffDeterministic(1, 1.0);
-      assert.strictEqual(backoff, 4000);
+    test("attempt 1 delays within [1400ms, 2000ms]", () => {
+      for (let i = 0; i < 50; i++) {
+        const backoff = backoffDelayMs(1);
+        const [min, max] = expectedRange(1);
+        assert.ok(backoff >= min && backoff <= max, `attempt 1 delay ${backoff} outside [${min}, ${max}]`);
+      }
     });
 
-    test("backoff for attempt 2 is approximately 8000ms", () => {
-      const backoff = calculateBackoffDeterministic(2, 1.0);
-      assert.strictEqual(backoff, 8000);
+    test("attempt 2 delays within [2800ms, 4000ms]", () => {
+      for (let i = 0; i < 50; i++) {
+        const backoff = backoffDelayMs(2);
+        const [min, max] = expectedRange(2);
+        assert.ok(backoff >= min && backoff <= max, `attempt 2 delay ${backoff} outside [${min}, ${max}]`);
+      }
     });
 
-    test("backoff for attempt 3 is approximately 16000ms", () => {
-      const backoff = calculateBackoffDeterministic(3, 1.0);
-      assert.strictEqual(backoff, 16000);
+    test("attempt 3 delays within [5600ms, 8000ms]", () => {
+      for (let i = 0; i < 50; i++) {
+        const backoff = backoffDelayMs(3);
+        const [min, max] = expectedRange(3);
+        assert.ok(backoff >= min && backoff <= max, `attempt 3 delay ${backoff} outside [${min}, ${max}]`);
+      }
     });
 
-    test("backoff for attempt 4 is approximately 32000ms", () => {
-      const backoff = calculateBackoffDeterministic(4, 1.0);
-      assert.strictEqual(backoff, 32000);
+    test("attempt 4 delays within [11200ms, 16000ms]", () => {
+      for (let i = 0; i < 50; i++) {
+        const backoff = backoffDelayMs(4);
+        const [min, max] = expectedRange(4);
+        assert.ok(backoff >= min && backoff <= max, `attempt 4 delay ${backoff} outside [${min}, ${max}]`);
+      }
     });
 
-    test("backoff for attempt 7 is approximately 256000ms", () => {
-      const backoff = calculateBackoffDeterministic(7, 1.0);
-      assert.strictEqual(backoff, 256000);
+    test("attempt 5+ caps at 30000ms (with jitter: [21000ms, 30000ms])", () => {
+      for (let i = 0; i < 50; i++) {
+        const backoff5 = backoffDelayMs(5);
+        const backoff6 = backoffDelayMs(6);
+        const backoff20 = backoffDelayMs(20);
+        const [min, max] = expectedRange(5);
+        assert.ok(backoff5 >= min && backoff5 <= max, `attempt 5 delay ${backoff5} outside [${min}, ${max}]`);
+        assert.ok(backoff6 >= min && backoff6 <= max, `attempt 6 delay ${backoff6} outside [${min}, ${max}]`);
+        assert.ok(backoff20 >= min && backoff20 <= max, `attempt 20 delay ${backoff20} outside [${min}, ${max}]`);
+      }
     });
 
-    test("backoff caps at 300000ms (MAX_DELAY)", () => {
-      const backoff = calculateBackoffDeterministic(8, 1.0);
-      // 2000 * 2^8 = 512000 → capped to 300000
-      assert.strictEqual(backoff, 300000);
+    test("jitter produces varied values within range", () => {
+      const samples = new Set<number>();
+      for (let i = 0; i < 100; i++) {
+        samples.add(backoffDelayMs(0));
+      }
+      assert.ok(samples.size > 1, "jitter should produce more than one distinct value across 100 samples");
     });
 
-    test("backoff remains capped for higher attempts", () => {
-      const backoff9 = calculateBackoffDeterministic(9, 1.0);
-      const backoff10 = calculateBackoffDeterministic(10, 1.0);
-      assert.strictEqual(backoff9, 300000);
-      assert.strictEqual(backoff10, 300000);
-    });
-
-    test("backoff includes jitter between 0.7x and 1.0x", () => {
-      // With fixed jitter of 0.7
-      const backoff = calculateBackoffDeterministic(0, 0.7);
-      assert.strictEqual(backoff, Math.round(2000 * 0.7));
-    });
-
-    test("jitter produces varied values", () => {
-      const lowJitter = calculateBackoffDeterministic(0, 0.7);
-      const highJitter = calculateBackoffDeterministic(0, 1.0);
-      assert.ok(lowJitter <= highJitter, "lower jitter should produce <= higher jitter");
-    });
-
-    test("backoff doubles each attempt (before jitter)", () => {
-      const b0 = calculateBackoffDeterministic(0, 1.0);
-      const b1 = calculateBackoffDeterministic(1, 1.0);
-      const b2 = calculateBackoffDeterministic(2, 1.0);
-      assert.strictEqual(b1, b0 * 2);
-      assert.strictEqual(b2, b0 * 4);
+    test("delays grow exponentially then plateau at the cap", () => {
+      const medians: number[] = [];
+      for (let attempt = 0; attempt <= 6; attempt++) {
+        const values: number[] = [];
+        for (let i = 0; i < 200; i++) {
+          values.push(backoffDelayMs(attempt));
+        }
+        values.sort((a, b) => a - b);
+        medians.push(values[values.length >> 1]);
+      }
+      assert.ok(medians[1] > medians[0], "attempt 1 median must exceed attempt 0");
+      assert.ok(medians[2] > medians[1], "attempt 2 median must exceed attempt 1");
+      assert.ok(medians[3] > medians[2], "attempt 3 median must exceed attempt 2");
+      assert.ok(medians[4] > medians[3], "attempt 4 median must exceed attempt 3");
+      // 5 and 6 are both capped at 30000ms → medians equal
+      assert.strictEqual(medians[5], medians[6], "capped attempts must plateau");
     });
   });
 
-  suite("TestableReconnectManager", () => {
+  suite("TestableReconnectManager (state machine contract)", () => {
     test("initial attempts is 0", () => {
       const mgr = new TestableReconnectManager(async () => {});
       assert.strictEqual(mgr.attempts, 0);
@@ -162,76 +165,33 @@ suite("reconnect", () => {
       const mgr = new TestableReconnectManager(async () => {});
       mgr.schedule();
       mgr.cancel();
-      // After cancel, timer should be cleared
-      // We verify attempts didn't increment
       assert.strictEqual(mgr.attempts, 0);
     });
 
-    test("schedule records the delay", () => {
+    test("schedule records a delay within the real backoff range", () => {
       const mgr = new TestableReconnectManager(async () => {});
-      mgr.schedule(1.0);
+      mgr.schedule();
       assert.strictEqual(mgr.scheduledDelays.length, 1);
-      assert.strictEqual(mgr.scheduledDelays[0], 2000);
+      const [min, max] = expectedRange(0);
+      assert.ok(
+        mgr.scheduledDelays[0] >= min && mgr.scheduledDelays[0] <= max,
+        `scheduled delay ${mgr.scheduledDelays[0]} outside [${min}, ${max}]`,
+      );
     });
 
-    test("multiple schedules increase attempts", (done) => {
+    test("attempt increments only after the timer fires", (done) => {
       const mgr = new TestableReconnectManager(async () => {
         // intentionally empty — testing state machine contract
       });
-
-      // Schedule with very short delay by using a higher jitter for small values
-      // Actually we can't control the timer directly. Let's call doAttempt indirectly.
-      // We'll just verify the state machine contract.
-
-      // Use deterministic jitter and small attempt to get predictable delays
-      mgr.schedule(1.0);
-
-      // After the timer fires (2000ms), attempts should increment
-      // For test speed, we just validate the setup
-      assert.strictEqual(mgr.scheduledDelays.length, 1);
+      mgr.schedule();
       assert.strictEqual(mgr.attempts, 0);
-
-      mgr.cancel();
-      done();
-    });
-
-    test("doReconnect is called on attempt", (done) => {
-      const mgr = new TestableReconnectManager(async () => {
-        // intentionally empty — testing state machine
-      });
-
-      mgr.schedule(1.0);
-
+      // The real min delay for attempt 0 is 700ms; 50ms is far short of it,
+      // so the attempt must not have fired yet.
       setTimeout(() => {
-        assert.strictEqual(mgr.scheduledDelays[0], 2000);
+        assert.strictEqual(mgr.attempts, 0, "attempt must not fire before the backoff delay elapses");
         mgr.cancel();
         done();
-      }, 10);
-    });
-  });
-
-  suite("backoff progression", () => {
-    test("backoff values increase exponentially then plateau", () => {
-      const delays = [];
-      for (let i = 0; i <= 10; i++) {
-        delays.push(calculateBackoffDeterministic(i, 1.0));
-      }
-
-      // Verify exponential growth until cap
-      assert.ok(delays[1] > delays[0]);
-      assert.ok(delays[2] > delays[1]);
-      assert.ok(delays[3] > delays[2]);
-      assert.ok(delays[4] > delays[3]);
-
-      // Verify capping
-      assert.strictEqual(delays[8], 300000);
-      assert.strictEqual(delays[9], 300000);
-      assert.strictEqual(delays[10], 300000);
-    });
-
-    test("maximum backoff is 5 minutes (300000ms)", () => {
-      const maxBackoff = calculateBackoffDeterministic(100, 1.0);
-      assert.strictEqual(maxBackoff, 300000);
+      }, 50);
     });
   });
 });

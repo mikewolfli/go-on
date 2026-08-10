@@ -13,7 +13,10 @@ pub(super) const FULL_RPC_ATTEMPTS: usize = 20;
 
 impl BackendClient {
     fn is_retryable_status(status: reqwest::StatusCode) -> bool {
-        matches!(status.as_u16(), 408 | 429 | 502 | 503 | 504)
+        // Unified retryable status set across all four clients (Rust/Python/TS
+        // SDKs + GUI): 408 (Request Timeout) + 429 (Too Many Requests) + all
+        // 5xx. See contracts/cross-client-sync.md.
+        status.is_server_error() || status.as_u16() == 408 || status.as_u16() == 429
     }
 
     fn is_retryable_rpc_error_code(code: i64) -> bool {

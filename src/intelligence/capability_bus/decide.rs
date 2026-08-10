@@ -527,17 +527,12 @@ impl CapabilityBus {
             "capability_bus agent selection"
         );
 
-        // ── P2-3: Record model selection outcome for adaptive learning ──
-        if let Some(ref selector) = self.model_selector {
-            let context = ContextFeatures::from_time_and_task(&task_type_str);
-            if let Ok(mut sel) = selector.lock() {
-                sel.record_result_with_context(
-                    selected_agent.as_deref().unwrap_or("unknown"),
-                    true,
-                    Some(&context),
-                );
-            }
-        }
+        // ── P2-3: No decision-time adaptive-learning record here ──
+        // The selector instance is shared with the execution path
+        // (exec_pack/task.rs records `record_result` with the REAL execution
+        // outcome). Recording a self-confirming `success=true` at decision
+        // time would feed the UCB statistics with outcomes that were never
+        // observed, biasing per-agent ranking.
 
         // ── P2-6: LivePerformanceFeed — get real-time model cost estimates ──
         if let Some(ref perf) = self.live_performance {

@@ -330,8 +330,9 @@ impl Default for ChaosEngine {
 /// Built-in network resilience drill scenario — reference implementation.
 ///
 /// Demonstrates how to construct a `DrillScenario` for network-level faults
-/// (timeout, partition, rate-limit). Not currently wired into production tests;
-/// retained as documentation and quick-start template for chaos drills.
+/// (timeout, partition, rate-limit). Consumed by the `chaos-testing`
+/// integration suite (`tests/chaos_drill.rs`); retained as a documentation
+/// and quick-start template for chaos drills.
 pub fn network_resilience_scenario() -> DrillScenario {
     DrillScenario {
         name: "network_resilience".to_string(),

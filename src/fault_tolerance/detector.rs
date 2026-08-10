@@ -24,6 +24,7 @@ impl FaultToleranceEngine {
             last_heartbeat_ms: now,
             missed_beats: 0,
             status: NodeStatus::Online,
+            has_reported: false,
         };
         inner.heartbeats.insert(node_id.clone(), record);
 
@@ -86,6 +87,7 @@ impl FaultToleranceEngine {
         let now = crate::shared::timestamps::now_ts_ms_u64();
         record.last_heartbeat_ms = now;
         record.missed_beats = 0;
+        record.has_reported = true;
         if record.status == NodeStatus::Offline || record.status == NodeStatus::Recovering {
             record.status = NodeStatus::Online;
             // Resolve unresolved faults for this node now that it is healthy.
@@ -243,6 +245,13 @@ impl FaultToleranceEngine {
         let node_ids: Vec<String> = inner.heartbeats.keys().cloned().collect();
         for node_id in node_ids {
             if let Some(record) = inner.heartbeats.get_mut(&node_id) {
+                // A node that was registered but never reported a heartbeat
+                // (e.g. an idle agent registered at startup) is not a liveness
+                // failure — skip it. Only nodes that have actively reported
+                // at least once are monitored for missed beats.
+                if !record.has_reported {
+                    continue;
+                }
                 let elapsed = now.saturating_sub(record.last_heartbeat_ms);
                 if elapsed >= timeout {
                     record.missed_beats = record.missed_beats.saturating_add(1).min(max_missed);

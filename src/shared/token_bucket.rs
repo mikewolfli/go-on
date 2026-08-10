@@ -103,19 +103,7 @@ impl BucketMap {
     ///
     /// Returns `true` if the token was consumed, `false` if rate-limited.
     pub fn try_consume(&self, key: &str, burst: f64, refill_rate: f64) -> bool {
-        let mut map = crate::lock_or_recover!(self.inner);
-        let bucket = map
-            .entry(key.to_string())
-            .or_insert_with(|| TokenBucket::new(burst, refill_rate));
-
-        // Re-create if params changed
-        if (bucket.capacity - burst).abs() > f64::EPSILON
-            || (bucket.refill_rate - refill_rate).abs() > f64::EPSILON
-        {
-            *bucket = TokenBucket::new(burst, refill_rate);
-        }
-
-        bucket.try_consume(1.0)
+        self.try_consume_n(key, 1.0, burst, refill_rate)
     }
 
     /// Try to consume `tokens` (possibly > 1) from the named bucket.

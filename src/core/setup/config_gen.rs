@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::config::AdaptiveConfig;
 use crate::i18n::runtime::tf;
@@ -558,27 +558,6 @@ fn append_custom_agent_block(
 fn toml_array(items: &[String]) -> String {
     let quoted: Vec<String> = items.iter().map(|item| format!("\"{}\"", item)).collect();
     format!("[{}]", quoted.join(", "))
-}
-
-/// Locate setup template file for the provided template name.
-///
-/// Search order:
-/// 1. directory containing current executable
-/// 2. current working directory
-///
-/// Returns first existing match.
-pub(super) fn find_template(name: &str) -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join(name));
-        }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join(name));
-    }
-
-    candidates.into_iter().find(|path| path.exists())
 }
 
 /// Create default RULES files in the provided config directory.

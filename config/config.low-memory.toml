@@ -50,7 +50,8 @@ entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 120          # Lower rate limit
 entry_rate_limit_burst = 30
 production_strict = false
-trace_slow_top_n = 10
+trace_slow_top_n = 20
+evolution_enabled = false
 otel_enabled = false               # Disable OpenTelemetry (saves memory)
 # Documented for reference even though otel is disabled
 otel_endpoint = "http://localhost:4317"
