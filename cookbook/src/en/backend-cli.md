@@ -36,14 +36,6 @@ Example:
 go-on --config D:\go-on\config.toml
 ```
 
-### `--phase <PHASE>`
-
-Select a specific phase profile to run. Use this when your config defines multiple phase-oriented behaviors and you want one deterministic entry point.
-
-### `--verbose`
-
-Enable verbose logging. Use this first when diagnosing startup, config, transport, or provider readiness issues.
-
 ## Phase & Sub-Phase Configuration
 
 Phases define the workflow stages the runtime executes. Each phase can optionally contain sub-phases for finer-grained control.
@@ -140,6 +132,8 @@ Four preset config files ship with the project — each with a different phase s
 | `zed-config.toml` | think, act, check, review, done | IDE integrations (Zed, VS Code) |
 | `config.simple-server.toml` | think, act, check, done | Single-server deployment |
 | `config.multi-users-server.toml` | think, act, check, done | Multi-user enterprise |
+
+Note: when no config file exists at all, the runtime writes bootstrap defaults whose flow is `planning` → `coding` → `review` → `delivery` (see `src/core/config/defaults.rs`); the shipped preset files above use `think`/`act`/`check`/`done` (+`review` for Zed).
 
 ### Using a specific phase config
 
@@ -471,7 +465,7 @@ go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:80
 Run ACP over stdio for an editor-launched integration:
 
 ```bash
-go-on --config config.toml --protocol-mode acp_stdio --verbose
+go-on --config config.toml --protocol-mode acp_stdio
 ```
 
 Terminal chat (interactive, like Claude Code):

@@ -20,6 +20,10 @@ pub struct PuaGovernanceProfile {
     pub idempotency_hits: u64,
     pub other_denials: u64,
     pub audit_entries_total: u64,
+    /// Audit entries dropped by the canonical `ThreadSafeAuditLog` due to
+    /// buffer overflow — a real degradation signal for the audit subsystem
+    /// (synced from `audit_log.dropped_count()` on every `HarnessBus::audit`).
+    pub audit_dropped_entries: u64,
     // ── Extended governance module tracking (14-module coverage) ──────
     /// (7) Rationalization module blocks
     pub rationalization_blocks: u64,
@@ -102,6 +106,7 @@ impl Default for PuaGovernanceProfile {
             idempotency_hits: 0,
             other_denials: 0,
             audit_entries_total: 0,
+            audit_dropped_entries: 0,
             rationalization_blocks: 0,
             rbac_denials: 0,
             security_blocks: 0,

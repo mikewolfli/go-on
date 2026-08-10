@@ -789,6 +789,16 @@ Memories:
             .collect()
     }
 
+    /// Returns the consolidated importance of a memory (0.0 if unknown).
+    fn memory_importance(&self, memory_id: &str) -> f64 {
+        let state = lock_guard(&self.state);
+        state
+            .memories
+            .get(memory_id)
+            .map(|m| m.importance)
+            .unwrap_or(0.0)
+    }
+
     /// Perform a forgetting review cycle with full learning loop integration:
     /// 1. LLM distillation — create semantic summaries from consolidated memories.
     /// 2. Detect forgetting (raw `detect_forgetting`) and reinforce decaying memories.
@@ -797,13 +807,48 @@ Memories:
     /// 5. Fast-evict memories with 3+ consecutive critical scores.
     ///
     /// Returns `(replayed, evicted, patterns_extracted)`.
+    ///
+    /// # Unified forgetting policy
+    ///
+    /// The rescue loop (steps 2/5) and the eviction loop (steps 4-6) share one
+    /// discriminator: only memories consolidated with importance at or above
+    /// `min_retention_importance` are worth rescuing. Memories below the
+    /// retention threshold — or already flagged for eviction — are deliberately
+    /// not reinforced, so their consecutive-critical counter can reach the
+    /// 3-assessment eviction threshold. This prevents the two loops from
+    /// fighting each other (rescuing a low-value memory every cycle resets its
+    /// decay clock and the eviction path can never fire).
     pub async fn review_cycle(&self, _agent: &str) -> (usize, usize, usize) {
         // Step 1: LLM distillation — semantic summarisation instead of JSON string rotation.
         let patterns = self.llm_distill().await;
 
-        // Step 2: Detect forgetting (raw forgetting-curve check) and reinforce.
+        // Step 2: Detect forgetting (raw forgetting-curve check) and reinforce
+        // only the memories the eviction loop is not responsible for.
         let forgotten = self.detect_forgetting();
+        let rescue_skip: std::collections::HashSet<String> = {
+            let state = lock_guard(&self.state);
+            forgotten
+                .iter()
+                .filter(|curve| {
+                    let importance = state
+                        .memories
+                        .get(&curve.memory_id)
+                        .map(|m| m.importance)
+                        .unwrap_or(0.0);
+                    let flagged = state
+                        .forgetting_risks
+                        .get(&curve.memory_id)
+                        .map(|r| r.flagged_for_eviction)
+                        .unwrap_or(false);
+                    flagged || importance < self.config.min_retention_importance
+                })
+                .map(|curve| curve.memory_id.clone())
+                .collect()
+        };
         for curve in &forgotten {
+            if rescue_skip.contains(&curve.memory_id) {
+                continue; // Owned by the eviction loop — do not rescue.
+            }
             let _ = self.reinforce_memory(&curve.memory_id);
         }
 
@@ -813,11 +858,15 @@ Memories:
         // Step 4: Detect forgetting risks.
         let at_risk = self.detect_forgetting_risk();
 
-        // Step 5: Replay important at-risk memories.
+        // Step 5: Replay important at-risk memories (same unified policy as
+        // step 2 — never rescue what the eviction loop owns).
         let mut replayed = 0usize;
         for record in &at_risk {
             if record.flagged_for_eviction {
                 continue; // Will be evicted instead.
+            }
+            if self.memory_importance(&record.memory_id) < self.config.min_retention_importance {
+                continue; // Low-value memory — owned by the eviction loop.
             }
             if self.reinforce_memory(&record.memory_id).is_ok() {
                 replayed += 1;
@@ -1017,5 +1066,76 @@ mod tests {
         let strength = original * (-decay_rate * elapsed_hours).exp();
         let expected = (-1.0_f64).exp(); // e^-1 ≈ 0.3679
         assert!((strength - expected).abs() < 0.001);
+    }
+
+    // ── 10. Eviction vs rescue unification ─────────────────────────────────
+
+    #[async_test]
+    async fn test_low_value_memory_is_evicted_after_consecutive_critical_cycles() {
+        let config = ContinuousLearningConfig {
+            default_decay_rate: 1.0, // fast decay
+            ..ContinuousLearningConfig::default()
+        };
+        let center = ContinuousLearningCenter::new(config);
+        // Consolidated with importance below min_retention_importance (0.1):
+        // the rescue loop must NOT keep it alive; the eviction loop owns it.
+        let mem_id = center
+            .consolidate_experience("low-value", "data", 0.05)
+            .expect("consolidation should succeed");
+
+        // Cycle 1-2: consecutive critical counts accumulate (no rescue).
+        let (replayed_1, evicted_1, _) = center.review_cycle("test-agent").await;
+        assert_eq!(
+            evicted_1, 0,
+            "not evicted before 3 consecutive critical checks"
+        );
+        assert_eq!(
+            replayed_1, 0,
+            "low-value memory must not be replayed/rescued"
+        );
+        assert!(center.fast_evict_candidates().is_empty());
+
+        let (_, evicted_2, _) = center.review_cycle("test-agent").await;
+        assert_eq!(evicted_2, 0);
+        assert!(center.fast_evict_candidates().is_empty());
+
+        // Cycle 3: flagged for eviction and removed.
+        let (_, evicted_3, _) = center.review_cycle("test-agent").await;
+        assert_eq!(evicted_3, 1, "3 consecutive critical checks must evict");
+        // The memory (and its curve) are gone.
+        assert!(center.fast_evict_candidates().is_empty());
+        assert_eq!(center.estimate_retention(&mem_id), 0.0);
+        assert!(!center
+            .detect_forgetting()
+            .iter()
+            .any(|c| c.memory_id == mem_id));
+    }
+
+    #[async_test]
+    async fn test_high_value_memory_is_rescued_and_never_evicted() {
+        let config = ContinuousLearningConfig {
+            default_decay_rate: 1.0, // fast decay so it sits at-risk initially
+            ..ContinuousLearningConfig::default()
+        };
+        let center = ContinuousLearningCenter::new(config);
+        // Consolidated with importance above the retention threshold but below
+        // 0.3, so it is at-risk on the first assessment.
+        let mem_id = center
+            .consolidate_experience("high-value", "data", 0.25)
+            .expect("consolidation should succeed");
+
+        // Cycle 1: at-risk (< 0.3) but above the critical threshold (0.1) —
+        // the rescue loop replays it instead of letting it decay.
+        let (replayed_1, evicted_1, _) = center.review_cycle("test-agent").await;
+        assert_eq!(evicted_1, 0);
+        assert_eq!(replayed_1, 1, "high-value at-risk memory must be replayed");
+
+        // Across many cycles the memory is rescued each round, so the
+        // 3-consecutive-critical eviction never fires.
+        for _ in 0..5 {
+            center.review_cycle("test-agent").await;
+        }
+        assert!(center.fast_evict_candidates().is_empty());
+        assert!(center.estimate_retention(&mem_id) >= 0.1);
     }
 }

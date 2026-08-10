@@ -9,6 +9,12 @@
 //! - `compress(messages) -> CompressedContext` – produces a structured summary
 //! - `inject_compressed_context(messages, compressed)` – merges summary into history
 //! - Incremental compression: tracks which messages have already been compressed
+//!
+//! The incremental APIs (`advance_incremental` / `inject_compressed_context`)
+//! are production entry points wired into the ACP chat session path
+//! (`src/acp/impl/chat/session.rs`), which keeps one [`IncrementalState`] per
+//! conversation across requests so summaries accumulate and already-compressed
+//! messages are not re-summarized.
 
 use serde::{Deserialize, Serialize};
 
@@ -84,12 +90,9 @@ pub struct IncrementalState {
 ///
 /// `max_messages`, `compression_msg_threshold`, and `token_window` feed the
 /// compression-trigger logic (`should_compress` / `requires_compression`),
-/// which is exercised by unit tests; `compress()` (the production entry point)
-/// consumes them via the same threshold checks.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "threshold fields feed test-only trigger helpers")
-)]
+/// which the ACP chat session path uses to decide when to compress a
+/// conversation's history; `compress()` consumes them via the same threshold
+/// checks.
 #[derive(Debug, Clone)]
 pub struct SessionCompressor {
     /// Maximum number of messages before compression is mandatory (default 1000).
@@ -124,14 +127,18 @@ impl SessionCompressor {
     /// Returns `true` if **either** condition is met:
     /// - `message_count > compression_msg_threshold` (default 50)
     /// - `estimated_tokens > token_window * 0.7`
-    #[cfg(test)]
+    ///
+    /// Production callers: the ACP chat session path evaluates this against
+    /// the conversation history before running `compress`.
     pub fn should_compress(&self, message_count: usize, estimated_tokens: usize) -> bool {
         message_count > self.compression_msg_threshold
             || estimated_tokens as f64 > self.token_window as f64 * 0.7
     }
 
     /// Returns true if the message count exceeds the absolute max.
-    #[cfg(test)]
+    ///
+    /// Acts as a hard safety net in the chat path: even when the soft trigger
+    /// has not fired, a conversation at the absolute max is always compressed.
     pub fn requires_compression(&self, message_count: usize) -> bool {
         message_count > self.max_messages
     }
@@ -273,6 +280,11 @@ impl SessionCompressor {
     /// # Arguments
     /// * `messages` - The original message list (mutated in place).
     /// * `compressed` - The `CompressedContext` produced by `compress`.
+    ///
+    /// Test convenience helper. The production chat path
+    /// (`src/acp/impl/chat/session.rs`) folds the summary in inline instead:
+    /// it keeps old system/user-instruction messages from the trimmed region,
+    /// which this drain-up-to-split-point helper would drop.
     #[cfg(test)]
     pub fn inject_compressed_context(
         &self,
@@ -298,7 +310,16 @@ impl SessionCompressor {
     }
 
     /// Returns a new `SessionCompressor` with the incremental count advanced.
-    #[cfg(test)]
+    ///
+    /// `additional_messages` is the number of messages newly accounted for by
+    /// this compression round — the round's split point minus the messages
+    /// already accounted for in previous rounds. The running summary
+    /// accumulates across rounds; it is capped to keep per-conversation
+    /// memory bounded.
+    ///
+    /// Production caller: the ACP chat session path persists the returned
+    /// `incremental` state per conversation so later requests continue where
+    /// the previous compression round left off.
     pub fn advance_incremental(mut self, additional_messages: usize, summary: &str) -> Self {
         self.incremental.previously_compressed_count += additional_messages;
         if !summary.is_empty() {
@@ -307,6 +328,12 @@ impl SessionCompressor {
             } else {
                 self.incremental.running_summary =
                     format!("{}\n{}", self.incremental.running_summary, summary);
+            }
+            // Bound per-conversation summary growth (memory safety for long
+            // sessions across many compression rounds).
+            if self.incremental.running_summary.len() > 8000 {
+                self.incremental.running_summary =
+                    truncate(&self.incremental.running_summary, 8000);
             }
         }
         self.incremental.last_compressed_at = Some(
@@ -565,6 +592,59 @@ mod tests {
 
         // The summary should include the running summary from round 1.
         assert!(compressor.incremental.previously_compressed_count > 0);
+    }
+
+    #[test]
+    fn test_incremental_rounds_trim_only_new_messages_and_accumulate_summary() {
+        // Mirrors the production chat path: the compressor state is persisted
+        // per conversation and advanced by the round's split point, so a later
+        // request with a grown history only compresses the newly-added oldest
+        // messages while the summary accumulates.
+        let compressor = SessionCompressor {
+            keep_recent: 2,
+            ..Default::default()
+        };
+
+        // Round 1: 10 messages → 8 are eligible to trim, 2 kept recent.
+        let mut history: Vec<Message> = (0..10)
+            .map(|i| {
+                Message::new(
+                    if i % 2 == 0 { "user" } else { "assistant" },
+                    format!("m{i}"),
+                )
+            })
+            .collect();
+        let r1 = compressor.compress(&history);
+        assert_eq!(r1.split_point, 8);
+        let compressor = compressor.advance_incremental(r1.split_point, &r1.summary);
+        assert_eq!(compressor.incremental.previously_compressed_count, 8);
+        assert!(!compressor.incremental.running_summary.is_empty());
+
+        // Round 2: history grows to 14 messages. Only the 4 messages beyond
+        // the round-1 split point are new; the 8 already-accounted-for ones
+        // must not be trimmed again.
+        history.extend((10..14).map(|i| {
+            Message::new(
+                if i % 2 == 0 { "user" } else { "assistant" },
+                format!("m{i}"),
+            )
+        }));
+        let r2 = compressor.compress(&history);
+        assert_eq!(r2.original_count, 14);
+        // New split point: original_count - keep_recent = 12.
+        assert_eq!(r2.split_point, 12);
+
+        // The round-2 summary must carry forward the round-1 running summary.
+        assert!(r2.summary.contains(&compressor.incremental.running_summary));
+
+        // Advancing by the round's *increment* (split point − previously
+        // accounted) keeps the count monotonically increasing, so a third
+        // round trims only the newest growth.
+        let advance_by = r2
+            .split_point
+            .saturating_sub(compressor.incremental.previously_compressed_count);
+        let compressor = compressor.advance_incremental(advance_by, &r2.summary);
+        assert_eq!(compressor.incremental.previously_compressed_count, 12);
     }
 
     #[test]

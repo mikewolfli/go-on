@@ -173,11 +173,22 @@ pub(crate) async fn execute_tools_concurrent(
 
     // Collect results as they complete.
     while let Some(result) = futures.next().await {
-        if !result.success {
+        let success = result.success;
+        if !success {
             failure_count += 1;
         }
 
         tool_results.push(result);
+
+        // Report every outcome to the unified resilience engine so the
+        // tool-execution breaker reflects real traffic: failures feed the
+        // consecutive-failure counter, successes reset it (no-op when no
+        // hook is installed). Reporting successes is what allows the breaker
+        // to recover on its own once the underlying tool recovers.
+        crate::resilience::hyper_resilience::report_tool_execution(
+            crate::resilience::hyper_resilience::TOOL_EXECUTION_BREAKER,
+            success,
+        );
 
         // Check circuit breaker.
         // Triggered when failure_count reaches the limit, regardless of

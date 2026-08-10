@@ -255,13 +255,6 @@ impl AutoTuneState {
             "cooldown_remaining": self.cooldown_remaining,
         })
     }
-
-    /// Decrement cooldown counter (called once per evaluation window).
-    pub fn tick_cooldown(&mut self) {
-        if self.cooldown_remaining > 0 {
-            self.cooldown_remaining -= 1;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -444,10 +437,27 @@ mod tests {
             "parameters should not change"
         );
 
-        // Tick cooldown and try again
-        state.tick_cooldown();
-        state.tick_cooldown();
-        state.tick_cooldown(); // Extra to fully clear
+        // Advance the cooldown via the production path
+        // (`advance_cooldown_window`, called from apply_autotune_feedback in
+        // vector_context.rs). tick_cooldown was removed — it only decremented
+        // the counter without advancing the window or resetting counters, so
+        // it duplicated advance_cooldown_window with weaker semantics and had
+        // zero production callers.
+        assert!(
+            state.advance_cooldown_window(&config),
+            "first cooldown window should advance"
+        );
+        // Fill the next window and advance the second cooldown window.
+        for _ in 0..15 {
+            state.record_vector_search(0.9, &config);
+        }
+        for _ in 0..5 {
+            state.record_vector_search(0.5, &config);
+        }
+        assert!(
+            state.advance_cooldown_window(&config),
+            "second cooldown window should advance"
+        );
 
         // Now should be able to adjust again (cooldown expired and new window filled)
         for _ in 0..15 {

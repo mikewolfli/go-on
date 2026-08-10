@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { backoffDelayMs } from "../utils";
 
 /**
  * Manages reconnection logic with exponential backoff.
@@ -29,11 +30,9 @@ export class ReconnectManager {
 
   /** Calculate exponential backoff delay for the given attempt. */
   backoffMs(attempt: number): number {
-    // Unified: 1000ms base, 30s cap, 30% jitter
-    const baseDelay = 1000 * Math.pow(2, attempt);
-    const cappedDelay = Math.min(baseDelay, 30000);
-    const jitter = 0.7 + Math.random() * 0.3;
-    return Math.round(cappedDelay * jitter);
+    // Unified formula shared with the state-sync listener
+    // (contracts/cross-client-sync.md): 1000ms base, 30s cap, 30% jitter.
+    return backoffDelayMs(attempt);
   }
 
   /** Schedule a reconnection attempt. */

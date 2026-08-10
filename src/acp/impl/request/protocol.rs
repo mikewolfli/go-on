@@ -30,6 +30,13 @@ pub enum AcpErrorCode {
     ServerError = -32000,
     /// Request rate limited (-32029, shared with the rate-limit middleware).
     RateLimited = -32029,
+    /// Server is shutting down / draining; requests are rejected (-32031).
+    ShuttingDown = -32031,
+    /// The request requires human approval per governance policy (-32040).
+    EscalationRequired = -32040,
+    /// The client cancelled the request via `$/cancel_request` (-32800, the
+    /// standard JSON-RPC cancellation code also used by the MCP arm).
+    RequestCancelled = -32800,
 }
 
 impl AcpErrorCode {
@@ -45,6 +52,9 @@ impl AcpErrorCode {
             x if x == Self::PuaViolation as i32 => Some(Self::PuaViolation),
             x if x == Self::ServerError as i32 => Some(Self::ServerError),
             x if x == Self::RateLimited as i32 => Some(Self::RateLimited),
+            x if x == Self::ShuttingDown as i32 => Some(Self::ShuttingDown),
+            x if x == Self::EscalationRequired as i32 => Some(Self::EscalationRequired),
+            x if x == Self::RequestCancelled as i32 => Some(Self::RequestCancelled),
             _ => None,
         }
     }
@@ -61,6 +71,9 @@ impl AcpErrorCode {
             Self::PuaViolation => "PuaViolation",
             Self::ServerError => "ServerError",
             Self::RateLimited => "RateLimited",
+            Self::ShuttingDown => "ShuttingDown",
+            Self::EscalationRequired => "EscalationRequired",
+            Self::RequestCancelled => "RequestCancelled",
         })
     }
 }
@@ -82,6 +95,9 @@ impl From<AcpErrorCode> for crate::core::error::ErrorCode {
             AcpErrorCode::PuaViolation => Self::Forbidden,
             AcpErrorCode::ServerError => Self::ServiceUnavailable,
             AcpErrorCode::RateLimited => Self::RateLimitExceeded,
+            AcpErrorCode::ShuttingDown => Self::ServiceUnavailable,
+            AcpErrorCode::EscalationRequired => Self::Forbidden,
+            AcpErrorCode::RequestCancelled => Self::Forbidden,
         }
     }
 }

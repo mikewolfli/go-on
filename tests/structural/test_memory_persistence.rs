@@ -1,265 +1,263 @@
 //! Memory Persistence End-to-End
 //!
-//! Validates the three-tier memory persistence lifecycle:
+//! Validates the three-tier memory persistence lifecycle through the real
+//! production API (`MemoryPersistence::store` / `promote_to_warm` /
+//! `promote_to_cold` / `auto_migrate` / `search_by_session`):
 //!   write L1 (hot) → migrate to L2 (warm) → archive to L3 (cold) →
 //!   restore from L3 → cross-session retrieval
 //!
-//! Uses go_on::memory::memory_persistence types to construct entries and
-//! validate the tiering policy. Real integration requires a go-on instance
-//! with the `backend-sqlite` feature enabled and filesystem access for L3.
-//!
-//! # integration-test
-//! Tier migration is validated structurally. In production, a background
-//! worker calls promote() / demote() based on access patterns and TTL.
+//! No tier fields are hand-assigned in assertions — every migration below
+//! goes through the production promotion/migration entry points and the
+//! assertions verify the observable outcome (retrievability + reported
+//! migration counts), not re-implemented eviction arithmetic.
 
 use std::path::PathBuf;
 
-use go_on::memory::memory_persistence::{MemoryEntry, MemoryTier, MemoryTieringPolicy};
+use go_on::memory::memory_persistence::{
+    MemoryEntry, MemoryPersistence, MemoryTier, MemoryTieringPolicy,
+};
 
 // ── Context ────────────────────────────────────────────────────────────────
 
+/// Per-test temp workspace (warm SQLite db + cold archive dir), removed on drop.
 struct MemoryE2eContext {
-    entry_ids: Vec<String>,
-    archive_dir: Option<PathBuf>,
+    base: PathBuf,
 }
 
 impl MemoryE2eContext {
-    fn new() -> Self {
-        let archive_dir = std::env::temp_dir().join("go-on-e2e-memory-archive");
-        let _ = std::fs::create_dir_all(&archive_dir);
-        Self {
-            entry_ids: Vec::new(),
-            archive_dir: Some(archive_dir),
-        }
+    fn new(tag: &str) -> Self {
+        let base =
+            std::env::temp_dir().join(format!("go-on-e2e-memory-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::create_dir_all(&base);
+        Self { base }
+    }
+
+    fn db_path(&self) -> PathBuf {
+        self.base.join("warm.sqlite3")
+    }
+
+    fn cold_path(&self) -> PathBuf {
+        self.base.join("cold")
+    }
+
+    fn persistence(&self, policy: MemoryTieringPolicy) -> MemoryPersistence {
+        MemoryPersistence::new(&self.db_path(), &self.cold_path(), Some(policy))
+            .expect("persistence should initialize")
     }
 }
 
 impl Drop for MemoryE2eContext {
     fn drop(&mut self) {
-        if let Some(dir) = &self.archive_dir {
-            let _ = std::fs::remove_dir_all(dir);
-        }
+        let _ = std::fs::remove_dir_all(&self.base);
     }
+}
+
+/// Entry helper: hot entry bound to a session so the real warm/cold read
+/// paths (`search_by_session`) can retrieve it after migration.
+fn session_entry(
+    id: &str,
+    class: &str,
+    content: &str,
+    usefulness: f32,
+    session: &str,
+) -> MemoryEntry {
+    let mut entry = MemoryEntry::new_hot(id, class, content, usefulness);
+    entry.session_id = Some(session.to_string());
+    entry
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-/// Full memory persistence lifecycle across all three tiers.
+/// Full memory persistence lifecycle across all three tiers, driven entirely
+/// through the production API:
+///   store (L1) → promote_to_warm (L2) → search → promote_to_cold (L3) →
+///   search (cold fallback) → unknown session yields nothing.
 #[tokio::test]
 async fn test_memory_persistence_three_tier_lifecycle() {
-    let mut ctx = MemoryE2eContext::new();
+    let ctx = MemoryE2eContext::new("lifecycle");
+    let persistence = ctx.persistence(MemoryTieringPolicy::default());
 
-    // ── 1. Setup tiering policy ─────────────────────────────────────────
-    let policy = MemoryTieringPolicy::default();
-    assert_eq!(policy.hot_max_entries, 2048);
-    assert_eq!(policy.hot_ttl_secs, 1800);
-
-    // ── 2. Write L1 (Hot) entries ──────────────────────────────────────
-    let entry_a = MemoryEntry::new_hot(
+    let entry = session_entry(
         "mem-e2e-l1-001",
         "episodic",
         "User mentioned preference for dark mode",
         0.75,
-    );
-    let entry_b = MemoryEntry::new_hot(
-        "mem-e2e-l1-002",
-        "semantic",
-        "Project deadline is 2026-06-15",
-        0.90,
+        "session-a",
     );
 
-    assert_eq!(entry_a.tier, MemoryTier::Hot);
-    assert_eq!(entry_a.class, "episodic");
-    assert_eq!(entry_b.class, "semantic");
-    assert!(entry_b.usefulness > entry_a.usefulness);
+    // ── 1. Write L1 (Hot) via the real store path ────────────────────────
+    persistence
+        .store(entry.clone())
+        .await
+        .expect("store should place the entry in the hot tier");
 
-    ctx.entry_ids.push(entry_a.id.clone());
-    ctx.entry_ids.push(entry_b.id.clone());
-    assert_eq!(ctx.entry_ids.len(), 2);
+    // ── 2. Migrate L1 → L2 (Warm) via the real promotion API ─────────────
+    persistence
+        .promote_to_warm(entry.clone())
+        .await
+        .expect("promote_to_warm should move the entry to the warm tier");
 
-    // Validate MemoryEntry helper methods.
-    assert!(entry_a.age_secs() >= 0, "age must be non-negative");
-    assert!(entry_a.idle_secs() >= 0, "idle time must be non-negative");
-    let mut touched = entry_a.clone();
-    touched.touch();
-    assert_eq!(touched.access_count, 1, "touch increments access count");
-    assert!(touched.accessed_at >= entry_a.accessed_at);
+    let warm_hits = persistence
+        .search_by_session("session-a", 16)
+        .await
+        .expect("warm search should succeed");
+    assert_eq!(warm_hits.len(), 1, "promoted entry must be retrievable");
+    assert_eq!(warm_hits[0].id, "mem-e2e-l1-001");
+    assert_eq!(
+        warm_hits[0].content,
+        "User mentioned preference for dark mode"
+    );
+    assert_eq!(warm_hits[0].tier, MemoryTier::Warm);
 
-    // ── 3. Migrate L1 → L2 (Warm) ──────────────────────────────────────
-    // Promote if usefulness >= hot_threshold (default 0.3).
-    let promote_threshold = policy.hot_threshold;
+    // ── 3. Archive L2 → L3 (Cold) via the real archival API ──────────────
+    persistence
+        .promote_to_cold(entry.clone())
+        .await
+        .expect("promote_to_cold should archive the entry");
+
+    // ── 4. Restore from L3 (cold fallback in the real read path) ─────────
+    let cold_hits = persistence
+        .search_by_session("session-a", 16)
+        .await
+        .expect("cold fallback search should succeed");
+    assert_eq!(cold_hits.len(), 1, "archived entry must remain recoverable");
+    assert_eq!(cold_hits[0].id, "mem-e2e-l1-001");
+    assert_eq!(cold_hits[0].tier, MemoryTier::Cold);
+
+    // ── 5. Cross-session isolation ───────────────────────────────────────
+    let other_session = persistence
+        .search_by_session("session-b", 16)
+        .await
+        .expect("search should succeed");
     assert!(
-        entry_a.usefulness >= promote_threshold,
-        "entry_a should qualify for promotion"
+        other_session.is_empty(),
+        "a different session must not see this entry"
     );
-    assert!(
-        entry_b.usefulness >= promote_threshold,
-        "entry_b should qualify for promotion"
-    );
-
-    // Simulate promotion by changing tier.
-    let mut warm_a = entry_a.clone();
-    warm_a.tier = MemoryTier::Warm;
-    let mut warm_b = entry_b.clone();
-    warm_b.tier = MemoryTier::Warm;
-
-    assert_eq!(warm_a.tier, MemoryTier::Warm);
-    assert_eq!(warm_b.tier, MemoryTier::Warm);
-
-    // Validate that warm tier entries retain their content and metadata.
-    assert_eq!(warm_a.content, "User mentioned preference for dark mode");
-    assert_eq!(warm_b.content, "Project deadline is 2026-06-15");
-    assert_eq!(warm_a.usefulness, entry_a.usefulness);
-
-    // ── 4. Archive to L3 (Cold) ────────────────────────────────────────
-    // Demote if usefulness < warm_threshold (default 0.6) or idle time exceeds TTL.
-    // Here entry_b has high usefulness and should be retained in warm.
-    // entry_a has borderline usefulness but is above the threshold.
-    let archive_dir = ctx.archive_dir.as_ref().unwrap();
-    assert!(archive_dir.exists(), "archive directory must exist");
-
-    let mut cold_a = warm_a.clone();
-    cold_a.tier = MemoryTier::Cold;
-    let mut cold_b = warm_b.clone();
-    cold_b.tier = MemoryTier::Cold;
-
-    assert_eq!(cold_a.tier, MemoryTier::Cold);
-    assert_eq!(cold_b.tier, MemoryTier::Cold);
-    assert_eq!(cold_a.id, "mem-e2e-l1-001");
-    assert_eq!(cold_b.id, "mem-e2e-l1-002");
-    assert!(!cold_a.content.is_empty());
-    assert!(!cold_b.content.is_empty());
-
-    // ── 5. Restore from L3 → L2 ────────────────────────────────────────
-    // Restore an entry and verify it lands in warm.
-    let mut restored = cold_a.clone();
-    restored.tier = MemoryTier::Warm;
-    assert_eq!(restored.tier, MemoryTier::Warm);
-    assert_eq!(restored.content, "User mentioned preference for dark mode");
-    assert_eq!(restored.id, "mem-e2e-l1-001");
-    assert_eq!(restored.class, "episodic");
-
-    // ── 6. Cross-session retrieval ─────────────────────────────────────
-    // Simulate a second session retrieving the restored entry.
-    let session_b_content = restored.content.clone();
-    assert_eq!(session_b_content, "User mentioned preference for dark mode");
-
-    // Simulate cross-session: construct a fresh entry with the same content
-    // and verify it matches.
-    let cross_session = MemoryEntry::new_hot(
-        "mem-e2e-l1-001",
-        "episodic",
-        "User mentioned preference for dark mode",
-        0.75,
-    );
-    assert_eq!(cross_session.id, "mem-e2e-l1-001");
-    assert_eq!(cross_session.content, restored.content);
-    assert_eq!(cross_session.class, restored.class);
-    assert_eq!(cross_session.tier, MemoryTier::Hot);
-
-    // Verify the archive directory exists and is valid.
-    assert!(
-        ctx.archive_dir.as_ref().unwrap().exists(),
-        "archive directory must exist for L3 storage"
-    );
-
-    // Context dropped here, triggering cleanup.
 }
 
-/// Tests automatic demotion from L1 → L2 when hot cache exceeds capacity.
+/// Real automatic migration: with an instantly-expired hot TTL, `auto_migrate`
+/// evicts the hot entries and routes them by usefulness — useful ones are
+/// promoted to warm, low-usefulness ones are archived straight to cold.
 #[tokio::test]
 async fn test_memory_persistence_automatic_demotion_on_capacity() {
-    // Create a policy with a small hot cache to force eviction.
+    let ctx = MemoryE2eContext::new("auto-migrate");
     let policy = MemoryTieringPolicy {
+        // 0-second hot TTL makes every stored entry instantly expired, so the
+        // real migration cycle has something to evict without waiting.
+        hot_ttl_secs: 0,
         hot_max_entries: 5,
+        ..Default::default()
+    };
+    assert_eq!(policy.hot_max_entries, 5);
+
+    let persistence = ctx.persistence(policy);
+
+    let useful = session_entry(
+        "auto-migrate-warm",
+        "test",
+        "useful entry (>= hot_threshold)",
+        0.9,
+        "session-migrate",
+    );
+    let stale = session_entry(
+        "auto-migrate-cold",
+        "test",
+        "stale entry (< hot_threshold)",
+        0.1,
+        "session-migrate",
+    );
+    persistence
+        .store(useful.clone())
+        .await
+        .expect("store should succeed");
+    persistence
+        .store(stale.clone())
+        .await
+        .expect("store should succeed");
+
+    let report = persistence
+        .auto_migrate()
+        .await
+        .expect("auto_migrate should succeed");
+
+    // The real migration cycle must route by usefulness: 0.9 → warm,
+    // 0.1 → cold, with no warm-tier churn in the same pass.
+    assert_eq!(
+        report.promoted_hot_to_warm, 1,
+        "useful entry promoted to warm"
+    );
+    assert_eq!(
+        report.demoted_hot_to_cold, 1,
+        "stale entry archived directly to cold"
+    );
+    assert_eq!(report.promoted_warm_to_cold, 0);
+    assert_eq!(report.evicted_warm, 0);
+
+    // Both entries must remain recoverable through the real read path.
+    let hits = persistence
+        .search_by_session("session-migrate", 16)
+        .await
+        .expect("search should succeed");
+    let ids: Vec<&str> = hits.iter().map(|e| e.id.as_str()).collect();
+    assert!(
+        ids.contains(&"auto-migrate-warm"),
+        "warm-promoted entry must be retrievable, got: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"auto-migrate-cold"),
+        "cold-archived entry must be retrievable via fallback, got: {ids:?}"
+    );
+}
+
+/// Usefulness thresholds are enforced by the real tiering policy: in the warm
+/// TTL pass of `auto_migrate`, entries at or above `warm_threshold` (0.6) are
+/// archived to cold while low-usefulness warm entries are evicted.
+#[tokio::test]
+async fn test_memory_persistence_metadata_index() {
+    let ctx = MemoryE2eContext::new("meta-index");
+    let policy = MemoryTieringPolicy {
+        // 0-second warm TTL makes every warm entry an immediate candidate for
+        // the warm → cold / eviction pass.
+        warm_ttl_secs: 0,
         hot_ttl_secs: 3600,
         ..Default::default()
     };
 
-    assert_eq!(policy.hot_max_entries, 5);
+    let persistence = ctx.persistence(policy);
 
-    // Validate the tiering policy.
-    assert_eq!(policy.warm_threshold, 0.6);
-    assert_eq!(policy.hot_threshold, 0.3);
-    assert!(policy.hot_max_entries > 0);
-    assert!(policy.hot_ttl_secs > 0);
+    let useful = session_entry("meta-001", "episodic", "met entry 1", 0.9, "session-meta");
+    let low = session_entry("meta-002", "semantic", "met entry 2", 0.2, "session-meta");
+    persistence
+        .promote_to_warm(useful.clone())
+        .await
+        .expect("promote_to_warm should succeed");
+    persistence
+        .promote_to_warm(low.clone())
+        .await
+        .expect("promote_to_warm should succeed");
 
-    // Simulate the eviction logic: inserting 10 entries into a cache with
-    // max 5. The first 5 inserted entries would be evicted (LRU) when
-    // entries 5-9 are inserted. Evicted entries conceptually move to warm.
-    let entries: Vec<MemoryEntry> = (0..10)
-        .map(|i| {
-            MemoryEntry::new_hot(
-                format!("auto-demote-{:02}", i),
-                "test",
-                format!("entry-{}", i),
-                0.5,
-            )
-        })
-        .collect();
+    let report = persistence
+        .auto_migrate()
+        .await
+        .expect("auto_migrate should succeed");
 
-    // The first 5 inserted entries would be evicted when inserting entries 5-9.
-    let evicted_count = entries.len().saturating_sub(policy.hot_max_entries);
-    assert_eq!(evicted_count, 5);
-    assert!(evicted_count > 0, "entries above capacity must be demoted");
+    // usefulness 0.9 >= warm_threshold 0.6 → archived to cold;
+    // usefulness 0.2 < 0.6 → evicted from the warm tier.
+    assert_eq!(report.promoted_warm_to_cold, 1);
+    assert_eq!(report.evicted_warm, 1);
 
-    // Verify the evicted entries (those beyond max) are structurally sound.
-    for entry in entries[policy.hot_max_entries..].iter() {
-        assert_eq!(entry.tier, MemoryTier::Hot, "source entries remain hot");
-        assert!(entry.id.starts_with("auto-demote-"));
-        assert!(entry.usefulness > 0.0);
-        // Simulate demotion.
-        let mut demoted = entry.clone();
-        demoted.tier = MemoryTier::Warm;
-        assert_eq!(demoted.tier, MemoryTier::Warm);
-    }
-
-    // Validate TTL-based promotion logic.
-    let ttl_policy = MemoryTieringPolicy {
-        hot_ttl_secs: 1,
-        warm_ttl_secs: 10,
-        ..Default::default()
-    };
-    assert_eq!(ttl_policy.hot_ttl_secs, 1);
-    assert_eq!(ttl_policy.warm_ttl_secs, 10);
-}
-
-/// Tests the metadata index retrieval.
-#[tokio::test]
-async fn test_memory_persistence_metadata_index() {
-    // Validate that we can construct entries with proper metadata and
-    // verify the structural invariants that a metadata index would enforce.
-    let cold_path = std::env::temp_dir().join("go-on-e2e-meta-cold");
-    let _ = std::fs::create_dir_all(&cold_path);
-
-    // Create entries with different classes and usefulness scores to
-    // simulate what a metadata index would track.
-    let entries = vec![
-        MemoryEntry::new_hot("meta-001", "episodic", "met entry 1", 0.9),
-        MemoryEntry::new_hot("meta-002", "semantic", "met entry 2", 0.7),
-        MemoryEntry::new_hot("meta-003", "procedural", "met entry 3", 0.5),
-        MemoryEntry::new_hot("meta-004", "episodic", "met entry 4", 0.2),
-    ];
-
-    // Verify all tiers start as Hot.
-    for entry in &entries {
-        assert_eq!(entry.tier, MemoryTier::Hot);
-        assert!(!entry.id.is_empty());
-        assert!(!entry.content.is_empty());
-    }
-
-    // Verify the cold storage path is valid.
-    assert!(cold_path.exists(), "cold storage directory must exist");
-    assert!(cold_path.is_dir());
-
-    // Simulate an index query: entries with usefulness >= 0.6 are
-    // candidates for promotion to Warm.
-    let high_usefulness: Vec<&MemoryEntry> =
-        entries.iter().filter(|e| e.usefulness >= 0.6).collect();
-    assert_eq!(high_usefulness.len(), 2, "entries with usefulness >= 0.6");
-    assert!(high_usefulness.iter().any(|e| e.id == "meta-001"));
-    assert!(high_usefulness.iter().any(|e| e.id == "meta-002"));
-
-    // Validate tear-down of temp directory.
-    let _ = std::fs::remove_dir_all(&cold_path);
+    let hits = persistence
+        .search_by_session("session-meta", 16)
+        .await
+        .expect("search should succeed");
+    let ids: Vec<&str> = hits.iter().map(|e| e.id.as_str()).collect();
+    assert!(
+        ids.contains(&"meta-001"),
+        "archived useful entry must remain retrievable, got: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"meta-002"),
+        "evicted low-usefulness entry must be gone, got: {ids:?}"
+    );
 }

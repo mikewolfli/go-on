@@ -332,7 +332,7 @@ jobs:
             <p>Community-contributed skills for the Go-On AGI platform.</p>
             <p>Index: <a href="goon-skill-index.yaml">goon-skill-index.yaml</a></p>
             <p>To install a skill, use:</p>
-            <pre>go-on skill market install &lt;skill-name&gt;</pre>
+            <pre>go-on skill import &lt;skill-name&gt;</pre>
             <hr>
             <p><em>Last updated: $(date -u)</em></p>
           </body>

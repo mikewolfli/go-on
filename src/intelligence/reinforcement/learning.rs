@@ -12,6 +12,15 @@ use super::ArtifactLedger;
 
 // ── Learning events ────────────────────────────────────────────────────────
 
+/// Workflow learning event persisted to the artifact ledger by the
+/// `exec_pack` / knowledge-distillation chain
+/// (`persist_workflow_learning_event`).
+///
+/// A second, same-named `WorkflowLearningEvent` (7-field runtime snapshot)
+/// previously existed in `capability_bus::core` and was duplicated 1:1 from
+/// [`LearningOptimizationBus`](crate::intelligence::capability_bus::learning_optimization_bus::LearningEvent)
+/// in `sense()`; it has been deleted — the capability-bus sensing chain now
+/// consumes `LearningEvent` directly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowLearningEvent {
     pub generated_at: i64,

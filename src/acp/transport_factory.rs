@@ -288,22 +288,31 @@ pub async fn dispatch_server(
             let mtls_ca = acp_server.runtime_config.mtls_ca_cert_path.clone();
             let mtls_cert = acp_server.runtime_config.mtls_server_cert_path.clone();
             let mtls_key = acp_server.runtime_config.mtls_server_key_path.clone();
+            let acp_server = Arc::new(acp_server);
+            // Reuse the tenant rate limiter injected by the server builder
+            // (`new_acp_server` → `server.rate_limiting.rate_limit_middleware`)
+            // so the mcp_http arm shares the exact middleware the acp_http arm
+            // charges through `handle_request` — previously this arm
+            // constructed a second, independent `RateLimitMiddleware::new`
+            // instance (duplicate construction, divergent bucket state). In
+            // the local profile the middleware is None for both arms, which is
+            // the consistent "no transport-level tenant limiting" behavior.
+            let shared_limiter = acp_server.rate_limiting.rate_limit_middleware.clone();
             let s = crate::protocol::mcp_server::McpHttpServer::new_with_acp(
                 mcp_registry,
                 Arc::clone(&acp_server.tool_registry),
                 "go-on".into(),
                 env!("CARGO_PKG_VERSION").into(),
                 acp_http_bind.into(),
-                Some(Arc::new(acp_server)),
+                Some(acp_server),
             )
             // Wire the runtime mTLS config so MCP HTTP can actually serve
             // TLS/mTLS (previously the acceptor fields were unreachable).
-            .with_mtls_config(mtls_enabled, &mtls_ca, &mtls_cert, &mtls_key)
-            .with_rate_limiter(Arc::new(
-                crate::protocol::rate_limit::RateLimitMiddleware::new(
-                    crate::protocol::rate_limit::TenantRateLimit::default(),
-                ),
-            ));
+            .with_mtls_config(mtls_enabled, &mtls_ca, &mtls_cert, &mtls_key);
+            let s = match shared_limiter {
+                Some(limiter) => s.with_rate_limiter(limiter),
+                None => s,
+            };
             s.run().await
         }
         other => anyhow::bail!("unsupported protocol mode: {other}"),

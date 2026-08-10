@@ -384,19 +384,20 @@ fallback = true
 
 ## 11. Feature Profiles
 
-go-on has three build profiles that enable different feature sets:
+go-on has four build profiles that enable different feature sets:
 
-| Feature | `local` (default) | `simple-server` | `multi-users-server` |
-|---------|--------------------------|------------------------|------------------------------|
-| SQLite backend | ✅ | ✅ | ❌ |
-| PostgreSQL backend | ❌ | ❌ | ✅ |
-| ToolBus | ✅ | ✅ | ✅ |
-| OrchestrationBus | ✅ | ✅ | ✅ |
-| ObservabilityBus | ✅ | ✅ | ✅ |
-| OptimizationBus | ✅ | ✅ | ✅ |
-| MemoryBus | ✅ | ✅ | ✅ |
-| ProtocolBus | ✅ | ✅ | ✅ |
-| DistributedMemoryBus | ❌ | ✅ | ✅ |
+| Feature | `local` (default) | `simple-server` | `multi-users-server` | `full` |
+|---------|--------------------------|------------------------|------------------------------|------------------------------|
+| SQLite backend | ✅ | ✅ | ❌ | ✅ |
+| PostgreSQL backend | ❌ | ❌ | ✅ | ❌ |
+| ToolBus | ✅ | ✅ | ✅ | ✅ |
+| OrchestrationBus | ✅ | ✅ | ✅ | ✅ |
+| ObservabilityBus | ✅ | ✅ | ✅ | ✅ |
+| OptimizationBus | ✅ | ✅ | ✅ | ✅ |
+| MemoryBus | ✅ | ✅ | ✅ | ✅ |
+| ProtocolBus | ✅ | ✅ | ✅ | ✅ |
+| DistributedMemoryBus | ❌ | ✅ | ✅ | ✅ |
+| Multimodal / CAD / image / barcode tools | ❌ | ❌ | ❌ | ✅ |
 
 To build with a specific profile:
 
@@ -409,6 +410,9 @@ cargo build --no-default-features --features simple-server
 
 # Multi-user server
 cargo build --no-default-features --features multi-users-server
+
+# Full (all features, for local development and CI testing)
+cargo build --no-default-features --features full
 ```
 
 ---

@@ -98,7 +98,68 @@ impl MonitorView {
             }
         }
     }
+}
 
+/// Shared timeout for all metrics RPCs (auto-refresh and manual buttons).
+const METRICS_RPC_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Run one metrics RPC with the shared timeout, flattening the outcome so
+/// `Err` already carries the message to forward via `__metrics_error__`.
+async fn metrics_rpc<T, F>(rpc: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    match tokio::time::timeout(METRICS_RPC_TIMEOUT, rpc).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(err)) => Err(err),
+        Err(_) => Err("timeout".to_string()),
+    }
+}
+
+/// Load the metrics trends and forward `__metrics__` + `__trends__` (or
+/// `__metrics_error__`) to the UI channel.
+async fn load_trends_task(backend: BackendClient, window: String, tx: mpsc::SyncSender<String>) {
+    match metrics_rpc(backend.metrics_window_query(&window)).await {
+        Ok(series) => {
+            let trends_json = serde_json::to_string(&series).unwrap_or_else(|_| "[]".to_string());
+            try_send_msg(
+                &tx,
+                format!("__metrics__:window={window} points={}", series.len()),
+            );
+            try_send_msg(&tx, format!("__trends__:{trends_json}"));
+        }
+        Err(err) => try_send_msg(&tx, format!("__metrics_error__:{err}")),
+    }
+}
+
+/// Load the errors summary and forward `__errors_summary__` (or
+/// `__metrics_error__`) to the UI channel. When `with_metrics_summary` is set
+/// (manual Load Errors button), also emit a `__metrics__` summary line.
+async fn load_errors_task(
+    backend: BackendClient,
+    window: String,
+    tx: mpsc::SyncSender<String>,
+    with_metrics_summary: bool,
+) {
+    match metrics_rpc(backend.metrics_errors_summary(&window, 10)).await {
+        Ok((groups, failures)) => {
+            if with_metrics_summary {
+                try_send_msg(
+                    &tx,
+                    format!("__metrics__:window={window} error_groups={}", groups.len()),
+                );
+            }
+            let summary_json = serde_json::json!({
+                "groups": groups,
+                "sample_failures_count": failures.len()
+            });
+            try_send_msg(&tx, format!("__errors_summary__:{summary_json}"));
+        }
+        Err(err) => try_send_msg(&tx, format!("__metrics_error__:{err}")),
+    }
+}
+
+impl MonitorView {
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -125,49 +186,13 @@ impl MonitorView {
                     let tx = self.pending_tx.clone();
                     let ctx_clone = ui.ctx().clone();
                     tokio::spawn(async move {
-                        // Load trends
-                        let result = tokio::time::timeout(
-                            std::time::Duration::from_secs(10),
-                            backend_clone.metrics_window_query(&window),
-                        )
-                        .await;
-                        match result {
-                            Ok(Ok(series)) => {
-                                let trends_json = serde_json::to_string(&series)
-                                    .unwrap_or_else(|_| "[]".to_string());
-                                let metrics = format!("window={window} points={}", series.len());
-                                try_send_msg(&tx, format!("__metrics__:{metrics}"));
-                                try_send_msg(&tx, format!("__trends__:{trends_json}"));
-                            }
-                            Ok(Err(err)) => {
-                                try_send_msg(&tx, format!("__metrics_error__:{err}"));
-                            }
-                            Err(_) => {
-                                try_send_msg(&tx, "__metrics_error__:timeout".to_string());
-                            }
-                        }
-
-                        // Load errors
-                        let err_result = tokio::time::timeout(
-                            std::time::Duration::from_secs(10),
-                            backend_clone.metrics_errors_summary(&window, 10),
-                        )
-                        .await;
-                        match err_result {
-                            Ok(Ok((groups, failures))) => {
-                                let summary_json = serde_json::json!({
-                                    "groups": groups,
-                                    "sample_failures_count": failures.len()
-                                });
-                                try_send_msg(&tx, format!("__errors_summary__:{summary_json}"));
-                            }
-                            Ok(Err(err)) => {
-                                try_send_msg(&tx, format!("__metrics_error__:{err}"));
-                            }
-                            Err(_) => {
-                                try_send_msg(&tx, "__metrics_error__:timeout".to_string());
-                            }
-                        }
+                        // Load trends and errors concurrently — each RPC keeps
+                        // its own independent 10s timeout.
+                        let (trends_res, errors_res) = tokio::join!(
+                            load_trends_task(backend_clone.clone(), window.clone(), tx.clone()),
+                            load_errors_task(backend_clone, window, tx, false),
+                        );
+                        let _ = (trends_res, errors_res);
                         ctx_clone.request_repaint();
                     });
                 }
@@ -286,37 +311,7 @@ impl MonitorView {
                                     let tx = self.pending_tx.clone();
                                     let ctx_clone = ui.ctx().clone();
                                     tokio::spawn(async move {
-                                        // Add timeout to prevent hanging
-                                        let result = match tokio::time::timeout(
-                                            std::time::Duration::from_secs(10),
-                                            backend_clone.metrics_window_query(&window),
-                                        )
-                                        .await
-                                        {
-                                            Ok(r) => r,
-                                            Err(_) => Err("timeout".to_string()),
-                                        };
-                                        let payload = match result {
-                                            Ok(series) => {
-                                                let trends_json = serde_json::to_string(&series)
-                                                    .unwrap_or_else(|_| "[]".to_string());
-                                                let metrics = format!(
-                                                    "window={window} points={}",
-                                                    series.len()
-                                                );
-                                                (
-                                                    format!("__metrics__:{metrics}"),
-                                                    format!("__trends__:{trends_json}"),
-                                                )
-                                            }
-                                            Err(e) => {
-                                                (format!("__metrics_error__:{e}"), String::new())
-                                            }
-                                        };
-                                        try_send_msg(&tx, payload.0);
-                                        if !payload.1.is_empty() {
-                                            try_send_msg(&tx, payload.1);
-                                        }
+                                        load_trends_task(backend_clone, window, tx).await;
                                         ctx_clone.request_repaint();
                                     });
                                 }
@@ -334,39 +329,7 @@ impl MonitorView {
                                     let tx = self.pending_tx.clone();
                                     let ctx_clone = ui.ctx().clone();
                                     tokio::spawn(async move {
-                                        // Add timeout to prevent hanging
-                                        let result = match tokio::time::timeout(
-                                            std::time::Duration::from_secs(10),
-                                            backend_clone.metrics_errors_summary(&window, 10),
-                                        )
-                                        .await
-                                        {
-                                            Ok(r) => r,
-                                            Err(_) => Err("timeout".to_string()),
-                                        };
-                                        let payload = match result {
-                                            Ok((groups, failures)) => {
-                                                let metrics = format!(
-                                                    "window={window} error_groups={}",
-                                                    groups.len()
-                                                );
-                                                let summary_json = serde_json::json!({
-                                                    "groups": groups,
-                                                    "sample_failures_count": failures.len()
-                                                });
-                                                (
-                                                    format!("__metrics__:{metrics}"),
-                                                    format!("__errors_summary__:{summary_json}"),
-                                                )
-                                            }
-                                            Err(e) => {
-                                                (format!("__metrics_error__:{e}"), String::new())
-                                            }
-                                        };
-                                        try_send_msg(&tx, payload.0);
-                                        if !payload.1.is_empty() {
-                                            try_send_msg(&tx, payload.1);
-                                        }
+                                        load_errors_task(backend_clone, window, tx, true).await;
                                         ctx_clone.request_repaint();
                                     });
                                 }

@@ -651,8 +651,10 @@ impl RepoAnalyzer {
     /// Uses the `type_index` and `repo_map` to ground answers in actual
     /// code symbols via retrieval-augmented generation.
     ///
-    /// When `agent` is provided, delegates to the LLM for semantic understanding;
-    /// otherwise falls back to keyword-based heuristics.
+    /// The implementation is heuristic-only: it builds a keyword / symbol
+    /// retrieval context (`build_rag_context`) and composes the answer from
+    /// the matched symbols and file structure. There is no LLM delegation in
+    /// this path.
     pub async fn answer_code_question(
         &self,
         question: &str,

@@ -49,6 +49,13 @@ Both the GUI and VSCode addon use an **identical** reconnect strategy to ensure 
 delay_ms = min(1000 × 2^attempt, 30000) × (0.7 + random() × 0.3)
 ```
 
+### Retryable HTTP Status Set (SDKs)
+
+All three SDK clients (Rust, Python, TypeScript) retry the same transient
+statuses: **408 (Request Timeout) + 429 (Too Many Requests) + all 5xx**.
+Other 4xx statuses (400, 401, 403, 404, …) are never retried. Transport
+errors (timeouts, connection failures) are also retried by all three SDKs.
+
 ### Reset Behavior
 
 When a reconnect attempt succeeds, the attempt counter resets to 0 so that the next disconnection starts from the 1 s base interval.

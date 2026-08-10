@@ -180,17 +180,17 @@ impl Skill for PromptBasedSkill {
                     Ok(Err(e)) => {
                         let err_str = e.to_string();
                         // Detect rate limiting (HTTP 429, "rate limit", "too many requests")
-                        let is_rate_limit = err_str.to_lowercase().contains("429")
-                            || err_str.to_lowercase().contains("rate limit")
-                            || err_str.to_lowercase().contains("too many requests")
-                            || err_str.to_lowercase().contains("retry after");
+                        // via the shared canonical detector.
+                        let is_rate_limit = crate::agents::agent::is_rate_limit_error(&err_str);
 
                         if is_rate_limit {
                             // Exponential backoff for rate limits: 1s, 2s, 4s, ...
-                            let backoff_secs = 1u64 << (attempt - 1); // 1, 2, 4, 8...
-                            let backoff = std::time::Duration::from_secs(
-                                backoff_secs.min(30), // Cap at 30 seconds
+                            // using the shared canonical schedule (capped at 10s,
+                            // matching the declared max_delay_ms: 10_000 contract).
+                            let backoff_secs = crate::agents::agent::retry_backoff_secs(
+                                attempt.saturating_sub(1) as u32,
                             );
+                            let backoff = std::time::Duration::from_secs(backoff_secs);
                             warn!(
                                 "Prompt skill '{}' rate limited on attempt {}/{}, \
                                  backing off {}s: {}",

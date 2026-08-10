@@ -45,7 +45,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // ── 4. Check health ─────────────────────────────────────────────────
-    let health = client.health().await?;
+    // `runtime.health` (JSON-RPC) emits `version`; `GET /health`
+    // (ServerStatus) does not, so use the RPC variant here.
+    let health = client.runtime_health().await?;
     println!(
         "   ✓ Health: version={} lifecycle={}",
         health.version.as_deref().unwrap_or("unknown"),

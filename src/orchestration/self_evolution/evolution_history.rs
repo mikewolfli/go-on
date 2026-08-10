@@ -205,10 +205,13 @@ impl EvolutionHistory {
     /// history file if it exists.
     ///
     /// # Arguments
-    /// * `base_path` - Root directory where `.goon/evolution/` will be created.
+    /// * `base_path` - Root directory where `evolution/history.ndjson` will be
+    ///   created. Production passes the canonical go-on data dir
+    ///   (`goon_data_dir()`); tests pass a `TempDir`. The path is joined
+    ///   directly (not re-resolved via `goon_subdir`), so it can never be
+    ///   doubly-nested.
     pub async fn new(base_path: PathBuf) -> Self {
-        let history_path =
-            base_path.join(crate::shared::goon_paths::goon_subdir(DEFAULT_HISTORY_PATH));
+        let history_path = base_path.join(DEFAULT_HISTORY_PATH);
         let history = Self {
             history_path,
             entries: Mutex::new(HashMap::new()),

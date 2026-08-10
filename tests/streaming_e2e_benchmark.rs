@@ -6,13 +6,16 @@
 /// - time_to_complete_ms (TTC)
 /// - stream_interrupt_latency_ms
 ///
-/// Tested modes: GUI mode, VSCode mode, pure HTTP mode
-/// Records 3 server profiles differences.
+/// The benchmark spawns go-on once (uniform spawn — no mode-specific
+/// environment variables; the fictional GUI/VSCode/HTTP "mode" split and the
+/// GO_ON_MODE/GO_ON_STREAMING variables were removed because no production
+/// code reads them) and drives the real JSON-RPC streaming path.
 /// Regression detection: TTFT p50 > baseline × 1.5
 ///
 /// NOTE: This test requires a live LLM server with streaming capabilities.
-/// It takes ~9 minutes when a server is available.
-/// If no server is detected at 127.0.0.1:8090, the test soft-skips.
+/// It takes several minutes when a server is available.
+/// If no server is detected at 127.0.0.1:8090, it prints a skip notice and
+/// returns so CI is not blocked.
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -49,8 +52,8 @@ struct BenchHarness {
 }
 
 impl BenchHarness {
-    /// Spawn the go-on binary in streaming mode.
-    fn spawn(mode: &str) -> Self {
+    /// Spawn the go-on binary in streaming mode (uniform spawn for all runs).
+    fn spawn() -> Self {
         let _suite_guard = match suite_guard().lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -61,8 +64,6 @@ impl BenchHarness {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .env("GO_ON_MODE", mode)
-            .env("GO_ON_STREAMING", "1")
             .env("RUST_LOG", "warn")
             .spawn()
             .expect("failed to spawn go-on");
@@ -315,35 +316,8 @@ fn check_regression(label: &str, percentiles: &Percentiles) -> Vec<String> {
     regressions
 }
 
-// ── Test modes ────────────────────────────────────────────────────────────
+// ── Benchmarks ────────────────────────────────────────────────────────────
 
-/// Test modes: GUI, VSCode, pure HTTP
-#[derive(Debug, Clone, Copy)]
-enum BenchMode {
-    Gui,
-    Vscode,
-    Http,
-}
-
-impl BenchMode {
-    fn env_value(&self) -> &'static str {
-        match self {
-            Self::Gui => "gui",
-            Self::Vscode => "vscode",
-            Self::Http => "http",
-        }
-    }
-
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Gui => "GUI mode",
-            Self::Vscode => "VSCode mode",
-            Self::Http => "HTTP mode",
-        }
-    }
-}
-
-const ALL_MODES: [BenchMode; 3] = [BenchMode::Gui, BenchMode::Vscode, BenchMode::Http];
 const PROMPTS: &[&str] = &[
     "Hello, what is 2+2?",
     "Write a short poem about coding.",
@@ -352,36 +326,30 @@ const PROMPTS: &[&str] = &[
     "List 3 benefits of unit testing.",
 ];
 
-/// Run all benchmarks and return results per mode.
-fn run_benchmarks() -> BTreeMap<String, Vec<StreamBenchResult>> {
-    let mut all_results: BTreeMap<String, Vec<StreamBenchResult>> = BTreeMap::new();
+/// Run all benchmarks against a single uniformly-spawned instance and return
+/// the results.
+fn run_benchmarks() -> Vec<StreamBenchResult> {
+    let mut results = Vec::new();
 
-    for mode in &ALL_MODES {
-        let label = mode.label().to_string();
-        let mut mode_results = Vec::new();
+    eprintln!("  [bench] starting streaming runs...");
 
-        eprintln!("  [bench] starting {}...", label);
+    let mut harness = BenchHarness::spawn();
 
-        let mut harness = BenchHarness::spawn(mode.env_value());
+    // Warmup
+    let _ = bench_stream(&mut harness, "Warmup: ignore this.");
+    eprintln!("  [bench] warmup complete");
 
-        // Warmup
-        let _ = bench_stream(&mut harness, "Warmup: ignore this.");
-        eprintln!("  [bench] {} warmup complete", label);
-
-        // Bench runs
-        for prompt in PROMPTS {
-            let result = bench_stream(&mut harness, prompt);
-            mode_results.push(result);
-        }
-
-        harness.kill();
-
-        let runs_count = mode_results.len();
-        all_results.insert(label.clone(), mode_results);
-        eprintln!("  [bench] {} complete ({} runs)", label, runs_count);
+    // Bench runs
+    for prompt in PROMPTS {
+        let result = bench_stream(&mut harness, prompt);
+        results.push(result);
     }
 
-    all_results
+    harness.kill();
+
+    eprintln!("  [bench] complete ({} runs)", results.len());
+
+    results
 }
 
 // ---------------------------------------------------------------------------
@@ -389,17 +357,21 @@ fn run_benchmarks() -> BTreeMap<String, Vec<StreamBenchResult>> {
 // ---------------------------------------------------------------------------
 
 /// This benchmark requires a live LLM server at `127.0.0.1:8090`.
-/// Silently skips when the server is not available so CI is not blocked.
+/// When the server is not available it prints an explicit skip notice and
+/// returns so CI is not blocked.
 #[test]
 fn streaming_e2e_benchmark() {
-    // Quick health check: skip gracefully if server is not reachable
+    // Quick health check: skip (with a visible reason) if server is unreachable.
     let server_available = TcpStream::connect_timeout(
         &"127.0.0.1:8090".parse().expect("valid socket addr"),
         std::time::Duration::from_secs(2),
     )
     .is_ok();
     if !server_available {
-        eprintln!("SKIP: LLM server not detected at 127.0.0.1:8090");
+        eprintln!(
+            "SKIP: streaming_e2e_benchmark — LLM server not detected at 127.0.0.1:8090; \
+             the benchmark requires a live streaming-capable server."
+        );
         return;
     }
     eprintln!("╔═══════════════════════════════════════════════════════════╗");
@@ -407,45 +379,41 @@ fn streaming_e2e_benchmark() {
     eprintln!("╚═══════════════════════════════════════════════════════════╝");
     eprintln!();
 
-    let all_results = run_benchmarks();
+    let results = run_benchmarks();
 
     let mut summary: Vec<String> = Vec::new();
     let mut total_regressions = 0;
 
-    for (label, results) in &all_results {
-        eprintln!("── {} ──", label);
-        let agg = aggregate_results(results);
+    eprintln!("── streaming ──");
+    let agg = aggregate_results(&results);
 
-        for (metric, p) in &agg {
-            eprintln!(
-                "  {:<30} p50={:>8.1}  p95={:>8.1}  p99={:>8.1}  (n={})",
-                metric, p.p50, p.p95, p.p99, p.count
-            );
-
-            let regressions = check_regression(&format!("{} / {}", label, metric), p);
-            for r in &regressions {
-                eprintln!("  {}", r);
-                summary.push(r.clone());
-                total_regressions += 1;
-            }
-        }
-        eprintln!();
-    }
-
-    // Print profiles summary
-    eprintln!("── Server Profiles ──");
-    for (label, results) in &all_results {
-        let ttft: Vec<f64> = results.iter().map(|r| r.time_to_first_token_ms).collect();
-        let ttc: Vec<f64> = results.iter().map(|r| r.time_to_complete_ms).collect();
-        let tps: Vec<f64> = results.iter().map(|r| r.tokens_per_second).collect();
-        let avg_ttft = ttft.iter().sum::<f64>() / ttft.len() as f64;
-        let avg_ttc = ttc.iter().sum::<f64>() / ttc.len() as f64;
-        let avg_tps = tps.iter().sum::<f64>() / tps.len() as f64;
+    for (metric, p) in &agg {
         eprintln!(
-            "  {:<20} TTFT avg={:>8.1}ms  TTC avg={:>8.1}ms  TPS avg={:>8.1}",
-            label, avg_ttft, avg_ttc, avg_tps
+            "  {:<30} p50={:>8.1}  p95={:>8.1}  p99={:>8.1}  (n={})",
+            metric, p.p50, p.p95, p.p99, p.count
         );
+
+        let regressions = check_regression(&format!("streaming / {metric}"), p);
+        for r in &regressions {
+            eprintln!("  {}", r);
+            summary.push(r.clone());
+            total_regressions += 1;
+        }
     }
+    eprintln!();
+
+    // Print the single-run summary
+    eprintln!("── Run Summary ──");
+    let ttft: Vec<f64> = results.iter().map(|r| r.time_to_first_token_ms).collect();
+    let ttc: Vec<f64> = results.iter().map(|r| r.time_to_complete_ms).collect();
+    let tps: Vec<f64> = results.iter().map(|r| r.tokens_per_second).collect();
+    let avg_ttft = ttft.iter().sum::<f64>() / ttft.len() as f64;
+    let avg_ttc = ttc.iter().sum::<f64>() / ttc.len() as f64;
+    let avg_tps = tps.iter().sum::<f64>() / tps.len() as f64;
+    eprintln!(
+        "  {:<20} TTFT avg={:>8.1}ms  TTC avg={:>8.1}ms  TPS avg={:>8.1}",
+        "streaming", avg_ttft, avg_ttc, avg_tps
+    );
     eprintln!();
 
     // Report regressions

@@ -92,19 +92,30 @@ fn test_cli_chat_flag_parses() {
 }
 
 #[test]
-fn test_cli_config_validation_rejects_missing_config() {
-    // Running without a config file should produce a helpful message,
-    // but the binary should not panic.
-    let (stdout, stderr, status) = run_cli(&["--validate-config", "--config", "/nonexistent/path"]);
-    if !status.success() {
-        assert!(
-            stderr.contains("error")
-                || stderr.contains("not found")
-                || stdout.contains("error")
-                || stdout.contains("not found"),
-            "Expected a helpful error message about missing config, stderr: {stderr}, stdout: {stdout}"
-        );
-    }
+fn test_cli_config_validation_bootstraps_missing_config() {
+    // The CLI does not reject a missing config file: it writes non-AI
+    // bootstrap defaults to the path and validates them (see
+    // `defaults::ensure_bootstrap_config`). Assert that real behavior
+    // unconditionally — no conditional assertion that can vacate itself.
+    let missing =
+        std::env::temp_dir().join(format!("go-on-missing-config-{}.toml", std::process::id()));
+    let _ = std::fs::remove_file(&missing);
+    let missing_str = missing.to_str().expect("temp path is valid UTF-8");
+    let (stdout, stderr, status) = run_cli(&["--validate-config", "--config", missing_str]);
+
+    assert!(
+        status.success(),
+        "missing config must be bootstrapped and validate cleanly, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("Valid: true"),
+        "validation report must declare the bootstrapped config valid, stdout: {stdout}"
+    );
+    assert!(
+        missing.exists(),
+        "the missing config path must be populated with bootstrap defaults"
+    );
+    let _ = std::fs::remove_file(&missing);
 }
 
 #[test]

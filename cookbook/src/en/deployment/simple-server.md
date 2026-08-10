@@ -318,8 +318,8 @@ cors_allowed_origins = ["https://your-domain.com"]
 ## Monitoring and Logging
 
 ### Logging
-Set the log level via the `RUST_LOG` environment variable (or `--verbose`); there
-is no `[logging]` section. Logs go to stderr and can be redirected by systemd or
+Set the log level via the `RUST_LOG` environment variable; there
+is no `[logging]` section and no `--verbose` flag. Logs go to stderr and can be redirected by systemd or
 a log manager.
 
 ### Metrics Collection

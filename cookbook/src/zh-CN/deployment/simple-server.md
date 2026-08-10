@@ -312,7 +312,7 @@ cors_allowed_origins = ["https://your-domain.com"]
 ## 监控和日志
 
 ### 日志
-通过 `RUST_LOG` 环境变量（或 `--verbose`）设置日志级别；不存在 `[logging]` 段。
+通过 `RUST_LOG` 环境变量设置日志级别；不存在 `[logging]` 段，也没有 `--verbose` 标志。
 日志输出到 stderr，可由 systemd 或日志管理器重定向。
 
 ### 指标收集

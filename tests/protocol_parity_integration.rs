@@ -1,19 +1,23 @@
-//! BLUE43 Step 19 — ACP/CLI/MCP three-entry unified comparison
+//! BLUE43 Step 19 — ACP/MCP two-entry unified comparison
 //!
-//! Runs the same scenario (initialize/tools/list/tools/call) through all three
-//! protocol routes and asserts that `stop_reason` and round counts are
-//! consistent across all paths.
+//! Runs the same scenario (initialize/tools/list/tools/call) through the two
+//! stdio protocol routes and asserts that `stop_reason` and round counts are
+//! consistent across both paths.
 //!
 //! Architecture:
 //!   - ACP stdio: JSON-RPC over stdin/stdout
-//!   - CLI:       terminal chat mode (simulated via `--chat --non-interactive`)
 //!   - MCP stdio: JSON-RPC over stdin/stdout (MCP variant)
+//!
+//! CLI coverage lives in `tests/cli_tests.rs` (flag parsing, config
+//! validation, chat-mode flag) — the CLI is not driven over stdio here
+//! because the `--chat` terminal mode is interactive and has no
+//! non-interactive mode.
 //!
 //! NOTE: the ACP/MCP `initialize` + `tools/list` shape assertions here overlap
 //! with `protocol_consistency_integration.rs`. Both files are intentionally
 //! kept: they use different harnesses (this file spawns one child per protocol
 //! mode via `StdioHarness`) and each carries unique assertions (tool-name
-//! overlap, tool-count subset, three-route contract).
+//! overlap, tool-count subset, two-route contract).
 
 use std::fs;
 use std::io::{BufRead, Write};
@@ -343,11 +347,11 @@ fn acp_and_mcp_tool_names_overlap() {
     }
 }
 
-/// Three-entry unified contract: initialize results across ACP, CLI, and MCP
-/// all follow a success shape (result present, error absent), proving that
-/// the same semantic contract is upheld across all three protocol routes.
+/// Two-entry unified contract: initialize results across ACP and MCP both
+/// follow a success shape (result present, error absent), proving that
+/// the same semantic contract is upheld across both protocol routes.
 #[test]
-fn three_route_initialize_contract_consistent() {
+fn two_route_initialize_contract_consistent() {
     let tmp = tempdir().unwrap();
 
     // --- ACP initialize ---

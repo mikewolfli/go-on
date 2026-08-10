@@ -141,38 +141,87 @@ async fn test_self_evolution_error_path_no_triggers() {
 
     // ── 3. Analyze ─────────────────────────────────────────────────────
     let analysis = make_analysis(trigger);
-    assert_eq!(
-        analysis.root_cause,
-        "latency_spike: downstream service timeout"
+    // The production constructor generates the id/timestamp — not echoed
+    // from caller-provided constants — so assert those real side effects.
+    assert!(
+        !analysis.analysis_id.is_nil(),
+        "analysis must carry a generated id"
     );
-    assert!(!analysis.relevant_files.is_empty());
-    assert_eq!(analysis.risk_level, "medium");
+    assert!(
+        analysis.timestamp_ms > 0,
+        "analysis must record a real timestamp"
+    );
 
     // ── 4. Propose (simulated approval) ────────────────────────────────
     let approval = Approval::approved("e2e-tester".into(), Some("Approved for sandbox".into()));
+    // is_approved() reflects the real status derived from the constructor.
     assert!(approval.is_approved());
-    assert_eq!(approval.by, "e2e-tester");
+    assert!(
+        approval.timestamp_ms > 0,
+        "approval must record a real timestamp"
+    );
 
-    // ── 5. Sandbox (apply a trivial patch) ─────────────────────────────
+    // ── 5. Sandbox (apply a real patch to a real file) ─────────────────
     use go_on::orchestration::self_evolution::sandbox::CodePatch;
+    let target = ctx.workdir.join("src/lib.rs");
+    std::fs::create_dir_all(ctx.workdir.join("src")).expect("create src dir");
+    std::fs::write(&target, "// original\n").expect("write target file");
     let patch = CodePatch::new(
         "src/lib.rs".into(),
         vec![(1, "// original".into())],
         vec![(1, "// patched".into())],
         "e2e test patch".into(),
     );
-    assert!(patch.patch_id.is_some());
-    assert!(!patch.diff.is_empty());
+    // The constructor generates a patch id and derives the diff from the
+    // original/patched lines — both are production behavior.
+    assert!(
+        patch.patch_id.is_some(),
+        "constructor must generate a patch id"
+    );
+    assert!(
+        !patch.diff.is_empty(),
+        "diff must be derived for a real change"
+    );
+    assert!(
+        patch.diff.contains("-// original"),
+        "diff must contain removal"
+    );
+    assert!(
+        patch.diff.contains("+// patched"),
+        "diff must contain insertion"
+    );
 
-    // ── 6. Compile via sandbox builder ─────────────────────────────────
-    // Real build would call sandbox.build("check"). Here we validate
-    // the BuildResult variants.
+    // Apply the patch through the production API and verify the on-disk
+    // content actually changed.
+    let changed = patch
+        .apply_to_file(&ctx.workdir)
+        .await
+        .expect("patch must apply");
+    assert_eq!(changed, 1, "one line must be changed");
+    let after = std::fs::read_to_string(&target).expect("read patched file");
+    assert!(
+        after.contains("// patched"),
+        "patched content must be on disk, got: {after:?}"
+    );
+    assert!(
+        !after.contains("// original"),
+        "original line must be replaced, got: {after:?}"
+    );
+
+    // ── 6. BuildResult semantics ───────────────────────────────────────
+    // The variant constructors and their semantic accessors (is_success /
+    // time_ms / summary) are production API; no caller-provided constants
+    // are read back here.
     let build_success = BuildResult::Success {
-        warnings: 0,
+        warnings: 1,
         time_ms: 42,
     };
     assert!(build_success.is_success());
-    assert_eq!(build_success.time_ms(), 42);
+    assert!(
+        build_success.summary().contains("SUCCESS"),
+        "summary must label success, got: {}",
+        build_success.summary()
+    );
 
     let build_fail = BuildResult::CompileError {
         errors: 3,
@@ -182,7 +231,13 @@ async fn test_self_evolution_error_path_no_triggers() {
         ],
     };
     assert!(!build_fail.is_success());
+    // time_ms() is documented as 0 for non-Success variants (no timing data).
     assert_eq!(build_fail.time_ms(), 0);
+    assert!(build_fail.summary().contains("COMPILE ERROR"));
+    assert!(
+        build_fail.summary().contains("error[E0308]"),
+        "summary must embed the captured error lines"
+    );
 
     let build_test_fail = BuildResult::TestFailure {
         failed: 2,
@@ -190,6 +245,7 @@ async fn test_self_evolution_error_path_no_triggers() {
     };
     assert!(!build_test_fail.is_success());
     assert_eq!(build_test_fail.time_ms(), 0);
+    assert!(build_test_fail.summary().contains("TEST FAILURE"));
 
     // ── 7. Submit & Rollback ───────────────────────────────────────────
     // Real submission uses git commit/deploy. Validate the approval
@@ -199,7 +255,6 @@ async fn test_self_evolution_error_path_no_triggers() {
         Some("auto-rollback on health check failure".into()),
     );
     assert!(rollback.is_approved());
-    assert_eq!(rollback.by, "rollback-agent");
 
     // Verify rejected approval.
     let rejected = Approval::rejected("tester".into(), Some("changes too risky".into()));

@@ -47,6 +47,9 @@ pub struct GovernanceSubsystems {
     pub runtime_controls: bool,
     pub audit: bool,
     pub voting: bool,
+    /// Drift detection engine health (independent slot — previously the drift
+    /// counter was (wrongly) used to judge the audit subsystem).
+    pub drift: bool,
 }
 
 impl Default for GovernanceSubsystems {
@@ -58,6 +61,7 @@ impl Default for GovernanceSubsystems {
             runtime_controls: true,
             audit: true,
             voting: true,
+            drift: true,
         }
     }
 }
@@ -91,8 +95,17 @@ impl GovernanceStatus {
         if profile.hardening_events > 50 {
             status.mark_degraded("runtime_controls");
         }
-        if profile.drift_detections > 50 {
+        // Audit health comes from a real audit signal — entries dropped by the
+        // audit log due to buffer overflow (data loss). Previously this slot
+        // used `drift_detections`, which is a drift-engine counter and judged
+        // the wrong subsystem.
+        if profile.audit_dropped_entries > 0 {
             status.mark_degraded("audit");
+        }
+        // Independent drift-subsystem slot, fed by the drift engine's own
+        // detection counter.
+        if profile.drift_detections > 50 {
+            status.mark_degraded("drift");
         }
         if profile.review_overrides > 20 {
             status.mark_degraded("voting");
@@ -110,6 +123,7 @@ impl GovernanceStatus {
             "runtime_controls" => self.subsystems.runtime_controls = false,
             "audit" => self.subsystems.audit = false,
             "voting" => self.subsystems.voting = false,
+            "drift" => self.subsystems.drift = false,
             _ => {}
         }
         self.healthy = self.subsystems.rationalization
@@ -117,7 +131,8 @@ impl GovernanceStatus {
             && self.subsystems.rbac
             && self.subsystems.runtime_controls
             && self.subsystems.audit
-            && self.subsystems.voting;
+            && self.subsystems.voting
+            && self.subsystems.drift;
     }
 }
 
@@ -543,6 +558,46 @@ fn extract_path(args: &Value) -> Option<&str> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Audit health must come from a real audit signal (dropped entries), not
+    /// the drift counter; drift gets its own independent slot.
+    #[test]
+    fn test_status_audit_signal_and_drift_slot() {
+        let mut profile = crate::governance::harness_bus::PuaGovernanceProfile::default();
+        let healthy = GovernanceStatus::current(&profile);
+        assert!(healthy.healthy);
+
+        // Many drift detections degrade the drift slot only — audit stays
+        // healthy (previously this mis-marked audit degraded).
+        for _ in 0..60 {
+            profile.record_drift_detection();
+        }
+        let status = GovernanceStatus::current(&profile);
+        assert!(!status.subsystems.drift, "drift slot should degrade");
+        assert!(status.subsystems.audit, "audit should stay healthy");
+        assert!(!status.healthy, "overall health should reflect drift");
+
+        // Dropped audit entries (buffer overflow → data loss) degrade audit.
+        let profile = crate::governance::harness_bus::PuaGovernanceProfile {
+            audit_dropped_entries: 1,
+            ..Default::default()
+        };
+        let status = GovernanceStatus::current(&profile);
+        assert!(!status.subsystems.audit, "audit should degrade on drops");
+        assert!(status.subsystems.drift, "drift stays healthy here");
+
+        // A plain high audit_entries_total (normal activity) is NOT degradation.
+        let profile = crate::governance::harness_bus::PuaGovernanceProfile {
+            audit_entries_total: 10_000,
+            ..Default::default()
+        };
+        let status = GovernanceStatus::current(&profile);
+        assert!(
+            status.subsystems.audit,
+            "high entry count is not degradation"
+        );
+        assert!(status.healthy);
+    }
 
     #[test]
     fn test_known_tool_read_allowed() {

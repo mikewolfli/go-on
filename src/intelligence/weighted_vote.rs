@@ -210,8 +210,10 @@ pub fn format_debate_history(round_votes: &HashMap<String, Vote>) -> String {
 /// Run a full Delphi-method debate across multiple rounds.
 ///
 /// In round 0, each agent votes independently based on the question.
-/// In subsequent rounds, agents see the anonymized (by agent name) reasoning
-/// of all other agents from the previous round, and may update their vote.
+/// In subsequent rounds, agents see the attributed reasoning of all other
+/// agents from the previous round (`format_debate_history` tags each entry
+/// with the voting agent's name — the debate is deliberately NOT anonymized),
+/// and may update their vote.
 ///
 /// After each round, convergence is checked. If converged, the debate ends
 /// early. At the end, a final weighted vote is computed.

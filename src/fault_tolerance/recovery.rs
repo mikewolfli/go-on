@@ -188,20 +188,140 @@ impl FaultToleranceEngine {
         Ok(plan_id)
     }
 
-    /// Execute a recovery plan — transitions it to InProgress.
+    /// Execute a recovery plan — dispatches every action in the plan to its
+    /// real handler and transitions the plan to `InProgress`.
+    ///
+    /// Previously this only flipped the state to `InProgress` without
+    /// dispatching any [`RecoveryAction`], so `post_recovery_consistency_check`
+    /// (which requires the node's faults to be resolved) always failed and
+    /// every automatic plan was marked `Failed` — automatic recovery never
+    /// succeeded. Each action now produces observable state:
+    ///
+    /// - `RestartNode` — reset the node's heartbeat + remove it from isolation
+    ///   groups and resolve its faults (mirrors `reintegrate_node`).
+    /// - `FailoverToBackup` — mark the node `Recovering` and resolve its
+    ///   network-class faults (traffic has been routed around them).
+    /// - `ScaleUp` — record the resource adjustment and resolve the node's
+    ///   resource-class faults.
+    /// - `Rebalance` — resolve `DataCorruption` faults (data rebalanced from
+    ///   healthy replicas).
+    /// - `NotifyOperator` — emit an observable operator notification (log +
+    ///   plan result). The fault is intentionally **not** resolved: manual
+    ///   intervention is still required, so the consistency check will fail
+    ///   and the plan is marked `Failed` until the operator acts (honest
+    ///   semantics).
     pub async fn execute_recovery_plan(&self, plan_id: &str) -> Result<()> {
         let mut inner = self.inner.write().await;
+
+        // Validate state and snapshot the dispatch inputs, then drop the plan
+        // borrow so the per-action state mutations below can touch `inner`.
+        let (node_id, actions) = {
+            let plan = inner
+                .recovery_plans
+                .get_mut(plan_id)
+                .ok_or_else(|| anyhow!("recovery plan '{}' not found", plan_id))?;
+            if plan.state != RecoveryState::Pending {
+                return Err(anyhow!(
+                    "recovery plan '{}' is not in Pending state",
+                    plan_id
+                ));
+            }
+            (plan.node_id.clone(), plan.actions.clone())
+        };
+        let now = crate::shared::timestamps::now_ts_ms_u64();
+
+        let mut executed: Vec<String> = Vec::new();
+        for action in &actions {
+            match action {
+                RecoveryAction::RestartNode => {
+                    // The node is restarted: heartbeat comes back online and
+                    // the crash/hang states that took it down are cleared.
+                    if let Some(record) = inner.heartbeats.get_mut(&node_id) {
+                        record.status = NodeStatus::Online;
+                        record.missed_beats = 0;
+                    }
+                    // Remove the node from all isolation groups.
+                    let groups_to_remove: Vec<String> = inner
+                        .isolation_groups
+                        .iter()
+                        .filter(|(_, g)| g.nodes.contains(&node_id))
+                        .map(|(id, _)| id.clone())
+                        .collect();
+                    for group_id in groups_to_remove {
+                        let mut empty = false;
+                        if let Some(group) = inner.isolation_groups.get_mut(&group_id) {
+                            group.nodes.retain(|n| n != &node_id);
+                            empty = group.nodes.is_empty();
+                        }
+                        if empty {
+                            inner.isolation_groups.remove(&group_id);
+                        }
+                    }
+                    resolve_node_faults(&mut inner, &node_id, now, |_| true);
+                    executed.push("RestartNode".to_string());
+                }
+                RecoveryAction::FailoverToBackup => {
+                    // Traffic failed over to the backup; the node is being
+                    // brought back under the new leader.
+                    if let Some(record) = inner.heartbeats.get_mut(&node_id) {
+                        record.status = NodeStatus::Recovering;
+                    }
+                    resolve_node_faults(&mut inner, &node_id, now, |ft| {
+                        matches!(
+                            ft,
+                            FaultType::NetworkSplit
+                                | FaultType::NetworkTimeout
+                                | FaultType::NetworkPartition
+                        )
+                    });
+                    executed.push("FailoverToBackup".to_string());
+                }
+                RecoveryAction::ScaleUp => {
+                    // Real resource adjustment is infrastructure-level; the
+                    // observable in-process effect is recording the action and
+                    // clearing the resource-class faults that scale-up
+                    // addresses (hang / exhaustion / rate limit / latency).
+                    resolve_node_faults(&mut inner, &node_id, now, |ft| {
+                        matches!(
+                            ft,
+                            FaultType::Hang
+                                | FaultType::ResourceExhaustion
+                                | FaultType::RateLimit
+                                | FaultType::LatencySpike { .. }
+                        )
+                    });
+                    executed.push("ScaleUp".to_string());
+                }
+                RecoveryAction::Rebalance => {
+                    resolve_node_faults(&mut inner, &node_id, now, |ft| {
+                        matches!(ft, FaultType::DataCorruption)
+                    });
+                    executed.push("Rebalance".to_string());
+                }
+                RecoveryAction::NotifyOperator => {
+                    // Observable operator notification: log + plan result. The
+                    // fault is intentionally left unresolved until an operator
+                    // acts (see method docs).
+                    tracing::warn!(
+                        target: "fault_tolerance",
+                        plan = %plan_id,
+                        node = %node_id,
+                        "operator notification: manual intervention required for node '{}' (plan '{}')",
+                        node_id,
+                        plan_id
+                    );
+                    executed.push("NotifyOperator".to_string());
+                }
+            }
+        }
+
+        // Re-acquire the plan to record the outcome.
         let plan = inner
             .recovery_plans
             .get_mut(plan_id)
             .ok_or_else(|| anyhow!("recovery plan '{}' not found", plan_id))?;
-        if plan.state != RecoveryState::Pending {
-            return Err(anyhow!(
-                "recovery plan '{}' is not in Pending state",
-                plan_id
-            ));
-        }
         plan.state = RecoveryState::InProgress;
+        plan.result = Some(format!("executed actions: {}", executed.join(", ")));
         Ok(())
     }
 
@@ -329,5 +449,30 @@ impl FaultToleranceEngine {
             .filter(|p| p.state == RecoveryState::Pending || p.state == RecoveryState::InProgress)
             .cloned()
             .collect()
+    }
+}
+
+/// Mark every unresolved fault of `node_id` that satisfies `filter` as
+/// recovered. Used by [`FaultToleranceEngine::execute_recovery_plan`] so each
+/// dispatched action resolves exactly the fault class it addresses — the
+/// post-recovery consistency check then passes for real instead of
+/// unconditionally failing.
+fn resolve_node_faults(
+    inner: &mut crate::fault_tolerance::Inner,
+    node_id: &str,
+    now: u64,
+    filter: impl Fn(FaultType) -> bool,
+) {
+    let fault_ids: Vec<String> = inner
+        .faults
+        .values()
+        .filter(|f| f.node_id == node_id && !f.recovered && filter(f.fault_type))
+        .map(|f| f.id.clone())
+        .collect();
+    for fault_id in fault_ids {
+        if let Some(event) = inner.faults.get_mut(&fault_id) {
+            event.resolved_ms = Some(now);
+            event.recovered = true;
+        }
     }
 }

@@ -37,7 +37,7 @@ go-on is a **local-first**, production-grade **AI agent orchestration runtime** 
 - 🔌 Connect AI models to MCP servers or act as an MCP server yourself
 - 🛡️ Enforce governance policies with RBAC, audit trails, and risk assessment
 - 📊 Monitor sub-agent executions and command outputs in real-time via SSE panels
-- 🧩 Extend via VS Code extension, Skill Marketplace (33 skills), or Rust/Python/TypeScript SDK
+- 🧩 Extend via VS Code extension, Skill Marketplace (34 skills), or Rust/Python/TypeScript SDK
 
 ## Quick Start
 
@@ -88,8 +88,7 @@ Default health endpoint: `http://127.0.0.1:8090/health`
 - **Autonomous agent loop** — Plan → Execute → Reflect → Replan, with complexity-adaptive iteration
 - **Sub-agent monitoring** — Real-time SSE panels for sub-agent execution and command output in the GUI
 - **DAG task execution** — Kahn topological sort, dependency edges, parallel group execution, cycle detection
-- **Full-auto flow** — Parse intent → discover skills → prepare environment → execute → report
-- **Fast path cache** — SHA-256 fingerprint, TTL/LRU eviction, 4-tier caching (intent/skill/env/route)
+- **Workflow/task execution** — `workflow.execute` / `task.execute` with requirement gates, deterministic reviews, and an autonomous repair loop
 - **Multi-model voter** — Concurrent agent voting for high-stakes decisions (majority/weighted/unanimous/fusion)
 
 ### AI Provider Support (37)
@@ -107,7 +106,6 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 ### Tool System
 - **60+ built-in tools** — read/write/search/apply_patch/run_tests/inspect_git_diff/shell_exec/http_request/grep/find/git/cargo_check/cargo_test/list_directory/file_move/file_delete/compress/decompress/date_time/dns_lookup/ping/port_scan/skill_list/skill_execute + CAD/3D/GIS/barcode/SVG/office/image processing + document parsers (PDF/DOCX/PPT/HTML/Markdown/Excel)
 - **Tool pipeline** — serial/parallel/conditional execution with error handling
-- **Tool transactions** — idempotency keys, WAL persistence, compensation actions
 - **Dynamic tool recommendation** — pattern + recency + co-occurrence based suggestions
 - **Mode-based tool restrictions** — allowed_tools and max_tool_calls enforced per mode
 
@@ -123,13 +121,11 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 
 ### Performance
 - **Fast sub-second startup** — Reduced redundant SQLite initialization; HTTP server binds port in seconds
-- **FastPathCache** — sub-millisecond cache lookup for repeated queries
 - **SSE buffer pool** — zero-allocation streaming event serialization
-- **Cache warming** — predictive pre-warming with adaptive TTL
 - **DAG Join timeout** — prevents single slow tool from stalling the pipeline
 
 ### Resilience
-- **Recovery orchestrator** — 6 strategies: Retry → Reroute → Replan → Repair → Escalate → Degrade
+- **Fault-tolerance recovery** — 5 real recovery actions (RestartNode, FailoverToBackup, ScaleUp, Rebalance, NotifyOperator) dispatched by `FaultToleranceEngine`
 - **Chaos testing** — 10 fault injection types (timeout, partition, crash, corruption, rate-limit)
 - **HyperResilience** — circuit breaker state machine, failover groups, self-healing
 - **Hot failover** — primary-to-fallback model switching with blacklist cooldown
@@ -160,8 +156,8 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **OTel** — distributed tracing via OTLP collector (default: `localhost:4317`)
 - **Trilingual i18n** — English, Simplified Chinese, Traditional Chinese (~95% coverage across backend, GUI, VS Code)
 
-### Skill Marketplace (33 skills)
-- **Marketplace catalog**: 33 built-in skill entries — code-reviewer, commit-message-generator, refactoring-advisor, test-generator, api-docs-generator, changelog-generator, ci-pipeline-generator, context-summarizer, data-transformer, decision-logger, dependency-analyzer, dockerfile-generator, error-recovery-planner, knowledge-retriever, log-analyzer, progress-tracker, prompt-optimizer, regex-builder, self-reviewer, skill-creator, sql-query-helper, task-planner, web-scraper, code-execution-sandbox, project-analyzer, api-tester, semantic-diff, note-taking, classify-text, summarize-text, translate-text, review-pr, embed-text + more
+### Skill Marketplace (34 skills)
+- **Marketplace catalog**: 34 built-in skill entries — api-docs-generator, api-tester, architecture-diagrammer, changelog-generator, ci-pipeline-generator, classify-text, code-execution-sandbox, code-review, context-summarizer, data-pipeline-optimizer, data-transformer, dockerfile-generator, env-config-validator, error-recovery-planner, knowledge-retriever, log-analyzer, note-taking, performance-analyzer, progress-tracker, project-analyzer, prompt-optimizer, refactoring-advisor, regex-builder, security-auditor, self-reviewer, semantic-diff, skill-creator, sql-query-helper, summarize-text, task-planner, test-generator, translate-text, web-scraper, workflow-optimizer (list matches the `skills/` directory; several entries are merged display names, e.g. analyze-text←classify-text, conventional-commits-toolkit←changelog-generator)
 - **Import from GitHub/URL/local** — SkillImportStore fetches and validates SKILL.md manifests
 - **Auto-discovery** — `~/.agents/skills/` directory scanned on startup
 
@@ -290,7 +286,7 @@ npm run compile
 | SDK (Rust + Python + TypeScript) LOC | ~4K |
 | Built-in tools | 60+ |
 | AI providers | 37 |
-| Skills in marketplace | 33 |
+| Skills in marketplace | 34 |
 | Unit tests | ~1.7K (1,590 lib + 139 integration; see Verification below) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 

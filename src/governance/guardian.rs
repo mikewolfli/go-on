@@ -24,7 +24,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
-use crate::agent::{Agent, AgentRegistry, Message};
+use crate::agent::{Agent, Message};
 use crate::orchestration::autonomy_runtime::TOKEN_THINKING_PREFIX;
 use crate::orchestration::tool::ToolInput;
 
@@ -151,22 +151,12 @@ impl GuardianReviewer {
         }
     }
 
-    /// Create a new GuardianReviewer from an AgentRegistry lookup.
-    ///
-    /// Looks up `agent_name` in the registry. Returns `None` if the agent
-    /// is not found, enabling graceful fallback when the review agent
-    /// is not configured.
-    pub fn from_registry(
-        registry: &AgentRegistry,
-        agent_name: &str,
-        timeout: Option<Duration>,
-    ) -> Option<Self> {
-        registry
-            .get(agent_name)
-            .map(|agent| Self::new(agent, timeout))
-    }
-
     /// Create a new GuardianReviewer with custom circuit breaker config.
+    ///
+    /// NOTE: only used by tests today (custom breaker thresholds for the
+    /// denial-trip scenario); production construction goes through
+    /// [`Self::new`]. Kept as the test-side constructor rather than deleted
+    /// because it exercises the breaker configurability.
     pub fn with_circuit_breaker(
         review_agent: Arc<dyn Agent>,
         max_consecutive_denials: u32,

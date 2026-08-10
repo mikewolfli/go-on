@@ -712,7 +712,13 @@ impl SkillMarketRegistry {
         Ok(items)
     }
 
-    // ── Built-in sample skills (aligned with skills/ directory names) ────
+    // ── Built-in sample skills ────────────────────────────────────────────
+    //
+    // Fallback marketplace entries used only when the remote registry fetch
+    // fails or returns empty. These are curated SAMPLES (names intentionally
+    // overlap with local skills/ dir entries but are a separate data set);
+    // the authoritative local skill inventory lives in skills/ and is loaded
+    // by the SkillRegistry, not here.
 
     fn builtin_skills() -> Vec<SkillMarketItem> {
         vec![

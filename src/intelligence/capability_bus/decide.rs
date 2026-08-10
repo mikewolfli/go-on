@@ -7,11 +7,11 @@
 //! selection logic. (BLUE38 ARCH-13)
 
 use super::core::CapabilityBus;
-use super::core::WorkflowLearningEvent;
 use super::sense::SensingOutput;
 use crate::governance::harness_bus::{AgentExecutionPolicy, PolicyVerdict};
 use crate::governance::pua::TaskContext;
 use crate::intelligence::adaptive_selector::ContextFeatures;
+use crate::intelligence::capability_bus::learning_optimization_bus::LearningEvent;
 
 use serde::Serialize;
 use std::env;
@@ -167,7 +167,7 @@ pub(crate) fn recency_score(recent_agents: &[String], agent_name: &str) -> f64 {
 }
 
 pub(crate) fn recent_outcome_score(
-    events: &[WorkflowLearningEvent],
+    events: &[LearningEvent],
     task: &TaskContext,
     agent_name: &str,
 ) -> f64 {

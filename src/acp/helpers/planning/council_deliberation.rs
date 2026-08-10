@@ -127,9 +127,12 @@ pub(crate) fn run_council_deliberation_and_fallback(
 /// casts a real self-endorsement vote (member votes for itself with nominal
 /// voting power), the proposal is tallied, and the tally fields
 /// (`total_votes`/`option_tallies`/`passed`/`tie`) in the decision payload
-/// reflect that real recorded data. The route itself is still selected by
-/// reputation ranking (the source of truth — the tally cannot decide
-/// between self-endorsements), and vote-accuracy learning is not simulated
+/// reflect that real recorded data. The primary route signal is the
+/// reputation ranking; when two or more candidates share the top reputation
+/// score (a genuine tie), the tally outcome (`winning_option`) decides the
+/// winner — the tally is reputation-weighted via the council's
+/// `effective_voting_power`, so it carries real information even though every
+/// ballot is a self-endorsement. Vote-accuracy learning is not simulated
 /// (`record_vote_accuracy` was removed as unwired).
 fn run_council_route_deliberation(
     cb: &CapabilityBus,
@@ -147,11 +150,23 @@ fn run_council_route_deliberation(
         .unwrap_or(0);
     let proposal_id = format!("route-{}-{}", phase_name, now_ms);
 
-    // Reputation-ranked route selection (source of truth for the winner).
-    let winner = candidate_agents.iter().cloned().max_by(|a, b| {
-        let sa = reputation_scores.get(a).copied().unwrap_or(0.5);
-        let sb = reputation_scores.get(b).copied().unwrap_or(0.5);
-        sa.partial_cmp(&sb)
+    // Reputation-ranked route selection (primary source of truth for the winner).
+    let score_of = |name: &str| reputation_scores.get(name).copied().unwrap_or(0.5);
+    let top_score = candidate_agents
+        .iter()
+        .map(|a| score_of(a))
+        .fold(f64::NEG_INFINITY, f64::max);
+    let reputation_tied: Vec<&String> = candidate_agents
+        .iter()
+        .filter(|a| score_of(a) == top_score)
+        .collect();
+    let reputation_tie = reputation_tied.len() > 1;
+    // Deterministic fallback tiebreak among equal scores: `b.cmp(a)` below
+    // preserves the original `max_by` behavior (alphabetically-earlier name
+    // wins among equal scores).
+    let winner_by_reputation = candidate_agents.iter().cloned().max_by(|a, b| {
+        score_of(a)
+            .partial_cmp(&score_of(b))
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| b.cmp(a))
     })?;
@@ -214,11 +229,12 @@ fn run_council_route_deliberation(
                 "council_deliberation: proposal store full; routing continues with reputation ranking"
             );
             return Some((
-                winner.clone(),
+                winner_by_reputation.clone(),
                 json!({
                     "proposal_id": proposal_id,
-                    "winner": winner,
+                    "winner": winner_by_reputation,
                     "selection": "reputation_ranked",
+                    "reputation_tie": reputation_tie,
                     "tie": false,
                     "passed": false,
                     "total_votes": 0,
@@ -270,12 +286,30 @@ fn run_council_route_deliberation(
         }
     };
 
+    // Route selection. Reputation ranking is the primary signal; when the top
+    // reputation score is shared by several candidates, the tally outcome
+    // genuinely breaks the tie (winning_option is reputation-weighted via
+    // `effective_voting_power`). If the tally has no winner (all-tie or
+    // quorum failure) or its winner is not among the reputation-tied
+    // candidates, fall back to the deterministic reputation tiebreak.
+    let (winner, selection) = if reputation_tie {
+        match vote_result.winning_option.as_deref() {
+            Some(w) if reputation_tied.iter().any(|c| c.as_str() == w) => {
+                (w.to_string(), "council_tally_tiebreak")
+            }
+            _ => (winner_by_reputation.clone(), "reputation_ranked"),
+        }
+    } else {
+        (winner_by_reputation.clone(), "reputation_ranked")
+    };
+
     Some((
         winner.clone(),
         json!({
             "proposal_id": submitted_id,
             "winner": winner,
-            "selection": "reputation_ranked",
+            "selection": selection,
+            "reputation_tie": reputation_tie,
             "tie": vote_result.tie,
             "passed": vote_result.passed,
             "total_votes": vote_result.total_votes,

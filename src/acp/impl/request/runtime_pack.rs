@@ -1296,15 +1296,11 @@ pub(super) async fn handle_provider_configure(
     // ── Persist API key to system keyring ──────────────────────────
     if !api_key.is_empty() {
         let account = format!("{}_api_key", name);
-        match keyring::Entry::new("go-on", &account) {
-            Ok(entry) => {
-                if let Err(e) = entry.set_password(api_key) {
-                    tracing::warn!("failed to save API key for '{}' to keyring: {}", name, e);
-                } else {
-                    ensure_keyring_item_accessible(&account);
-                }
-            }
-            Err(e) => tracing::warn!("failed to open keyring entry for '{}': {}", name, e),
+        // Async wrapper: keyring set_password performs blocking I/O (D-Bus /
+        // Keychain) and must not run on a tokio worker.
+        match crate::shared::secret_override::set_keyring_async("go-on", &account, api_key).await {
+            Ok(()) => ensure_keyring_item_accessible(&account),
+            Err(e) => tracing::warn!("failed to save API key for '{}' to keyring: {}", name, e),
         }
 
         // ── Copilot needs additional secret overrides + keyring entries ──
@@ -1319,19 +1315,19 @@ pub(super) async fn handle_provider_configure(
             // The built-in provider spec uses api_key_env="GITHUB_COPILOT_TOKEN",
             // which setup.rs maps to keyring://go-on/github_copilot_token.
             // Without this entry, CopilotAgent fails with "keyring lookup failed".
-            match keyring::Entry::new("go-on", "github_copilot_token") {
-                Ok(entry) => {
-                    if let Err(e) = entry.set_password(api_key) {
-                        tracing::warn!(
-                                "failed to save Copilot token to keyring account github_copilot_token: {}",
-                                e
-                            );
-                    } else {
-                        ensure_keyring_item_accessible("github_copilot_token");
-                    }
-                }
+            match crate::shared::secret_override::set_keyring_async(
+                "go-on",
+                "github_copilot_token",
+                api_key,
+            )
+            .await
+            {
+                Ok(()) => ensure_keyring_item_accessible("github_copilot_token"),
                 Err(e) => {
-                    tracing::warn!("failed to open keyring entry 'github_copilot_token': {}", e)
+                    tracing::warn!(
+                        "failed to save Copilot token to keyring account github_copilot_token: {}",
+                        e
+                    )
                 }
             }
         }
@@ -1340,15 +1336,10 @@ pub(super) async fn handle_provider_configure(
     // ── Persist secret_key to system keyring (wenxin dual-auth) ────
     if !secret_key.is_empty() {
         let account = format!("{}_secret_key", name);
-        match keyring::Entry::new("go-on", &account) {
-            Ok(entry) => {
-                if let Err(e) = entry.set_password(secret_key) {
-                    tracing::warn!("failed to save secret key for '{}' to keyring: {}", name, e);
-                } else {
-                    ensure_keyring_item_accessible(&account);
-                }
-            }
-            Err(e) => tracing::warn!("failed to open keyring entry for '{}': {}", name, e),
+        match crate::shared::secret_override::set_keyring_async("go-on", &account, secret_key).await
+        {
+            Ok(()) => ensure_keyring_item_accessible(&account),
+            Err(e) => tracing::warn!("failed to save secret key for '{}' to keyring: {}", name, e),
         }
     }
 
@@ -1554,42 +1545,34 @@ pub(super) async fn handle_copilot_device_code_poll(
 
                     // Persist both Copilot keyring aliases for backward/forward compatibility.
                     if !access_token.is_empty() {
-                        match keyring::Entry::new("go-on", "copilot_api_key") {
-                            Ok(entry) => {
-                                if let Err(e) = entry.set_password(access_token) {
-                                    tracing::warn!(
-                                        "failed to save Copilot token to keyring account copilot_api_key: {}",
-                                        e
-                                    );
-                                } else {
-                                    ensure_keyring_item_accessible("copilot_api_key");
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "failed to open keyring for Copilot account copilot_api_key: {}",
-                                    e
-                                );
-                            }
+                        // Async wrapper: keyring set_password performs blocking
+                        // I/O and must not run on a tokio worker.
+                        match crate::shared::secret_override::set_keyring_async(
+                            "go-on",
+                            "copilot_api_key",
+                            access_token,
+                        )
+                        .await
+                        {
+                            Ok(()) => ensure_keyring_item_accessible("copilot_api_key"),
+                            Err(e) => tracing::warn!(
+                                "failed to save Copilot token to keyring account copilot_api_key: {}",
+                                e
+                            ),
                         }
 
-                        match keyring::Entry::new("go-on", "github_copilot_token") {
-                            Ok(entry) => {
-                                if let Err(e) = entry.set_password(access_token) {
-                                    tracing::warn!(
-                                        "failed to save Copilot token to keyring account github_copilot_token: {}",
-                                        e
-                                    );
-                                } else {
-                                    ensure_keyring_item_accessible("github_copilot_token");
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "failed to open keyring for Copilot account github_copilot_token: {}",
-                                    e
-                                );
-                            }
+                        match crate::shared::secret_override::set_keyring_async(
+                            "go-on",
+                            "github_copilot_token",
+                            access_token,
+                        )
+                        .await
+                        {
+                            Ok(()) => ensure_keyring_item_accessible("github_copilot_token"),
+                            Err(e) => tracing::warn!(
+                                "failed to save Copilot token to keyring account github_copilot_token: {}",
+                                e
+                            ),
                         }
                     }
 

@@ -15,9 +15,10 @@ async def main() -> None:
     """Run basic go-on SDK operations against a local backend."""
     client = GoOnClient(base_url="http://localhost:8090")
 
-    # Health check
+    # Health check — `GET /health` (ServerStatus) carries `lifecycle` and
+    # `timestamp`; it does NOT emit `status`/`version`, so print the real fields.
     health = await client.health()
-    print(f"Health: status={health.status}, version={health.version}")
+    print(f"Health: lifecycle={health.lifecycle}, timestamp={health.timestamp}")
 
     # Governance status
     governance = await client.governance_status()

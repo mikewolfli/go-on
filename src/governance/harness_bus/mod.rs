@@ -121,6 +121,19 @@ impl HarnessBus {
             consecutive_allows: AtomicU32::new(0),
         };
 
+        // Wire the process-wide tool-execution reporting hook into the bus's
+        // engine so orchestration-layer tool circuit-breaker trips (the tool
+        // executor cannot structurally reach the engine) surface in
+        // health/governance status. `record_outcome` is the sync engine entry
+        // point — it drives both the per-service health monitor and the
+        // breaker state machine. First installation wins (OnceLock).
+        crate::resilience::hyper_resilience::set_tool_execution_report_hook({
+            let engine = Arc::clone(&bus.resilience_engine);
+            move |breaker_name: String, success: bool| {
+                engine.record_outcome(&breaker_name, success, 0);
+            }
+        });
+
         // The drift monitor is NOT started here: `HarnessBus::new` is a
         // synchronous constructor that may run outside a tokio runtime (tests,
         // CLI paths), and spawning a perpetual background task per construction
@@ -443,7 +456,11 @@ impl HarnessBus {
     /// Consolidated: writes to the canonical `ThreadSafeAuditLog` only.
     /// The duplicate writes to `audit_trail` and `structured_audit_trail`
     /// were removed — they recorded the same data in different formats.
-    /// The profile counter is still updated for metrics reporting.
+    /// The profile counter is still updated for metrics reporting, and the
+    /// audit log's real degradation signal (entries dropped due to buffer
+    /// overflow) is synced into the profile so `GovernanceStatus` can judge
+    /// the audit subsystem from a real audit signal instead of unrelated
+    /// counters.
     pub fn audit(&self, entry: AuditLogEntry) {
         self.audit_log.record(entry);
 
@@ -452,6 +469,7 @@ impl HarnessBus {
             poisoned.into_inner()
         });
         p.audit_entries_total = p.audit_entries_total.saturating_add(1);
+        p.audit_dropped_entries = self.audit_log.dropped_count();
     }
 
     /// Build a per-agent execution policy from the three base policies,

@@ -39,6 +39,25 @@ acp_runtime_rpc 27/27 · protocol_consistency 26/26 · transport_parity 18/18 ·
 Rust SDK 21/21
 ```
 
+### Round 42 — Super-Deep/Broad Scan + Unified Architecture Optimization (2026-08-10, docs/log/log-20260810-2.md)
+
+#### Real Semantics & Dispatch
+
+- **`$/cancel_request` real cancellation mechanism**: the ACP arm now mirrors the MCP `cancelled_requests` registry — a cancellation notification marks the request id, and in-flight token-collection loops abort with the standard -32800 code instead of merely logging and continuing.
+- **`session/cancel` real semantics**: cancelled sessions are marked (`AcpSessionState.cancelled`) and reject new prompts, replacing the previous bare-error no-op.
+- **RecoveryAction real dispatch**: `execute_recovery_plan` performs the observable effect of every action (RestartNode / FailoverToBackup / ScaleUp / Rebalance / NotifyOperator) and runs the post-recovery consistency check — automatic recovery either genuinely resolves the fault or reports the residual state.
+- **postgres warm tier DSN fix + cold degrade**: under `backend-postgres`, `WarmStore` resolves the connection string from the environment instead of treating a SQLite file path as a PG DSN, and degrades to the cold tier when no connection string is reachable — memories are never silently lost.
+- **prompt_layers wired end-to-end**: the `PromptAssembler` output is now consumed by agent selection instead of being assembled and discarded.
+- **double forgetting loop unified**: the reinforce/demote loops in continuous learning no longer fight each other (the demotion path was unreachable).
+- **council tally participates in routing**: `cast_vote` / `tally_votes` outcomes feed routing decisions instead of being decorative JSON.
+
+#### Unification & Correctness
+
+- **Three validation engines converged** into the single `ConfigValidator` + hard-gate pair.
+- **Profile recommendation names real**: setup output names the actual profiles (`local` / `simple-server` / `multi-users-server` / `full`) instead of the non-existent minimal/balanced/full.
+- **keyring async wrapper**: blocking keyring I/O (D-Bus / Keychain) moved behind `set_keyring_async` / `get_keyring_cached_async` so it never runs on a tokio worker.
+- **Four profiles compile green** (local / simple-server / multi-users-server / full).
+
 ## [1.5.1] - 2026-08-07
 
 ### Version bump + errors/warnings sweep (2026-08-07, docs/log/log-20260807-1.md)

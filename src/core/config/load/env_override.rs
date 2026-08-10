@@ -22,15 +22,27 @@ use super::super::types::{AgentConfig, AppConfig};
 use super::parser::{ConfigHealthReport, ConfigWarning, ConfigWarningSeverity};
 use super::validator::phase_uses_complex_autopilot;
 
+/// Cache `max_entries` below this value is reported as "very low".
+///
+/// Single source of truth shared with `core::config_validation` so the
+/// report engine and the health-warning engine cannot drift apart.
+pub(crate) const CACHE_MAX_ENTRIES_LOW: usize = 100;
+
+/// Cache `max_entries` at or above this value is reported as "unusually high".
+///
+/// Single source of truth shared with `core::config_validation`.
+pub(crate) const CACHE_MAX_ENTRIES_HIGH: usize = 50_000;
+
 /// Check for missing environment variables across all agents
 pub fn missing_env_vars(config: &AppConfig) -> Vec<String> {
     let mut missing = Vec::new();
 
     for agent in config.agents().values() {
         for secret_ref in required_env_vars(agent) {
-            if inspect_secret_pool(&secret_ref, &secret_ref).is_err() {
-                missing.push(secret_ref);
+            if probe_secret_ref(&secret_ref) {
+                continue;
             }
+            missing.push(secret_ref);
         }
     }
 
@@ -46,16 +58,18 @@ pub fn is_agent_env_ready(config: &AppConfig, agent_name: &str) -> bool {
     };
     required_env_vars(agent)
         .into_iter()
-        .all(|secret_ref| inspect_secret_pool(&secret_ref, &secret_ref).is_ok())
+        .all(|secret_ref| probe_secret_ref(&secret_ref))
 }
 
-pub(crate) fn missing_env_vars_by_agent(config: &AppConfig) -> HashMap<String, Vec<String>> {
+/// `missing_env_vars_by_agent` probe body (see the wrapper below for the
+/// blocking-thread rationale).
+fn probe_missing_env_vars_by_agent(config: &AppConfig) -> HashMap<String, Vec<String>> {
     let mut missing = HashMap::new();
 
     for (agent_name, agent) in config.agents() {
         let mut per_agent_missing = required_env_vars(agent)
             .into_iter()
-            .filter(|secret_ref| inspect_secret_pool(secret_ref, secret_ref).is_err())
+            .filter(|secret_ref| !probe_secret_ref(secret_ref))
             .collect::<Vec<_>>();
 
         if !per_agent_missing.is_empty() {
@@ -66,6 +80,44 @@ pub(crate) fn missing_env_vars_by_agent(config: &AppConfig) -> HashMap<String, V
     }
 
     missing
+}
+
+/// True when any configured agent references the system keyring.
+fn has_keyring_refs(config: &AppConfig) -> bool {
+    config.agents().values().any(|agent| {
+        required_env_vars(agent)
+            .iter()
+            .any(|secret_ref| is_keyring_ref(secret_ref))
+    })
+}
+
+pub(crate) fn missing_env_vars_by_agent(config: &AppConfig) -> HashMap<String, Vec<String>> {
+    // Keyring lookups (keyring::Entry::get_password inside
+    // agents::inspect_secret_pool) are blocking I/O. The callers of this
+    // probe run on tokio workers (startup validation, config reload, health
+    // checks), where a slow D-Bus/Keychain round-trip stalls the runtime. Run
+    // the whole probe on a dedicated OS thread whenever any agent references
+    // the keyring; env-only configs probe inline (env reads are cheap and
+    // non-blocking). This keeps agents' timeout protection intact — the probe
+    // still goes through `inspect_secret_pool`, which guards keychain access
+    // with its own 5s timeout.
+    if !has_keyring_refs(config) {
+        return probe_missing_env_vars_by_agent(config);
+    }
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| probe_missing_env_vars_by_agent(config))
+            .join()
+            .unwrap_or_default()
+    })
+}
+
+/// Probe whether a secret ref resolves to a non-empty value.
+///
+/// Returns `true` when the secret is available (keyring or env fallback), so
+/// callers treat a `false` result as "missing".
+fn probe_secret_ref(secret_ref: &str) -> bool {
+    inspect_secret_pool(secret_ref, secret_ref).is_ok()
 }
 
 fn required_env_vars(agent: &AgentConfig) -> Vec<String> {
@@ -345,16 +397,11 @@ pub fn validate_runtime_readiness(
         }
     }
 
-    // F-GAP-14: warn when user_auth is enabled but token secret is still the default
-    if let Some(runtime) = &config.runtime {
-        if runtime.user_auth_enabled && runtime.user_auth_token_secret == "go-on-multi-user-secret"
-        {
-            warn!(
-                "runtime.user_auth_enabled=true with default user_auth_token_secret 'go-on-multi-user-secret'; \
-                 set a strong, unique token secret in production"
-            );
-        }
-    }
+    // NOTE: the default user_auth_token_secret warning is intentionally NOT
+    // duplicated here — `core::config_validation::ConfigValidator` (the single
+    // report engine) already emits it once (runtime.user_auth section) and it
+    // is logged at startup via the validation-warnings block in
+    // `handle_validation_mode`. Duplicating it here warned twice per startup.
 
     Ok(build_config_health_report(config_path, config))
 }
@@ -431,7 +478,7 @@ fn collect_config_warnings_detailed(config_path: &Path, config: &AppConfig) -> V
     }
 
     if let Some(cache) = &config.cache {
-        if cache.enabled && cache.max_entries >= 50_000 {
+        if cache.enabled && cache.max_entries >= CACHE_MAX_ENTRIES_HIGH {
             warnings.push(ConfigWarning {
                 code: "CACHE_MAX_ENTRIES_HIGH".to_string(),
                 severity: ConfigWarningSeverity::Warn,
@@ -639,28 +686,35 @@ fn profile_recommendations_for(
     warn_count: usize,
     critical_count: usize,
 ) -> (String, Vec<String>) {
-    let profile = if critical_count > 0 || warn_count >= 3 {
+    // Map the warning/critical posture onto the REAL build profiles
+    // (local / simple-server / multi-users-server / full). The previous
+    // "minimal"/"balanced"/"full" labels referenced profiles that do not
+    // exist as Cargo features, and the "full" copytext pointed at a
+    // non-shipped config.toml.autopilot-adaptive template.
+    let profile = if critical_count > 0 {
         "full"
+    } else if warn_count >= 3 {
+        "multi-users-server"
     } else if warn_count == 0 {
-        "minimal"
+        "local"
     } else {
-        "balanced"
+        "simple-server"
     }
     .to_string();
 
     let mut recommendations = Vec::new();
     recommendations.push(match profile.as_str() {
         "full" => {
-            "use config.toml.autopilot-adaptive and keep review and safeguard defaults enabled"
-                .to_string()
+            "full profile: keep review gates and safeguard defaults enabled and address the critical warnings before production".to_string()
         }
-        "minimal" => {
-            "config quality is stable for quick-start profile; keep minimal defaults unless workload changes"
-                .to_string()
+        "multi-users-server" => {
+            "multi-users-server profile: several warnings present — keep review/safeguard defaults and re-check the flagged warnings".to_string()
+        }
+        "local" => {
+            "local profile: config quality is stable; keep minimal defaults unless the workload changes".to_string()
         }
         _ => {
-            "use a balanced profile: keep key safeguards while avoiding high-cost optional toggles"
-                .to_string()
+            "simple-server profile: keep key safeguards while avoiding high-cost optional toggles".to_string()
         }
     });
 

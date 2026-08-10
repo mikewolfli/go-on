@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tracing::{debug, error, info, warn};
 
 use crate::agent::AgentRegistry;
@@ -345,25 +345,10 @@ pub(crate) async fn handle_validation_mode(
     cli: &Cli,
     config_path: &Path,
 ) -> Result<Option<Arc<AppConfig>>> {
-    // If config doesn't exist, create a minimal bootstrap config
-    if !config_path.exists() {
-        info!(
-            "config not found at {}, creating bootstrap",
-            config_path.display()
-        );
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create config directory: {}", parent.display())
-            })?;
-        }
-        let bootstrap = crate::config::default_non_ai_config_toml();
-        std::fs::write(config_path, &bootstrap).with_context(|| {
-            format!(
-                "failed to write bootstrap config to {}",
-                config_path.display()
-            )
-        })?;
-    }
+    // If the config is missing or blank, write the non-AI bootstrap config.
+    // Single helper shared with the config parser (defaults::ensure_bootstrap_config)
+    // so the "write default config" behavior lives in exactly one place.
+    crate::config::defaults::ensure_bootstrap_config(config_path)?;
 
     // Load and validate configuration
     info!("loading config from {}", config_path.display());

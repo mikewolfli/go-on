@@ -78,8 +78,14 @@ impl TenantBudgetEnforcer {
     }
 
     /// Return the current day number (unix timestamp / 86400).
+    ///
+    /// Uses the single canonical epoch→date conversion
+    /// (`crate::security::security_advisor::unix_ts_day_number`) instead of a
+    /// third local integer-division implementation.
     fn today() -> i64 {
-        crate::shared::timestamps::now_ts_ms() / 86_400_000
+        crate::security::security_advisor::unix_ts_day_number(
+            crate::shared::timestamps::now_ts_ms() / 1000,
+        )
     }
 
     /// Reset daily counters if the day has changed.

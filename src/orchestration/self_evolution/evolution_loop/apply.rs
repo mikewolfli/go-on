@@ -24,6 +24,14 @@ pub enum EvolutionLoopError {
     #[error("patch application failed: {0}")]
     PatchApplyFailed(String),
 
+    /// No usable code patch could be proposed for this cycle (no
+    /// SelfEvolutionAgent, patch generation failed, or the trigger has no
+    /// actionable file target). The cycle is skipped with this reason recorded
+    /// instead of fabricating a placeholder patch that would fail whitelist
+    /// validation.
+    #[error("no code patch proposed: {0}")]
+    ProposalUnavailable(String),
+
     /// Approval was rejected.
     #[error("evolution rejected: {0}")]
     Rejected(String),

@@ -454,6 +454,18 @@ pub(crate) async fn evaluate_pre_chat_gates(
     Ok(PreChatGate::Pass)
 }
 
+/// Filter out agents that are not runtime-ready (live endpoint probe).
+///
+/// Used on the chat/observe hot path where an agent must be reachable right
+/// now: probes each candidate's runtime endpoint (config/env reads + local
+/// TCP connect, bounded by a 250ms timeout) and drops agents whose endpoint
+/// times out, is unavailable, or whose secret is missing.
+///
+/// NOTE: This is intentionally a different — stricter — criterion than
+/// `exec_pack::pua::filter_unavailable_agents`, which only checks registry
+/// presence for PUA red-line review. That review context needs to know
+/// whether the agent exists in the registry (not whether it is currently
+/// reachable), so the two filters are kept separate by design.
 pub(crate) async fn filter_runtime_ready_agents(
     server: &AcpServer,
     config: &crate::config::AppConfig,

@@ -144,8 +144,13 @@ export class GoOnClient {
         continue;
       }
 
-      // Retry on 429 (Too Many Requests) and 5xx (server errors)
-      if (response.status === 429 || response.status >= 500) {
+      // Retry on 408 (Request Timeout), 429 (Too Many Requests) and 5xx
+      // (server errors) — unified with the Rust/Python SDKs.
+      if (
+        response.status === 408 ||
+        response.status === 429 ||
+        response.status >= 500
+      ) {
         lastError = new GoOnError(
           response.status,
           `HTTP ${response.status}: ${response.statusText}`,
@@ -215,16 +220,22 @@ export class GoOnClient {
     request: ChatRequest,
     signal?: AbortSignal,
   ): AsyncGenerator<Record<string, unknown>, void, unknown> {
-    const { model, temperature, max_tokens: maxTokens, ...rest } = request;
+    const { model, temperature, max_tokens: maxTokens, stream, ...rest } =
+      request;
     const body: Record<string, unknown> = {
       ...rest,
-      stream: true,
       options: {
         ...(model !== undefined ? { model } : {}),
         ...(temperature !== undefined ? { temperature } : {}),
         ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
       },
     };
+    // `stream` is forwarded only when the caller explicitly provides it,
+    // matching the Rust (`if let Some(stream) = request.stream`) and Python
+    // SDKs — a caller-supplied `stream: false` must not be overwritten.
+    if (stream !== undefined) {
+      body.stream = stream;
+    }
 
     const response = await fetch(`${this.baseUrl}${CHAT_STREAM_ENDPOINT}`, {
       method: "POST",
@@ -303,11 +314,11 @@ export class GoOnClient {
 
   // ── Core Runtime ───────────────────────────────────────────────────
 
-  /** GET /health — quick health check. */
   /** GET /health — quick health check (ServerStatus payload, no envelope). */
   async health(): Promise<HealthResponse> {
+    // Use the constructor timeout (default 30s) like the Rust/Python SDKs.
     const response = await fetch(`${this.baseUrl}/health`, {
-      signal: AbortSignal.timeout(5_000),
+      signal: AbortSignal.timeout(this.timeout),
     });
     if (!response.ok) {
       throw new GoOnError(
@@ -576,7 +587,7 @@ export class GoOnClient {
   async sessionSetConfigOption(
     sessionId: string,
     configId: string,
-    value: string,
+    value: unknown,
   ): Promise<void> {
     await this.jsonRpc("session/set_config_option", {
       sessionId,
@@ -610,7 +621,7 @@ export class GoOnClient {
   async sessionConfigSet(
     sessionId: string,
     configId: string,
-    value: string,
+    value: unknown,
   ): Promise<Record<string, unknown>> {
     return this.jsonRpc("session/config/set", { sessionId, configId, value });
   }

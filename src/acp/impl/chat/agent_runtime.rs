@@ -114,6 +114,16 @@ pub(crate) async fn run_agent_collecting(
         let overall_timeout = std::time::Duration::from_secs(600); // 10 min hard cap
         let recv_timeout = std::time::Duration::from_secs(120);
         loop {
+            // $/cancel_request support: abort token collection as soon as the
+            // client cancelled this request id (checked against the request-id
+            // task-local set by handle_request). Returning Err surfaces the
+            // canonical cancellation error to the caller instead of emitting a
+            // partial "success" result.
+            if crate::acp::r#impl::request::protocol_pack::current_request_cancelled() {
+                return Err(crate::acp::r#impl::request::protocol_pack::log_and_cancel(
+                    "run_agent_collecting",
+                ));
+            }
             // Check overall timeout before each recv attempt.
             if stream_started.elapsed() > overall_timeout {
                 tracing::warn!(

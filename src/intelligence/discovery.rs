@@ -153,7 +153,7 @@ impl DiscoveryCenter {
 
         // Hold the lock and filter in-place to avoid cloning the entire entries vec;
         // only matching entries are cloned out.
-        let entries_guard = match self.entries.lock() {
+        let mut entries_guard = match self.entries.lock() {
             Ok(e) => e,
             Err(poisoned) => {
                 tracing::warn!(target: "discovery", "entries Mutex poisoned – recovering in search");
@@ -206,6 +206,17 @@ impl DiscoveryCenter {
             })
             .cloned()
             .collect();
+
+        // Touch matched entries so eviction is true LRU: mark the hit time
+        // before releasing the lock (search() is the only read path).
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
+        if !matches.is_empty() {
+            for entry in entries_guard.iter_mut() {
+                if matches.iter().any(|m| m.id == entry.id) {
+                    entry.last_used_ms = now;
+                }
+            }
+        }
         // Release the lock before sorting / truncating.
         drop(entries_guard);
 

@@ -418,7 +418,7 @@ pub async fn handle_request(
             return send_error(
                 server,
                 request.id,
-                -32029, // JSON-RPC rate limited
+                AcpErrorCode::RateLimited as i32,
                 format!("Rate limit exceeded for tenant '{}'", tenant_id),
                 Some(serde_json::json!({
                     "code": "RATE_LIMITED",
@@ -692,6 +692,12 @@ pub async fn handle_request(
         0,
     );
     let request_id = request.id.clone();
+    // Key for the $/cancel_request registry: same `value_to_id` mapping the
+    // cancellation handler uses, so marks match the in-flight request id.
+    let current_request_key = request_id
+        .as_ref()
+        .map(crate::rpc_protocol::value_to_id)
+        .unwrap_or_else(|| "null".to_string());
 
     // Single dispatch table (the match below). The former registration-based
     // MethodRouter (B51-28) was merged back into this match: every handler it
@@ -701,9 +707,12 @@ pub async fn handle_request(
     // path with correct accounting.
 
     // Use the potentially normalized method for dispatch.
-    let result = DISPATCH_REQUEST_METHOD
-        .scope(method.to_string(), async {
-            match method.as_ref() {
+    let result =
+        protocol_pack::ACP_CURRENT_REQUEST_ID
+            .scope(
+                Some(current_request_key.clone()),
+                DISPATCH_REQUEST_METHOD.scope(method.to_string(), async {
+                    match method.as_ref() {
                 "initialize" => {
                     crate::acp::r#impl::io::respond(
                         server,
@@ -907,17 +916,23 @@ pub async fn handle_request(
                 }
                 // Protocol-level notifications
                 "$/cancel_request" => {
-                    // $/cancel_request is a notification per JSON-RPC spec — no response
+                    // $/cancel_request is a notification per JSON-RPC spec — no
+                    // response. Mark the target request id in the shared
+                    // cancelled-request registry so the in-flight request's
+                    // token loops (run_agent_collecting / autonomy loop) abort
+                    // early; the mark is cleared when the target request
+                    // completes. Previously this branch only logged.
                     let target_id = request
                         .params
                         .as_ref()
                         .and_then(|p| p.get("id"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
-                    tracing::warn!(
+                        .map(crate::rpc_protocol::value_to_id)
+                        .unwrap_or_else(|| "unknown".to_string());
+                    protocol_pack::mark_acp_request_cancelled(&target_id);
+                    tracing::info!(
                         target: "acp::protocol_pack",
                         target_request = %target_id,
-                        "cancel_request_payload: cancelling request {}",
+                        "$/cancel_request: marked request {} for cancellation",
                         target_id
                     );
                     dispatch_to_client(server, request_id, Ok(DispatchOutput::silent())).await
@@ -958,7 +973,7 @@ pub async fn handle_request(
                     crate::acp::r#impl::io::respond(
                         server,
                         request_id,
-                        protocol_pack::mcp_initialize_payload(server).await,
+                        protocol_pack::mcp_initialize_payload(server, &request.params).await,
                     )
                     .await
                 }
@@ -1972,13 +1987,16 @@ pub async fn handle_request(
                     )
                     .await
                 }
-                #[cfg(feature = "multi-users-server")]
+                #[cfg(feature = "sub-bus-distributed-memory")]
                 "memory.ingest" => {
                     // Receiving side of the DistributedMemoryBus HTTP transport:
                     // entries pushed by a peer node's do_sync are ingested into
                     // this node's shared-entries buffer (previously the ACP
                     // `/rpc` endpoint had no handler, so peer syncs were only
                     // observable in the hub vault and never reached the bus).
+                    // Gate matches hub/server.rs and DistributedMemoryBus so
+                    // simple-server (which enables sub-bus-distributed-memory)
+                    // compiles this arm too.
                     let params = request.params.unwrap_or_default();
                     let entries_json = serde_json::to_string(
                         &params
@@ -2349,9 +2367,16 @@ pub async fn handle_request(
                     .await
                 }
             }
-        })
-        .await
-        .map_err(|error| attach_request_dispatch_context(error, method.as_ref()));
+                }),
+            )
+            .await
+            .map_err(|error| attach_request_dispatch_context(error, method.as_ref()));
+
+    // $/cancel_request lifecycle: the mark for this request id is consumed
+    // once the request completes, so a later request reusing the same id is
+    // not spuriously cancelled. (The registry is additionally bounded by
+    // oldest-entry eviction in mark_acp_request_cancelled.)
+    protocol_pack::clear_acp_request_cancelled(&current_request_key);
 
     let duration_ms = started.elapsed().as_millis() as u64;
     let success = result.is_ok() && !take_error_response_mark(&trace.request_id);

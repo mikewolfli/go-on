@@ -48,6 +48,23 @@ pub const MCP_VERSION: &str = "2024-11-05";
 /// to newest. Used for version negotiation during `initialize`.
 pub const SUPPORTED_MCP_VERSIONS: &[&str] = &["2024-11-05"];
 
+/// Negotiate the MCP protocol version against the client's requested version.
+///
+/// Picks the highest mutually supported version, falling back to
+/// [`MCP_VERSION`] when the client sends none or a version we do not support.
+/// Single implementation shared by the native MCP `initialize` handler
+/// (`src/mcp/handlers.rs`) and the ACP-bridged `mcp.initialize`
+/// (`src/acp/impl/request/protocol_pack/core.rs`) so the two entry points
+/// cannot drift.
+pub(crate) fn negotiate_mcp_version(client_version: &str) -> &'static str {
+    SUPPORTED_MCP_VERSIONS
+        .iter()
+        .rev()
+        .find(|v| **v == client_version)
+        .copied()
+        .unwrap_or(MCP_VERSION)
+}
+
 /// MCP Server implementation — struct IS used via new/new_with_acp, serve, etc.
 pub struct McpServer {
     pub(crate) agent_registry: Arc<AgentRegistry>,

@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use tracing::info;
 
 use crate::orchestration::roles::install_role_registry;
 
@@ -132,29 +131,10 @@ impl AppConfig {
         })?;
 
         let normalized = if content.trim().is_empty() {
-            let bootstrap = defaults::default_non_ai_config_toml();
-            // Verify the bootstrap defaults parse correctly in memory before writing to disk
-            let _parsed: AppConfig = toml::from_str(&bootstrap).map_err(|e| {
-                anyhow::anyhow!(
-                    "{}: {}",
-                    crate::i18n::runtime::tf(
-                        "error.config_parse_failed",
-                        &[("error", &path.display().to_string())],
-                    ),
-                    e,
-                )
-            })?;
-            fs::write(path, &bootstrap).with_context(|| {
-                format!(
-                    "failed to write bootstrap defaults to blank config: {}",
-                    path.display()
-                )
-            })?;
-            info!(
-                "blank config detected; wrote non-AI bootstrap defaults to {}",
-                path.display()
-            );
-            bootstrap
+            // Single shared helper (defaults::ensure_bootstrap_config): writes
+            // the non-AI bootstrap defaults after verifying them in memory.
+            defaults::ensure_bootstrap_config(path)?;
+            defaults::default_non_ai_config_toml()
         } else {
             content
         };

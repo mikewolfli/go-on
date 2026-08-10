@@ -1820,75 +1820,12 @@ impl ToolRegistry {
         serde_json::json!({ "tools": matrix })
     }
 
-    /// Run a tool synchronously with fallback chain support.
-    #[tracing::instrument(level = "debug", skip(self, input), fields(tool = %name, success = false, latency_ms = 0u64, fallback_used = false))]
-    pub fn run_with_fallback(&self, name: &str, input: &ToolInput) -> Result<ToolOutput> {
-        let start = std::time::Instant::now();
-
-        let Some(primary) = self.get(name) else {
-            let elapsed = start.elapsed().as_millis() as u64;
-            tracing::warn!(target: "tool_execution", tool = %name, latency_ms = elapsed, "tool not found");
-            anyhow::bail!("{}", tf("error.tool_not_found", &[("name", name)]));
-        };
-
-        // ── Pre-execute hooks ──────────────────────────────────────────
-        self.hooks.run_pre(name, input);
-
-        let mut last_result = primary.run(input)?;
-        let elapsed = start.elapsed().as_millis() as u64;
-
-        // ── Post-execute hooks ─────────────────────────────────────────
-        self.hooks.run_post(name, input, &last_result, elapsed);
-
-        if last_result.success {
-            record_tool_execution(
-                "tool_execution_total",
-                name,
-                true,
-                elapsed,
-                serde_json::to_string(&input.payload).ok().map(|s| s.len()),
-            );
-            return Ok(last_result);
-        }
-
-        for fb_name in self
-            .profile(name)
-            .map(|p| p.fallback_chain.clone())
-            .unwrap_or_default()
-        {
-            if let Some(fb) = self.get(&fb_name) {
-                let mut fb_result = fb.run(input)?;
-                if fb_result.success {
-                    let elapsed = start.elapsed().as_millis() as u64;
-                    fb_result.audit_log = Some(format!(
-                        "primary '{name}' failed, fallback '{fb_name}' succeeded"
-                    ));
-                    record_tool_execution(
-                        "tool_execution_total",
-                        name,
-                        true,
-                        elapsed,
-                        serde_json::to_string(&input.payload).ok().map(|s| s.len()),
-                    );
-                    return Ok(fb_result);
-                }
-                last_result = fb_result;
-            }
-        }
-
-        let elapsed = start.elapsed().as_millis() as u64;
-        record_tool_execution(
-            "tool_execution_total",
-            name,
-            false,
-            elapsed,
-            serde_json::to_string(&input.payload).ok().map(|s| s.len()),
-        );
-        Ok(last_result)
-    }
-
     /// Run a tool asynchronously with fallback chain support.
     /// Uses `run_async` directly without `block_in_place` to comply with principle #23.
+    ///
+    /// This is the only fallback-chain entry point. A synchronous variant was
+    /// previously maintained (lines ~1825-1888) but had zero production call
+    /// sites and duplicated this async path line-for-line; it has been removed.
     #[tracing::instrument(level = "debug", skip(self, input), fields(tool = %name, success = false, latency_ms = 0u64, fallback_used = false))]
     pub async fn run_with_fallback_async(
         &self,
@@ -2164,8 +2101,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tool_registry_runs_fallback_chain_when_primary_fails() {
+    #[tokio::test]
+    async fn tool_registry_runs_fallback_chain_when_primary_fails() {
         let mut registry = ToolRegistry {
             tools: HashMap::new(),
             profiles: HashMap::new(),
@@ -2200,7 +2137,8 @@ mod tests {
         );
 
         let output = registry
-            .run_with_fallback("always_fail", &tool_input(serde_json::json!({})))
+            .run_with_fallback_async("always_fail", &tool_input(serde_json::json!({})))
+            .await
             .expect("fallback execution should succeed");
         assert!(output.success);
         let audit_log = output.audit_log.unwrap_or_default();

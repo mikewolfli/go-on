@@ -97,19 +97,40 @@ impl ProtocolMode {
 
 impl std::fmt::Display for ProtocolMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProtocolMode::Adaptive => write!(f, "adaptive"),
-            ProtocolMode::AcpStdio => write!(f, "acp-stdio"),
-            ProtocolMode::AcpHttp => write!(f, "acp-http"),
-            ProtocolMode::McpStdio => write!(f, "mcp-stdio"),
-            ProtocolMode::McpHttp => write!(f, "mcp-http"),
-        }
+        // Canonical (underscore) form — the same spelling used by
+        // CANONICAL_MODES / parse_canonical / dispatch_server. The hyphenated
+        // aliases (acp-stdio etc.) remain parseable via `from_str` for legacy
+        // configs, but Display never emits them so logs and config round-trips
+        // cannot diverge from the canonical form.
+        f.write_str(self.to_cli_arg())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{ProtocolMode, ProtocolModeError};
+
+    #[test]
+    fn protocol_mode_display_is_canonical_underscore_form() {
+        // Display must match the canonical (underscore) spelling used by
+        // CANONICAL_MODES / parse_canonical / dispatch_server, so logs and
+        // config round-trips cannot diverge. Hyphenated aliases remain
+        // parseable via from_str.
+        assert_eq!(ProtocolMode::AcpStdio.to_string(), "acp_stdio");
+        assert_eq!(ProtocolMode::AcpHttp.to_string(), "acp_http");
+        assert_eq!(ProtocolMode::McpStdio.to_string(), "mcp_stdio");
+        assert_eq!(ProtocolMode::McpHttp.to_string(), "mcp_http");
+        assert_eq!(ProtocolMode::Adaptive.to_string(), "adaptive");
+        // Legacy hyphenated inputs still parse (from_str aliases).
+        assert_eq!(
+            ProtocolMode::from_str("acp-stdio").unwrap(),
+            ProtocolMode::AcpStdio
+        );
+        assert_eq!(
+            ProtocolMode::from_str("mcp-http").unwrap(),
+            ProtocolMode::McpHttp
+        );
+    }
 
     #[test]
     fn protocol_mode_accepts_legacy_aliases() {

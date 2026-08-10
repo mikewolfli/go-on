@@ -106,6 +106,16 @@ pub(crate) async fn select_and_score_agents(
         layered_prompt.token_estimate
     );
 
+    // The assembled layered prompt is injected as the base of the system
+    // message actually sent to the model (L1 system prompt + L2 role
+    // identity). Later context injections (vector / startup / skill) append
+    // after it via `merge_context_into_messages`. L3–L8 layers currently
+    // have no producers, so no additional segments are emitted; keeping the
+    // framework is safe because the assembled output is now genuinely
+    // consumed.
+    let agent_messages =
+        merge_context_into_messages(&params.messages, Some(layered_prompt.assembled.clone()));
+
     let capability_risk_policy = build_risk_vote_policy(&HashMap::new());
     let capability_risk = assess_high_risk(&params.messages, &params.mode, &capability_risk_policy);
 
@@ -182,7 +192,7 @@ pub(crate) async fn select_and_score_agents(
     let branch_id = agent_prefs.branch_id;
 
     let agent_messages = merge_context_into_messages(
-        &params.messages,
+        &agent_messages,
         build_vector_context_message(
             vector_context.summary.as_deref(),
             &vector_context.hits,

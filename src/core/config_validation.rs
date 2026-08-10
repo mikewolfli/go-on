@@ -9,6 +9,7 @@ use std::path::Path;
 use anyhow::Result;
 use tracing::{info, warn};
 
+use crate::config::load::env_override::CACHE_MAX_ENTRIES_LOW;
 use crate::config::{AgentConfig, AppConfig, PhaseConfig};
 use crate::i18n::runtime::{I18nManager, Language};
 
@@ -163,18 +164,6 @@ fn localize_validation_message(
             lang,
             "validation.msg.agent_model_missing",
             "Agent '{name}' has no model specified",
-            &[("name", name)],
-        );
-    }
-    if let Some(name) = message
-        .strip_prefix("Phase '")
-        .and_then(|v| v.strip_suffix("' has no agents"))
-    {
-        return trf(
-            manager,
-            lang,
-            "validation.msg.phase_no_agents",
-            "Phase '{name}' has no agents",
             &[("name", name)],
         );
     }
@@ -453,9 +442,11 @@ impl ConfigValidator {
             });
         }
 
-        // Check cache configuration
+        // Check cache configuration — threshold shared with the health
+        // engine (`env_override::CACHE_MAX_ENTRIES_LOW`) so both engines
+        // cannot drift apart.
         if let Some(cache) = &self.config.cache {
-            if cache.enabled && cache.max_entries < 100 {
+            if cache.enabled && cache.max_entries < CACHE_MAX_ENTRIES_LOW {
                 result.warnings.push(ValidationWarning {
                     message: format!("Cache max_entries ({}) is very low", cache.max_entries),
                     section: "cache".to_string(),
@@ -480,7 +471,11 @@ impl ConfigValidator {
             }
         }
 
-        // Check multi-user / user auth configuration
+        // Check multi-user / user auth configuration.
+        // NOTE: the CORS-wildcard check is intentionally NOT duplicated here —
+        // `env_override::collect_config_warnings_detailed` is the single
+        // warning engine for it (code CORS_WILDCARD_ORIGIN, surfaced via the
+        // health report and `emit_config_warnings`).
         if let Some(runtime) = &self.config.runtime {
             if runtime.user_auth_enabled {
                 if runtime.user_auth_token_secret == "go-on-multi-user-secret" {
@@ -496,13 +491,6 @@ impl ConfigValidator {
                         section: "runtime.user_auth".to_string(),
                     });
                 }
-            }
-
-            if runtime.cors_allowed_origins.iter().any(|o| o == "*") {
-                result.warnings.push(ValidationWarning {
-                    message: "cors_allowed_origins contains '*' wildcard, which permits any origin to access the API; restrict to specific origins in production".to_string(),
-                    section: "runtime.cors".to_string(),
-                });
             }
         }
     }

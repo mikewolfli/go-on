@@ -31,6 +31,7 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use super::discovery::HubDiscovery;
+use crate::mcp::error_codes::{INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR};
 
 /// Hub JSON-RPC server.
 pub struct HubServer {
@@ -156,7 +157,12 @@ async fn handle_rpc(
     reader.read_line(&mut request_line).await?;
 
     if !request_line.trim().starts_with("POST") {
-        return write_json(&mut stream, 405, json_rpc_error(None, -32600, "Only POST")).await;
+        return write_json(
+            &mut stream,
+            405,
+            json_rpc_error(None, INVALID_REQUEST, "Only POST"),
+        )
+        .await;
     }
 
     // Parse headers.
@@ -201,7 +207,7 @@ async fn handle_rpc(
             return write_json(
                 &mut stream,
                 400,
-                json_rpc_error(None, -32700, "Parse error"),
+                json_rpc_error(None, PARSE_ERROR, "Parse error"),
             )
             .await
         }
@@ -246,7 +252,11 @@ async fn handle_rpc(
             let key = params.get("key").and_then(|v| v.as_str()).unwrap_or("");
             let value = params.get("value");
             if key.is_empty() || value.is_none() {
-                json_rpc_error(Some(req_id.clone()), -32602, "key and value required")
+                json_rpc_error(
+                    Some(req_id.clone()),
+                    INVALID_PARAMS,
+                    "key and value required",
+                )
             } else {
                 let value = value.cloned().unwrap_or(json!(null));
                 vault.lock().await.insert(key.to_string(), value);
@@ -270,6 +280,13 @@ async fn handle_rpc(
             // Receiving side of the DistributedMemoryBus HTTP transport: store
             // the synced entries under a per-source key so they are observable
             // via hub.list / hub.retrieve.
+            //
+            // NOTE: this arm compiles whenever `sub-bus-distributed-memory` is
+            // enabled (the gate on `hub/mod.rs`). The ACP /rpc counterpart in
+            // src/acp/impl/request.rs uses the same gate (`#[cfg(feature =
+            // "sub-bus-distributed-memory")]`), so both sides are active under
+            // simple-server / multi-users-server / full — aligned as of the
+            // 2026-08-10 #2 consolidation.
             let entries = params.get("entries").cloned().unwrap_or(json!([]));
             let source = params
                 .get("source")
@@ -287,7 +304,7 @@ async fn handle_rpc(
             // inside `result`).
             let err = json_rpc_error(
                 Some(req_id.clone()),
-                -32601,
+                METHOD_NOT_FOUND,
                 format!("Method not found: {}", req_method),
             );
             write_json(&mut stream, 200, err).await?;
@@ -322,7 +339,7 @@ async fn write_json(stream: &mut TcpStream, status: u16, body: Value) -> Result<
 }
 
 /// Build a JSON-RPC error response.
-fn json_rpc_error(id: Option<Value>, code: i64, msg: impl ToString) -> Value {
+fn json_rpc_error(id: Option<Value>, code: i32, msg: impl ToString) -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": id.unwrap_or(json!(null)),

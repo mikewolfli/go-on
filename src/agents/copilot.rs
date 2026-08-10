@@ -17,7 +17,9 @@ use tokio::time::sleep;
 use tracing::warn;
 
 use crate::agent::{resolve_secret, Agent, Message, ModelInfo};
-use crate::agents::agent::{is_non_retryable_4xx, request_failed_msg};
+use crate::agents::agent::{
+    is_non_retryable_4xx, is_rate_limit_error, request_failed_msg, retry_backoff_secs,
+};
 use crate::agents::{apply_openai_common_options, check_api_response, option_string};
 use crate::i18n::runtime::tf;
 use crate::orchestration::autonomy_runtime::build_model_used_token;
@@ -384,9 +386,10 @@ impl CopilotAgent {
 }
 
 /// Exponential backoff delay (seconds) for retry attempt `attempt`.
-/// Yields 1s, 2s, 4s for attempts 0, 1, 2.
+/// Yields 1s, 2s, 4s for attempts 0, 1, 2. Shared canonical schedule:
+/// `crate::agents::agent::retry_backoff_secs`.
 fn backoff_secs(attempt: u64) -> u64 {
-    1u64 << attempt
+    retry_backoff_secs(attempt as u32)
 }
 
 #[async_trait]
@@ -548,11 +551,7 @@ impl Agent for CopilotAgent {
                         }
 
                         // Quota/rate-limit (transient) → retry with backoff
-                        if err_text_lower.contains("429")
-                            || err_text_lower.contains("rate limit")
-                            || err_text_lower.contains("quota")
-                            || err_text_lower.contains("insufficient_quota")
-                        {
+                        if is_rate_limit_error(&err_text_lower) {
                             if is_auto {
                                 // For auto mode with multiple candidates,
                                 // still try next model after exhausting retries

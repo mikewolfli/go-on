@@ -32,7 +32,7 @@ go-on 是一个**本地优先**、生产级的 AI 智能体编排运行时，使
 - 🔌 将 AI 模型连接到 MCP 服务器，或作为 MCP 服务器运行
 - 🛡️ 通过 RBAC、审计追踪和风险评估执行治理策略
 - 📊 通过 SSE 面板实时监控子代理执行和命令输出
-- 🧩 通过 VS Code 插件、技能市场（33 个技能）或 Rust/Python/TypeScript SDK 扩展
+- 🧩 通过 VS Code 插件、技能市场（34 个技能）或 Rust/Python/TypeScript SDK 扩展
 
 ## 快速开始
 
@@ -81,8 +81,7 @@ cargo run -- --protocol-mode mcp_stdio
 - **自治循环** — 规划 → 执行 → 反思 → 重规划，迭代次数根据复杂度自适应调整
 - **子代理监控** — GUI 中通过 SSE 面板实时显示子代理执行和命令输出
 - **DAG 任务执行** — Kahn 拓扑排序、依赖边、并行组执行、循环检测
-- **全自动流程** — 意图解析 → 技能发现 → 环境准备 → 执行 → 报告
-- **快路径缓存** — SHA-256 指纹索引、TTL/LRU 淘汰、四层缓存（意图/技能/环境/路由）
+- **工作流/任务执行** — `workflow.execute` / `task.execute`，含需求门控、确定性评审与自主修复循环
 - **多模型投票** — 高风险决策的并发智能体投票（多数/加权/一致/融合）
 
 ### AI 供应商支持（37 家）
@@ -100,7 +99,6 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 ### 工具系统
 - **60+ 内置工具** — 读写文件/代码搜索/补丁应用/测试运行/Git Diff/Shell 执行/HTTP 请求/grep/find/git/cargo_check/cargo_test/目录列表/文件移动/文件删除/压缩解压/日期时间/DNS/Ping/端口扫描 + CAD/3D/GIS/条码/SVG/Office/图像处理 + 文档解析(PDF/DOCX/PPT/HTML/Markdown/Excel)
 - **工具流水线** — 串行/并行/条件执行，可配置的错误处理策略
-- **工具事务** — 幂等键去重、WAL 持久化、补偿操作
 - **动态工具推荐** — 基于模式+近因+共现的工具推荐引擎
 - **基于模式的工具限制** — 各模式强制执行 allowed_tools 与 max_tool_calls
 
@@ -115,14 +113,12 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 - **内容安全审查** — AI 驱动的高风险操作评估
 
 ### 性能
-- **FastPathCache** — 重复查询的亚毫秒级缓存命中
 - **SSE 缓冲池** — 零分配的流式事件序列化
-- **缓存预热** — 预测性预加载，自适应 TTL
 - **并发执行** — 按角色 BinaryHeap 出队（O(log n)），信号量背压
 - **DAG 汇聚超时** — 防止单工具拖慢整个流水线
 
 ### 韧性
-- **恢复编排器** — 6 种策略：重试 → 重路由 → 重规划 → 修复 → 升级 → 降级
+- **容错恢复** — 5 个真实恢复动作（RestartNode、FailoverToBackup、ScaleUp、Rebalance、NotifyOperator），由 `FaultToleranceEngine` 分派
 - **混沌测试** — 10 种故障注入（超时、分区、崩溃、数据损坏、限流）
 - **超弹性** — 熔断器状态机、故障切换组、自愈
 - **热故障切换** — 主备模型切换，含冷却黑名单
@@ -153,8 +149,8 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 - **OTel** — 通过 OTLP collector 的分布式追踪（默认：`localhost:4317`）
 - **三语国际化** — 英文、简体中文、繁体中文，覆盖后端/GUI/VS Code 约 95%
 
-### 技能市场（33 个技能）
-- **内置技能**：code-reviewer、commit-message-generator、refactoring-advisor、test-generator、api-docs-generator、changelog-generator、ci-pipeline-generator、context-summarizer、data-transformer、decision-logger、dependency-analyzer、dockerfile-generator、error-recovery-planner、knowledge-retriever、log-analyzer、progress-tracker、prompt-optimizer、regex-builder、self-reviewer、skill-creator、sql-query-helper、task-planner、web-scraper、code-execution-sandbox、project-analyzer、api-tester、semantic-diff、note-taking、classify-text、summarize-text、translate-text、review-pr、embed-text
+### 技能市场（34 个技能）
+- **内置技能**：api-docs-generator、api-tester、architecture-diagrammer、changelog-generator、ci-pipeline-generator、classify-text、code-execution-sandbox、code-review、context-summarizer、data-pipeline-optimizer、data-transformer、dockerfile-generator、env-config-validator、error-recovery-planner、knowledge-retriever、log-analyzer、note-taking、performance-analyzer、progress-tracker、project-analyzer、prompt-optimizer、refactoring-advisor、regex-builder、security-auditor、self-reviewer、semantic-diff、skill-creator、sql-query-helper、summarize-text、task-planner、test-generator、translate-text、web-scraper、workflow-optimizer（与 `skills/` 目录一致；部分条目为合并后的展示名，如 analyze-text←classify-text、conventional-commits-toolkit←changelog-generator）
 - **从 GitHub/URL/本地导入** — SkillImportStore 获取并验证 SKILL.md 清单
 - **自动发现** — 启动时扫描 `~/.agents/skills/` 目录
 
@@ -278,7 +274,7 @@ npm run compile
 | SDK（Rust + Python + TypeScript）代码行数 | ~4K |
 | 内置工具数量 | 60+ |
 | AI 供应商数量 | 37 |
-| 技能市场数量 | 30+ |
+| 技能市场数量 | 34 |
 | 单元测试数量 | ~1.7K（1590 lib + 139 集成，见下方验证状态）|
 | 三语国际化覆盖 | en / zh-CN / zh-TW（约 95%）|
 

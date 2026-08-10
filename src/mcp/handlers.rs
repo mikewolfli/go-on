@@ -14,7 +14,7 @@ use crate::acp::server::AcpServer;
 
 use super::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
-    McpListToolsResult, McpServer, JSONRPC_VERSION, MCP_VERSION, SUPPORTED_MCP_VERSIONS,
+    McpListToolsResult, McpServer, JSONRPC_VERSION, MCP_VERSION,
 };
 use crate::protocol::rpc_protocol::RequestTraceContext;
 use crate::tool::ToolInput;
@@ -567,13 +567,9 @@ impl McpServer {
         // Mark the server as initialized so subsequent requests are allowed.
         self.initialized.store(true, Ordering::SeqCst);
 
-        // Negotiate the highest mutually supported version.
-        let negotiated_version = SUPPORTED_MCP_VERSIONS
-            .iter()
-            .rev()
-            .find(|v| **v == client_version)
-            .copied()
-            .unwrap_or(MCP_VERSION);
+        // Negotiate the highest mutually supported version (shared function
+        // with the ACP-bridged `mcp.initialize` entry).
+        let negotiated_version = crate::mcp::negotiate_mcp_version(client_version);
 
         if negotiated_version != client_version {
             info!(

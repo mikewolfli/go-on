@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-description = "Rust SDK for go-on (ACP/MCP agent orchestration runtime) — Phase 4, 14-bus architecture"
+description = "Rust SDK for go-on (ACP/MCP agent orchestration runtime) — 7 feature-gated sub-bus architecture"
 
 [dependencies]
 reqwest = { workspace = true }

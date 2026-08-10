@@ -733,18 +733,12 @@ async fn handle_http_connection(
 
         // Entry rate limiting (per-IP), matching the ACP HTTP arm. Applied only
         // when entry auth is enabled so it complements rather than doubles the
-        // transport-level TenantRateLimit middleware.
+        // transport-level TenantRateLimit middleware. Shared with the ACP arm
+        // via the single `entry_rate_limit_allowed` implementation.
         if server.runtime_config.entry_auth_enabled {
             let source = peer_addr.ip().to_string();
-            let key = format!("entry:{}", source);
-            let rpm_limit = server.runtime_config.entry_rate_limit_rpm.max(1);
-            let burst = server.runtime_config.entry_rate_limit_burst.max(1);
-            let allowed = server
-                .resilience
-                .phase_rate_limiter
-                .lock()
-                .map(|guard| guard.allow(&key, rpm_limit, Some(burst)))
-                .unwrap_or(true);
+            let allowed =
+                crate::acp::r#impl::runtime::security::entry_rate_limit_allowed(server, &source);
             if !allowed {
                 write_http_json_response(
                     socket,

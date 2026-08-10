@@ -242,7 +242,23 @@ impl EvolutionLoop {
                 let analysis = self.analyze(&trigger).await;
 
                 // Phase 3: Propose a patch
-                let patch = self.propose(&analysis).await;
+                let patch = match self.propose(&analysis).await {
+                    Ok(p) => p,
+                    // No actionable patch (no agent, generation failure, or a
+                    // trigger without a real file target): skip the round and
+                    // record the reason instead of fabricating a placeholder
+                    // patch that would only fail whitelist validation and
+                    // spam error logs (placeholder.rs stub removed).
+                    Err(e) => {
+                        info!(
+                            cycle_id = self.cycle_id,
+                            trigger = %trigger.label(),
+                            reason = %e,
+                            "evolution cycle skipped: no code patch proposed"
+                        );
+                        continue;
+                    }
+                };
 
                 // Phase 4: Await approval
                 let approval = match self.await_approval(&analysis, &patch).await {
@@ -369,8 +385,12 @@ impl EvolutionLoop {
 
     /// Phase 2: Analyze a trigger to produce an analysis.
     ///
-    /// If a `SelfEvolutionAgent` is configured, delegates to
-    /// `SelfEvolutionAgent::analyze_code()` for LLM-based analysis.
+    /// If a `SelfEvolutionAgent` is configured **and** the trigger carries a
+    /// real file target (`.rs` path), delegates to
+    /// `SelfEvolutionAgent::analyze_code()`. Trigger variants whose "target"
+    /// is a metric/key/capability name (e.g. `PerformanceRegression` metric)
+    /// are never fed to `analyze_code` — the path cannot exist, so the call
+    /// would only fail with `TargetNotFound` and fall into the heuristic stub.
     /// Otherwise falls back to the heuristic stub.
     async fn analyze(&self, trigger: &EvolutionTrigger) -> Analysis {
         // If a self-evolution agent is available, use it for real analysis
@@ -386,29 +406,35 @@ impl EvolutionLoop {
                 }
             };
 
-            match agent.analyze_code(&target).await {
-                Ok(report) => {
-                    let risk_label = report.risk.label().to_string();
-                    return Analysis::new(
-                        trigger.clone(),
-                        format!(
-                            "Analysis of '{}': {} findings, risk={}",
-                            target,
-                            report.findings.len(),
-                            risk_label
-                        ),
-                        report.summary(),
-                        report.findings.clone(),
-                        risk_label,
-                        (100.0 - report.todo_count.min(100) as f64) / 100.0,
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        target = %target,
-                        error = %e,
-                        "SelfEvolutionAgent analyze_code failed, falling back to stub"
-                    );
+            // Only targets that plausibly identify a source file can be
+            // analyzed; everything else (metric names, error patterns,
+            // capability IDs, config keys) is skipped here so a nonexistent
+            // path is never fed to analyze_code.
+            if target.trim().ends_with(".rs") {
+                match agent.analyze_code(&target).await {
+                    Ok(report) => {
+                        let risk_label = report.risk.label().to_string();
+                        return Analysis::new(
+                            trigger.clone(),
+                            format!(
+                                "Analysis of '{}': {} findings, risk={}",
+                                target,
+                                report.findings.len(),
+                                risk_label
+                            ),
+                            report.summary(),
+                            report.findings.clone(),
+                            risk_label,
+                            (100.0 - report.todo_count.min(100) as f64) / 100.0,
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            target = %target,
+                            error = %e,
+                            "SelfEvolutionAgent analyze_code failed, falling back to stub"
+                        );
+                    }
                 }
             }
         }
@@ -487,11 +513,14 @@ impl EvolutionLoop {
 
     /// Phase 3: Propose a code patch based on the analysis.
     ///
-    /// If a `SelfEvolutionAgent` is configured, delegates to
-    /// `SelfEvolutionAgent::generate_patch()` for LLM-based patch
-    /// generation. Otherwise falls back to the heuristic stub.
-    async fn propose(&self, analysis: &Analysis) -> CodePatch {
-        // If a self-evolution agent is available, use it for real patch generation
+    /// Delegates to `SelfEvolutionAgent::generate_patch()` when a
+    /// `SelfEvolutionAgent` is configured. When no agent is available or
+    /// patch generation fails, returns [`EvolutionLoopError::ProposalUnavailable`]
+    /// so the caller skips the cycle with the reason recorded — a fabricated
+    /// placeholder patch is never produced (it could not pass the sandbox
+    /// whitelist and would only burn error-log cycles).
+    async fn propose(&self, analysis: &Analysis) -> Result<CodePatch, apply::EvolutionLoopError> {
+        // If a self-evolution agent is available, use it for real patch generation.
         if let Some(ref agent) = self.agent {
             // Build a synthetic Report from the Analysis to pass to generate_patch
             let report = crate::agents::self_evolution_agent::Report::new(
@@ -505,30 +534,24 @@ impl EvolutionLoop {
                         target = %patch.target_file,
                         "patch generated by SelfEvolutionAgent"
                     );
-                    return patch;
+                    return Ok(patch);
                 }
                 Err(e) => {
                     warn!(
                         analysis_id = %analysis.analysis_id,
                         error = %e,
-                        "SelfEvolutionAgent generate_patch failed, falling back to stub"
+                        "SelfEvolutionAgent generate_patch failed; skipping cycle"
                     );
+                    return Err(apply::EvolutionLoopError::ProposalUnavailable(format!(
+                        "SelfEvolutionAgent patch generation failed: {e}"
+                    )));
                 }
             }
         }
 
-        // Fallback stub patch when no agent is configured or generation fails
-        info!(
-            analysis_id = %analysis.analysis_id,
-            "proposing stub patch (no SelfEvolutionAgent available)"
-        );
-
-        CodePatch::new(
-            "placeholder.rs".to_string(),
-            vec![],
-            vec![],
-            format!("Auto-generated patch for: {}", analysis.root_cause),
-        )
+        Err(apply::EvolutionLoopError::ProposalUnavailable(
+            "no SelfEvolutionAgent configured — cannot propose a real patch".to_string(),
+        ))
     }
 
     /// Phase 4: Await approval for the proposed change.

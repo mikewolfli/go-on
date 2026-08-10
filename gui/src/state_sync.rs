@@ -41,7 +41,10 @@ pub enum StateSyncEvent {
 /// Spawn a background task that listens to the backend's `/v1/state/events` SSE
 /// endpoint and forwards parsed events into a provided channel.
 ///
-/// The listener retries indefinitely with exponential backoff on disconnect.
+/// The listener retries indefinitely on disconnect, using the unified
+/// exponential backoff with ±30% jitter (contracts/cross-client-sync.md):
+/// `delay = min(1000 × 2^attempt, 30000) × (0.7 + random() × 0.3)`. The
+/// attempt counter resets after a clean (long-lived) connection.
 ///
 /// Returns a `JoinHandle` that can be aborted to stop the listener (e.g. during
 /// app shutdown or when the backend URL changes).
@@ -53,6 +56,7 @@ pub fn start_state_sync_listener(
     let url = format!("{}/v1/state/events", base_url.trim_end_matches('/'));
     tokio::spawn(async move {
         let client = reqwest::Client::new();
+        let mut attempt: u32 = 0;
         loop {
             tokio::select! {
                 biased;
@@ -63,18 +67,31 @@ pub fn start_state_sync_listener(
                 result = listen_sse_once(&client, &url, &event_tx) => {
                     match result {
                         Ok(()) => {
-                            // Clean disconnect — retry after a brief pause
-                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            // Clean disconnect — the stream stayed connected,
+                            // so reset the backoff counter per the unified
+                            // contract before reconnecting.
+                            attempt = 0;
                         }
                         Err(e) => {
-                            eprintln!("state sync listener error: {}; retrying in 10s", e);
-                            tokio::time::sleep(Duration::from_secs(10)).await;
+                            eprintln!("state sync listener error: {}; retrying", e);
                         }
                     }
+                    let delay = state_sync_backoff(attempt);
+                    attempt = attempt.saturating_add(1);
+                    tokio::time::sleep(delay).await;
                 }
             }
         }
     })
+}
+
+/// Unified exponential backoff with ±30% jitter, capped at 30 s
+/// (contracts/cross-client-sync.md), matching `gui/src/backend/rpc.rs`
+/// `retry_backoff` and the VS Code addon.
+fn state_sync_backoff(attempt: u32) -> Duration {
+    let capped_ms = crate::backoff::exp_backoff_ms(1000, attempt, 30_000);
+    let jitter_factor = 0.7 + fastrand::f64() * 0.3;
+    Duration::from_secs_f64((capped_ms as f64 * jitter_factor) / 1000.0)
 }
 
 /// Connect to the SSE stream once, parse frames, and forward parsed events.

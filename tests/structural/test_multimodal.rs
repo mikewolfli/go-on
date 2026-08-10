@@ -8,12 +8,10 @@
 //! equivalent features enabled, plus sample files on disk.
 //!
 //! # integration-test
-//! File parsing and STT transcription are structurally validated. Real
-//! execution would need a PDF file, a WAV file, and a Whisper API key.
+//! File parsing runs through the real `DocumentParser::parse_bytes` and STT
+//! through the real `AudioProcessor::transcribe` (asserting its documented
+//! missing-key error path when no API key is configured).
 
-use std::collections::HashMap;
-
-use go_on::multimodal::document_parser::ParsedContent;
 use go_on::multimodal::{
     AudioFormat, AudioProcessorConfig, DocumentParserError, MultimodalInput, SttBackend,
 };
@@ -45,18 +43,25 @@ async fn test_multimodal_pipeline_full() {
     // Use real parsers where features are available.
 
     // ── 2. Document (Markdown) parsing ──────────────────────────────────
-    // Use DocumentParser::default().parse_bytes() to exercise actual parsing.
+    // Exercise the real parser: DocumentParser::default().parse_bytes().
     let md_content = "# Hello\n\nThis is a **test** document with `code`.";
     let md_bytes: Vec<u8> = md_content.as_bytes().to_vec();
     let parser = go_on::multimodal::DocumentParser::default();
 
-    match parser.parse_bytes(&md_bytes, "md") {
+    // The parsed text is the real output of the production parser (or the
+    // real feature-gating error if the markdown backend is not compiled in).
+    let parsed_text: Option<String> = match parser.parse_bytes(&md_bytes, "md") {
         Ok(content) => {
             assert!(
                 !content.text_content.is_empty(),
                 "parsed text must not be empty"
             );
-            ctx.parsed_text = Some(content.text_content);
+            assert!(
+                content.char_count() > 0,
+                "char_count must reflect real extracted text"
+            );
+            ctx.parsed_text = Some(content.text_content.clone());
+            Some(content.text_content)
         }
         Err(e) => {
             let err_str = e.to_string();
@@ -67,8 +72,9 @@ async fn test_multimodal_pipeline_full() {
                 "unexpected parse error: {}",
                 err_str
             );
+            None
         }
-    }
+    };
 
     // ── 3. Document parse and MultimodalInput variant ─────────────────
     let doc_bytes = b"# Sample".to_vec();
@@ -81,72 +87,60 @@ async fn test_multimodal_pipeline_full() {
         _ => panic!("expected Document variant"),
     }
 
-    // Real parsing validates types through construction
-    let parsed = ParsedContent {
-        text_content: "Sample PDF content for e2e testing.".into(),
-        images: vec![],
-        tables: vec![],
-        metadata: HashMap::new(),
-    };
-
-    assert!(
-        !parsed.text_content.is_empty(),
-        "parsed text must be non-empty"
-    );
-    ctx.parsed_text = Some(parsed.text_content.clone());
-    assert_eq!(
-        ctx.parsed_text.as_deref(),
-        Some("Sample PDF content for e2e testing.")
-    );
-
     // ── 4. Inject into chat context ────────────────────────────────────
-    // Real injection wraps parsed content into an AgentContext.
-    // Here we validate the payload size and the ParsedContent fields.
-    assert!(
-        !parsed.text_content.is_empty(),
-        "parsed text must be non-empty"
-    );
-    assert!(parsed.images.is_empty());
-    assert!(parsed.tables.is_empty());
-    assert!(parsed.metadata.is_empty());
-    let injected_payload_size = parsed.text_content.len() + parsed.images.len() * 1024;
-    assert!(
-        injected_payload_size > 0,
-        "injected payload must be non-empty"
-    );
+    // The payload is built from the real parsed output; when the parser is
+    // feature-gated out the parse error already failed loudly above.
+    if let Some(text) = &parsed_text {
+        assert!(!text.is_empty(), "parsed text must be non-empty");
+        assert_eq!(ctx.parsed_text.as_deref(), Some(text.as_str()));
+        let injected_payload_size = text.len();
+        assert!(
+            injected_payload_size > 0,
+            "injected payload must be non-empty"
+        );
+    }
 
     // ── 5. Audio STT ──────────────────────────────────────────────────
-    // Real transcription calls AudioProcessor::transcribe_file(&audio_path).await.
-    // Here we validate the Transcription type's fields and the AudioProcessorConfig.
     let audio_config = AudioProcessorConfig::default();
     assert_eq!(audio_config.backend, SttBackend::OpenAIWhisper);
     assert_eq!(audio_config.sample_rate, 16000);
     assert!(!audio_config.enable_diarization);
 
-    use go_on::multimodal::audio_processor::Transcription;
-    let transcription = Transcription {
-        text: "Hello from go-on multimodal e2e test.".into(),
-        segments: vec![],
-        language: "en".into(),
-        confidence: Some(0.95),
-        processing_duration: std::time::Duration::from_millis(100),
-        metadata: HashMap::new(),
-    };
-
-    assert!(!transcription.text.is_empty(), "STT must produce text");
-    assert!(!transcription.language.is_empty());
-    ctx.transcription = Some(transcription.text.clone());
+    // Call the real transcription API with the default config (no API key
+    // configured): the production pipeline must fail fast with the
+    // documented MissingApiKey error instead of hitting the network.
+    let processor = go_on::multimodal::AudioProcessor::new(audio_config);
+    let transcription = processor.transcribe(&[0u8; 44], AudioFormat::Wav);
+    match transcription {
+        Ok(t) => {
+            // Only reachable with a key configured; assert real output.
+            assert!(
+                !t.text.is_empty() && !t.language.is_empty(),
+                "STT must produce text"
+            );
+            ctx.transcription = Some(t.text.clone());
+        }
+        Err(e) => {
+            let err_str = e.to_string();
+            assert!(
+                err_str.to_lowercase().contains("api key"),
+                "without a key the real API must report MissingApiKey, got: {err_str}"
+            );
+        }
+    }
 
     // ── 6. Combined multimodal injection ───────────────────────────────
-    // The parsed document text and transcription can be combined into a
-    // single multimodal payload for the orchestrator.
+    // Combine whatever the real pipeline produced; the assertion only
+    // requires the format shape, never a hard-coded string.
     let combined_prompt = format!(
         "Document: {}\nAudio: {}",
         ctx.parsed_text.as_deref().unwrap_or(""),
         ctx.transcription.as_deref().unwrap_or(""),
     );
-    assert!(combined_prompt.contains("PDF"));
-    assert!(combined_prompt.contains("Hello"));
+    assert!(
+        combined_prompt.starts_with("Document:") && combined_prompt.contains("Audio:"),
+        "combined payload must carry both sections"
+    );
 
     // Test other input variants.
     let text_input = MultimodalInput::Text("Hello world".into());

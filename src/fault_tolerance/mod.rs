@@ -19,6 +19,7 @@ mod types;
 
 pub use types::*;
 
+use futures_util::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -694,22 +695,40 @@ impl FaultToleranceEngine {
 
     /// Run the full recovery cycle: check heartbeats, auto-create recovery plans,
     /// and return the status summary. Also persists state to DB if available.
+    ///
+    /// Plan creation and execution are parallelized with `buffer_unordered(8)`
+    /// — nodes are independent, and the previous strictly-serial loop made
+    /// large clusters (and every plan's blocking work) wait for each other
+    /// (same pattern as the memory layer's `auto_migrate`).
     pub async fn run_recovery_cycle(&self) -> RecoveryCycleSummary {
         let offenders = self.check_heartbeats().await;
         let mut plans_created = 0u32;
         let mut plans_activated = 0u32;
         let mut consistency_checks = Vec::new();
 
-        for node_id in &offenders {
-            // Check if a plan already exists for this node
-            let existing = {
-                let inner = self.inner.read().await;
-                inner
-                    .recovery_plans
-                    .values()
-                    .any(|p| p.node_id == *node_id && p.state != RecoveryState::Completed)
-            };
-            if !existing && self.create_recovery_plan(node_id).await.is_ok() {
+        // Auto-create recovery plans for all offenders in parallel. Each item
+        // reports whether a plan was created for that node.
+        let mut create_stream = stream::iter(offenders.clone())
+            .map(|node_id| {
+                async move {
+                    // Check if a plan already exists for this node.
+                    let existing = {
+                        let inner = self.inner.read().await;
+                        inner
+                            .recovery_plans
+                            .values()
+                            .any(|p| p.node_id == node_id && p.state != RecoveryState::Completed)
+                    };
+                    if existing {
+                        false
+                    } else {
+                        self.create_recovery_plan(&node_id).await.is_ok()
+                    }
+                }
+            })
+            .buffer_unordered(8);
+        while let Some(created) = create_stream.next().await {
+            if created {
                 plans_created += 1;
             }
         }
@@ -717,27 +736,39 @@ impl FaultToleranceEngine {
         // Auto-execute pending plans and run consistency checks on activations.
         // A plan that passes its post-recovery consistency check is completed;
         // a failing plan is marked failed so `recovery_plans_in_progress` can
-        // never grow unbounded.
+        // never grow unbounded. Each item returns the consistency check when
+        // the plan was activated (executed), else `None`.
         let pending_plans = self.active_recovery_plans().await;
-        for plan in &pending_plans {
-            if plan.state == RecoveryState::Pending
-                && self.execute_recovery_plan(&plan.plan_id).await.is_ok()
-            {
-                plans_activated += 1;
-                // Run consistency check after activation
-                let check = self.post_recovery_consistency_check(&plan.plan_id).await;
-                if check.passed {
-                    let _ = self
-                        .complete_recovery_plan(&plan.plan_id, "recovery_actions_completed")
-                        .await;
-                } else {
-                    tracing::warn!(
-                        "consistency check after activation of plan '{}': {}",
-                        plan.plan_id,
-                        check.details
-                    );
-                    let _ = self.fail_recovery_plan(&plan.plan_id, &check.details).await;
+        let mut execute_stream = stream::iter(pending_plans)
+            .map(|plan| {
+                async move {
+                    if plan.state != RecoveryState::Pending {
+                        return None;
+                    }
+                    if self.execute_recovery_plan(&plan.plan_id).await.is_err() {
+                        return None;
+                    }
+                    // Run consistency check after activation
+                    let check = self.post_recovery_consistency_check(&plan.plan_id).await;
+                    if check.passed {
+                        let _ = self
+                            .complete_recovery_plan(&plan.plan_id, "recovery_actions_completed")
+                            .await;
+                    } else {
+                        tracing::warn!(
+                            "consistency check after activation of plan '{}': {}",
+                            plan.plan_id,
+                            check.details
+                        );
+                        let _ = self.fail_recovery_plan(&plan.plan_id, &check.details).await;
+                    }
+                    Some(check)
                 }
+            })
+            .buffer_unordered(8);
+        while let Some(check) = execute_stream.next().await {
+            if let Some(check) = check {
+                plans_activated += 1;
                 consistency_checks.push(check);
             }
         }
@@ -1203,6 +1234,67 @@ mod tests {
             .complete_recovery_plan(&plan_id, "again")
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_recovery_plan_dispatch_resolves_faults_and_passes_consistency() {
+        let engine = FaultToleranceEngine::new(make_config());
+        engine
+            .register_node("node-1")
+            .await
+            .expect("register node-1 for dispatch test");
+        // Crash fault (severity 9) → plan actions include RestartNode, which
+        // must resolve the fault so the consistency check can pass.
+        engine
+            .report_fault("node-1", FaultType::Crash, 9, "crash")
+            .await
+            .expect("report crash fault on node-1");
+        let plan_id = engine
+            .create_recovery_plan("node-1")
+            .await
+            .expect("create recovery plan for node-1");
+
+        let plans = engine.active_recovery_plans().await;
+        assert!(
+            plans[0].actions.contains(&RecoveryAction::RestartNode),
+            "crash fault should yield a RestartNode action"
+        );
+
+        // Execute the plan: dispatch runs the actions, resolving the fault.
+        engine
+            .execute_recovery_plan(&plan_id)
+            .await
+            .expect("execute recovery plan should succeed");
+        let plans = engine.active_recovery_plans().await;
+        assert_eq!(plans[0].state, RecoveryState::InProgress);
+        assert!(
+            plans[0]
+                .result
+                .as_deref()
+                .unwrap_or("")
+                .contains("RestartNode"),
+            "plan result should record the executed action"
+        );
+
+        // Observable state: the node's fault is resolved and the heartbeat
+        // was reset by the restart dispatch.
+        let profile = engine.profile().await;
+        assert_eq!(profile.active_faults, 0, "fault should be resolved");
+
+        // The post-recovery consistency check now passes for real.
+        let check = engine.post_recovery_consistency_check(&plan_id).await;
+        assert!(
+            check.passed,
+            "consistency check should pass after real dispatch: {}",
+            check.details
+        );
+
+        // The full cycle path completes the plan.
+        engine
+            .complete_recovery_plan(&plan_id, "recovery_actions_completed")
+            .await
+            .expect("complete recovery plan should succeed");
+        assert!(engine.active_recovery_plans().await.is_empty());
     }
 
     #[tokio::test]

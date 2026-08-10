@@ -736,7 +736,8 @@ mod tests {
         assert_eq!(report.total, 1);
         assert_eq!(report.info_count, 0);
         assert_eq!(report.warn_count, 1);
-        assert_eq!(report.profile_recommendation, "balanced");
+        // warn_count == 1 maps to the real simple-server profile.
+        assert_eq!(report.profile_recommendation, "simple-server");
         assert!(!report.recommendations.is_empty());
         assert!(report
             .warnings
@@ -843,7 +844,8 @@ mod tests {
             .iter()
             .any(|code| code == "PRODUCTION_STRICT_RECOMMENDED"));
         assert_eq!(report.warn_count, 3);
-        assert_eq!(report.profile_recommendation, "full");
+        // warn_count >= 3 maps to the real multi-users-server profile.
+        assert_eq!(report.profile_recommendation, "multi-users-server");
         assert!(report
             .recommendations
             .iter()

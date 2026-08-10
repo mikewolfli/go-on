@@ -11,6 +11,13 @@
 //! 4. **ResourceError**: Resource and system errors
 //!
 //! Each error type provides detailed context and supports error chaining.
+//!
+//! # Usage status
+//!
+//! `AppError::Proxy` (via `ProxyError`) is the actively constructed production
+//! path. The `Validation` / `Network` / `Resource` variants are retained as a
+//! public library API for out-of-tree consumers and are exercised by unit
+//! tests and benches; they are not constructed by production code paths today.
 
 use thiserror::Error;
 

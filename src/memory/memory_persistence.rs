@@ -16,7 +16,7 @@ use flate2::Compression;
 use futures_util::stream::{self, StreamExt};
 use indexmap::IndexSet;
 #[cfg(feature = "backend-postgres")]
-use postgres::{Client as PgClient, NoTls as PgNoTls};
+use postgres::Client as PgClient;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -567,41 +567,14 @@ fn read_shard_entries(path: &Path) -> Result<Vec<MemoryEntry>> {
     Ok(entries)
 }
 
-/// Core cold lookup shared by [`ColdStorage::load_entry`] and
-/// `MemoryPersistence::get_from_cold` (which runs the scan on the blocking
-/// pool with a pre-captured index snapshot).
-fn load_entry_from_cold(
-    base: &Path,
-    index: &ColdStorageIndex,
-    uid: &str,
-    memory_id: &str,
-) -> Result<Option<MemoryEntry>> {
-    let index_hit = index
-        .entries
-        .get(&(uid.to_string(), memory_id.to_string()))
-        .cloned();
-    let shards: Vec<PathBuf> = match index_hit {
-        Some((year_month, shard_name, _)) => {
-            vec![base
-                .join(&year_month)
-                .join(format!("{}.ndjson.gz", shard_name))]
-        }
-        None => collect_shard_paths(base),
-    };
-    for path in shards {
-        if !path.exists() {
-            continue;
-        }
-        for entry in read_shard_entries(&path)? {
-            if entry.id == memory_id && entry.user_id.as_deref().unwrap_or("") == uid {
-                return Ok(Some(entry));
-            }
-        }
-    }
-    Ok(None)
-}
-
 /// Find all cold entries belonging to a session, most recently accessed first.
+///
+/// This is the **production** cold-tier recovery path: `search_by_session`
+/// falls back here when the warm tier returns fewer than the requested limit.
+/// The former single-entry precise lookup (`get_from_cold` /
+/// `load_entry_from_cold`) had zero production callers — all recovery is
+/// session-scoped — so it was removed; the sidecar index it consulted is
+/// still maintained for future precise-lookup needs.
 fn find_cold_entries_by_session(base: &Path, session_id: &str) -> Result<Vec<MemoryEntry>> {
     let mut hits = Vec::new();
     for path in collect_shard_paths(base) {
@@ -711,7 +684,10 @@ pub struct WarmStore {
 
 #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
 pub struct WarmStore {
-    conn: Arc<Mutex<PgClient>>,
+    /// `None` when no PostgreSQL connection string was configured or the
+    /// connection/DDL failed — the warm tier then acts as a no-op facade so
+    /// the caller chain never panics (see `WarmStore::new`).
+    conn: Option<Arc<Mutex<PgClient>>>,
     max_entries: usize,
 }
 
@@ -720,12 +696,24 @@ impl std::fmt::Debug for WarmStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WarmStore")
             .field("max_entries", &self.max_entries)
-            .field("conn", &"<Mutex<PgClient>>")
+            .field("enabled", &self.conn.is_some())
             .finish()
     }
 }
 
 impl WarmStore {
+    #[cfg(feature = "backend-sqlite")]
+    /// Whether the warm tier is active. Always true for the sqlite backend.
+    fn is_enabled(&self) -> bool {
+        true
+    }
+
+    #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+    /// Whether the warm tier is active (postgres connection established).
+    fn is_enabled(&self) -> bool {
+        self.conn.is_some()
+    }
+
     #[cfg(feature = "backend-sqlite")]
     fn new(path: &Path, max_entries: usize) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -779,11 +767,45 @@ impl WarmStore {
     }
 
     #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-    fn new(db_conn_str: &Path, max_entries: usize) -> Result<Self> {
-        let conn_str = db_conn_str.to_string_lossy();
-        let mut client = PgClient::connect(&conn_str, PgNoTls)?;
+    /// Create the warm store under the `backend-postgres` build.
+    ///
+    /// The `db_conn_str` argument is a **SQLite file path** produced by the
+    /// production call sites (`memory_base_path().join("warm.db")`) and is
+    /// meaningless as a PostgreSQL DSN — passing it to `PgClient::connect`
+    /// made warm-tier construction fail (or panic via `.expect` in the server
+    /// recovery path) on every postgres build. The real connection string is
+    /// therefore resolved from the environment instead:
+    /// `GO_ON_PG_CONNECTION_STRING` → `DATABASE_URL` → `PG_DSN`.
+    ///
+    /// When no connection string is available, or the connection/DDL fails,
+    /// the store degrades to a no-op facade (`conn: None`) with a clear
+    /// warning instead of returning an error — the callers in `src/acp` retry
+    /// once and then `.expect()`, so an `Err` here would panic the server.
+    /// All business methods short-circuit on `conn: None` (see below).
+    fn new(_db_conn_str: &Path, max_entries: usize) -> Result<Self> {
+        let disabled = || {
+            tracing::warn!(
+                "warm tier disabled under backend-postgres: no reachable PostgreSQL connection string (set GO_ON_PG_CONNECTION_STRING, DATABASE_URL or PG_DSN) — warm tier is a no-op; cold tier still works"
+            );
+            Ok(Self {
+                conn: None,
+                max_entries,
+            })
+        };
 
-        client.batch_execute(
+        let Some(dsn) = resolve_pg_dsn() else {
+            return disabled();
+        };
+        let mut client = match crate::memory::pg_pool::connect_postgres(&dsn) {
+            Ok(client) => client,
+            Err(e) => {
+                tracing::warn!(
+                    "warm tier disabled under backend-postgres: failed to connect to PostgreSQL: {e} — warm tier is a no-op; cold tier still works"
+                );
+                return disabled();
+            }
+        };
+        if let Err(e) = client.batch_execute(
             "
             CREATE TABLE IF NOT EXISTS warm_memory (
                 id TEXT PRIMARY KEY,
@@ -811,10 +833,15 @@ impl WarmStore {
             CREATE INDEX IF NOT EXISTS idx_warm_memory_user_id
                 ON warm_memory(user_id);
             ",
-        )?;
+        ) {
+            tracing::warn!(
+                "warm tier disabled under backend-postgres: failed to prepare warm_memory schema: {e} — warm tier is a no-op; cold tier still works"
+            );
+            return disabled();
+        }
 
         Ok(Self {
-            conn: Arc::new(Mutex::new(client)),
+            conn: Some(Arc::new(Mutex::new(client))),
             max_entries,
         })
     }
@@ -824,7 +851,14 @@ impl WarmStore {
     async fn upsert(&self, entry: &MemoryEntry) -> Result<()> {
         #[cfg(feature = "backend-sqlite")]
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        #[cfg(feature = "backend-sqlite")]
         let conn = self.conn.clone();
+        #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+        let conn = match self.conn.as_ref() {
+            Some(conn) => Arc::clone(conn),
+            // No-op facade: no reachable PostgreSQL connection (see `new`).
+            None => return Ok(()),
+        };
         let max_entries = self.max_entries;
         let embedding_json = entry
             .embedding
@@ -982,7 +1016,13 @@ impl WarmStore {
     async fn remove(&self, id: &str) -> Result<bool> {
         #[cfg(feature = "backend-sqlite")]
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        #[cfg(feature = "backend-sqlite")]
         let conn = self.conn.clone();
+        #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+        let conn = match self.conn.as_ref() {
+            Some(conn) => Arc::clone(conn),
+            None => return Ok(false),
+        };
         let id = id.to_string();
         spawn_blocking(move || {
             #[allow(unused_mut, reason = "mut needed by backend-postgres Client::execute")]
@@ -1009,7 +1049,13 @@ impl WarmStore {
     async fn iterate_all(&self) -> Result<Vec<MemoryEntry>> {
         #[cfg(feature = "backend-sqlite")]
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        #[cfg(feature = "backend-sqlite")]
         let conn = self.conn.clone();
+        #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+        let conn = match self.conn.as_ref() {
+            Some(conn) => Arc::clone(conn),
+            None => return Ok(Vec::new()),
+        };
         spawn_blocking(move || {
             #[cfg(not(feature = "backend-sqlite"))]
             let mut conn = conn
@@ -1040,7 +1086,13 @@ impl WarmStore {
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<MemoryEntry>> {
+        #[cfg(feature = "backend-sqlite")]
         let conn = self.conn.clone();
+        #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+        let conn = match self.conn.as_ref() {
+            Some(conn) => Arc::clone(conn),
+            None => return Ok(Vec::new()),
+        };
         let session_id = session_id.to_string();
         spawn_blocking(move || {
             #[cfg(not(feature = "backend-sqlite"))]
@@ -1071,6 +1123,25 @@ impl WarmStore {
     }
 }
 
+/// Resolve the PostgreSQL connection string for the warm tier.
+///
+/// The production call sites pass a SQLite file path (`warm.db`) that is
+/// meaningless under the `backend-postgres` build, so the DSN is read from
+/// the environment: `GO_ON_PG_CONNECTION_STRING` first, then the common
+/// `DATABASE_URL` / `PG_DSN` variables.
+#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+fn resolve_pg_dsn() -> Option<String> {
+    for var in ["GO_ON_PG_CONNECTION_STRING", "DATABASE_URL", "PG_DSN"] {
+        if let Ok(value) = std::env::var(var) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// WarmStore stub for backends without a warm persistence layer.
 #[cfg(not(any(feature = "backend-sqlite", feature = "backend-postgres")))]
 #[derive(Debug)]
@@ -1080,6 +1151,11 @@ pub struct WarmStore {
 
 #[cfg(not(any(feature = "backend-sqlite", feature = "backend-postgres")))]
 impl WarmStore {
+    /// Whether the warm tier is active (always false for the stub backend).
+    fn is_enabled(&self) -> bool {
+        false
+    }
+
     fn new(_path: &Path, _max_entries: usize) -> Result<Self> {
         Err(anyhow::anyhow!(
             "No storage backend configured: enable backend-sqlite or backend-postgres feature"
@@ -1134,7 +1210,10 @@ impl MemoryPersistence {
     /// Create a new memory persistence manager.
     ///
     /// # Arguments
-    /// * `db_path` - Path to the SQLite warm store database.
+    /// * `db_path` - Path to the SQLite warm store database. Ignored under the
+    ///   `backend-postgres` build — the warm tier then resolves the real
+    ///   connection string from `GO_ON_PG_CONNECTION_STRING` / `DATABASE_URL` /
+    ///   `PG_DSN` and degrades to a no-op when none is reachable.
     /// * `cold_base_path` - Path to the cold storage directory (e.g. `.goon/memory/cold`).
     /// * `policy` - Tiering policy; uses default if `None`.
     pub fn new(
@@ -1176,6 +1255,16 @@ impl MemoryPersistence {
 
     /// Promote an entry from hot → warm tier.
     pub async fn promote_to_warm(&self, entry: MemoryEntry) -> Result<()> {
+        // When the warm tier is disabled (e.g. backend-postgres without a
+        // reachable connection string — see `WarmStore::new`), degrade to the
+        // cold tier instead of silently dropping the entry: the cold store is
+        // file-backed and always available, so the memory is never lost.
+        if !self.warm.is_enabled() {
+            tracing::warn!(
+                "warm tier unavailable (postgres no-op facade); promoting to cold instead"
+            );
+            return self.promote_to_cold(entry).await;
+        }
         let mut entry = entry;
         entry.tier = MemoryTier::Warm;
         self.warm.upsert(&entry).await?;
@@ -1233,29 +1322,6 @@ impl MemoryPersistence {
             hits.truncate(limit);
         }
         Ok(hits)
-    }
-
-    /// Load a single entry from the cold archival tier (long-term memory
-    /// recovery). The sidecar index is consulted first; when the entry was
-    /// written by an earlier process (the cold index is in-memory only) all
-    /// shards are scanned. Returns `None` when the entry is not archived.
-    pub async fn get_from_cold(
-        &self,
-        user_id: Option<&str>,
-        memory_id: &str,
-    ) -> Result<Option<MemoryEntry>> {
-        let base = self.cold.base_path.clone();
-        let index = self
-            .cold
-            .index
-            .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default();
-        let uid = user_id.unwrap_or("").to_string();
-        let mid = memory_id.to_string();
-        spawn_blocking(move || load_entry_from_cold(&base, &index, &uid, &mid))
-            .await
-            .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Run automatic tier migration based on policy.
@@ -1429,44 +1495,15 @@ pub struct MigrationReport {
 // ===========================================================================
 
 /// Convert a Unix timestamp (seconds) to a (year, month) tuple.
-/// Uses days-since-epoch arithmetic with a simple leap-year-aware algorithm.
+///
+/// Delegates to the single canonical epoch→date conversion
+/// (`crate::security::security_advisor::unix_ts_to_ymd`, Hinnant
+/// civil-from-days) — the previous day-loop implementation had its own leap
+/// handling that could disagree with the other two date converters at month
+/// boundaries.
 fn ts_to_year_month(ts: i64) -> (i32, u32) {
-    // Days since Unix epoch (1970-01-01).
-    let days = ts / 86_400;
-    let mut y = 1970i64;
-    let mut remaining = days;
-    loop {
-        let days_in_year = if is_leap_year(y) { 366 } else { 365 };
-        if remaining < days_in_year {
-            break;
-        }
-        remaining -= days_in_year;
-        y += 1;
-    }
-    let year = y as i32;
-    // Months from March so Feb is last (easier leap handling).
-    let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut month = 0u32;
-    for (i, &md) in month_days.iter().enumerate() {
-        let dim = if i == 1 && is_leap_year(year as i64) {
-            29
-        } else {
-            md
-        };
-        if remaining < dim {
-            month = (i + 1) as u32;
-            break;
-        }
-        remaining -= dim;
-    }
-    if month == 0 {
-        month = 12;
-    }
-    (year, month)
-}
-
-fn is_leap_year(y: i64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+    let (year, month, _) = crate::security::security_advisor::unix_ts_to_ymd(ts);
+    (year as i32, month as u32)
 }
 
 // ===========================================================================
@@ -1480,6 +1517,20 @@ mod tests {
 
     fn make_entry(id: &str, usefulness: f32) -> MemoryEntry {
         MemoryEntry::new_hot(id, "test", format!("content-{}", id), usefulness)
+    }
+
+    /// Month-boundary coverage for the cold-storage shard partitioning. Uses
+    /// the shared epoch→date conversion (Hinnant) — the old day-loop
+    /// implementation could disagree at leap/month boundaries.
+    #[test]
+    fn test_ts_to_year_month_boundaries() {
+        assert_eq!(ts_to_year_month(0), (1970, 1));
+        assert_eq!(ts_to_year_month(1_704_067_200), (2024, 1));
+        // 2024-02-29 00:00:00 UTC (leap day).
+        assert_eq!(ts_to_year_month(1_709_164_800), (2024, 2));
+        // One second before 2024-03-01 still belongs to February.
+        assert_eq!(ts_to_year_month(1_709_251_199), (2024, 2));
+        assert_eq!(ts_to_year_month(1_709_251_200), (2024, 3));
     }
 
     #[test]
@@ -1527,6 +1578,7 @@ mod tests {
         let cold = ColdStorage::new(dir.path());
         let mut entry = make_entry("cold1", 0.7);
         entry.user_id = Some("u1".to_string());
+        entry.session_id = Some("sess-arch".to_string());
         // Mirror `promote_to_cold`: the archival entry carries the Cold tier.
         entry.tier = MemoryTier::Cold;
         cold.append_entry(&entry).expect("append should succeed");
@@ -1534,24 +1586,22 @@ mod tests {
         // The write path must produce exactly one gzip shard on disk.
         assert_eq!(cold.total_shard_count(), 1);
 
-        // The cold read path must recover the entry (by user + id), so cold
-        // is a real archival tier rather than write-only storage.
-        let index = cold.index.lock().map(|g| g.clone()).unwrap_or_default();
-        let loaded = load_entry_from_cold(&cold.base_path, &index, "u1", "cold1")
-            .expect("load should succeed")
-            .expect("entry should be found in cold storage");
-        assert_eq!(loaded.id, "cold1");
-        assert_eq!(loaded.content, "content-cold1");
-        assert_eq!(loaded.tier, MemoryTier::Cold);
+        // The cold read path (production: session-scoped) must recover the
+        // entry, so cold is a real archival tier rather than write-only
+        // storage. The former user+id precise lookup was removed with
+        // `get_from_cold` — session recovery is the canonical path.
+        let hits = find_cold_entries_by_session(&cold.base_path, "sess-arch")
+            .expect("session read should succeed");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "cold1");
+        assert_eq!(hits[0].content, "content-cold1");
+        assert_eq!(hits[0].tier, MemoryTier::Cold);
 
-        // A miss (unknown id / user) returns None.
-        assert!(load_entry_from_cold(&cold.base_path, &index, "u1", "nope")
-            .expect("load should succeed")
-            .is_none());
+        // A miss (unknown session) returns nothing.
         assert!(
-            load_entry_from_cold(&cold.base_path, &index, "other", "cold1")
-                .expect("load should succeed")
-                .is_none()
+            find_cold_entries_by_session(&cold.base_path, "sess-unknown")
+                .expect("session read should succeed")
+                .is_empty()
         );
     }
 
@@ -1655,10 +1705,9 @@ mod tests {
         .expect("persistence should initialize");
 
         // Entry with low usefulness → gets demoted to cold (not promoted to warm)
-        persistence
-            .store(make_entry("low", 0.1))
-            .await
-            .expect("store should succeed");
+        let mut low = make_entry("low", 0.1);
+        low.session_id = Some("sess-low".to_string());
+        persistence.store(low).await.expect("store should succeed");
 
         // Entry with high usefulness → promoted to warm
         persistence
@@ -1674,18 +1723,19 @@ mod tests {
         assert_eq!(report.demoted_hot_to_cold, 1);
 
         // The cold-tier write must be readable back: the demoted entry is
-        // recoverable via the archival read path (long-term memory restore).
+        // recoverable via the session-scoped archival read path (the warm tier
+        // has no row for this session, so search falls back to cold).
         let recovered = persistence
-            .get_from_cold(None, "low")
+            .search_by_session("sess-low", 16)
             .await
-            .expect("get_from_cold should succeed");
-        assert!(recovered.is_some(), "cold entry should be recoverable");
-        assert_eq!(recovered.expect("recovered entry").id, "low");
+            .expect("search_by_session should succeed");
+        assert_eq!(recovered.len(), 1, "cold entry should be recoverable");
+        assert_eq!(recovered[0].id, "low");
         assert!(persistence
-            .get_from_cold(None, "missing")
+            .search_by_session("sess-unknown", 16)
             .await
-            .expect("get_from_cold should succeed")
-            .is_none());
+            .expect("search_by_session should succeed")
+            .is_empty());
     }
 
     #[tokio::test]

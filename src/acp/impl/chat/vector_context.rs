@@ -163,8 +163,11 @@ pub(crate) async fn load_vector_context(
         };
     };
 
-    let summary = load_phase_summary_with_settings(server, phase_name, &settings).await;
+    // Summary read and vector search are independent (both only read the
+    // store), so fire them concurrently instead of serializing their awaits.
+    let summary_fut = load_phase_summary_with_settings(server, phase_name, &settings);
     if query_text.chars().count() < settings.min_query_chars {
+        let summary = summary_fut.await;
         return VectorContext {
             hits: Vec::new(),
             summary,
@@ -173,6 +176,7 @@ pub(crate) async fn load_vector_context(
     }
 
     let Some(store) = server.cache_deps.cache.vector_store.clone() else {
+        let summary = summary_fut.await;
         return VectorContext {
             hits: Vec::new(),
             summary,
@@ -180,16 +184,18 @@ pub(crate) async fn load_vector_context(
         };
     };
 
-    match store
-        .search(
+    let (summary, search_result) = tokio::join!(
+        summary_fut,
+        store.search(
             phase_name,
             query_text,
             settings.top_k,
             settings.min_similarity,
             settings.max_snippet_chars,
         )
-        .await
-    {
+    );
+
+    match search_result {
         Ok((hits, feedback)) => {
             server
                 .observability

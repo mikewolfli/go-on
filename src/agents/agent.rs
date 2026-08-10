@@ -138,6 +138,38 @@ pub fn is_non_retryable_4xx(msg: &str) -> bool {
     false
 }
 
+/// Maximum exponential backoff delay in seconds before a retry.
+///
+/// Aligned with the declared retry-policy contract (`max_delay_ms: 10_000`)
+/// in `governance_pack.rs` / `runtime_pack.rs`.
+pub(crate) const MAX_RETRY_BACKOFF_SECS: u64 = 10;
+
+/// Detect a rate-limit / quota / transient-throttling error message.
+///
+/// Canonical detector shared by the agent retry paths (previously duplicated
+/// inline in `copilot.rs` and `skill/execution.rs` with slightly different
+/// keyword sets). Matches HTTP 429 status codes plus the common textual
+/// rate-limit markers.
+pub(crate) fn is_rate_limit_error(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("429")
+        || lower.contains("rate limit")
+        || lower.contains("quota")
+        || lower.contains("insufficient_quota")
+        || lower.contains("too many requests")
+        || lower.contains("retry after")
+}
+
+/// Exponential backoff delay in seconds for retry `attempt` (0-based):
+/// 1s, 2s, 4s, 8s, … capped at [`MAX_RETRY_BACKOFF_SECS`].
+///
+/// Single canonical backoff schedule for all retry loops (previously
+/// `backoff_secs` in copilot.rs and an inline `1 << (attempt - 1)` in
+/// `skill/execution.rs`).
+pub(crate) fn retry_backoff_secs(attempt: u32) -> u64 {
+    (1u64 << attempt).min(MAX_RETRY_BACKOFF_SECS)
+}
+
 /// Agent task envelope (Phase 0/1 discipline)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTaskEnvelope {

@@ -408,7 +408,7 @@ pub async fn start_background_tasks(
                 )
                 .with_history(
                     crate::orchestration::self_evolution::evolution_history::EvolutionHistory::new(
-                        workdir.clone(),
+                        crate::shared::goon_paths::goon_data_dir(),
                     )
                     .await,
                 )

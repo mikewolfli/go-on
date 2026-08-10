@@ -57,11 +57,9 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry
     let (_i18n_result, skill_result) = tokio::join!(
         async {
             if let Some(lang_dir) = lang_dir.as_deref() {
-                // I18nManager::new creates the languages dir when missing, so
-                // a fresh install (no <config-dir>/languages) still initializes
-                // the global I18N instead of silently leaving t()/tf() on
-                // raw keys.
-                if let Err(e) = crate::i18n::runtime::init_i18n(lang_dir) {
+                // Idempotent: when a one-shot CLI path already initialized
+                // I18N via init_i18n_only, this is a no-op.
+                if let Err(e) = init_i18n_only(&config.config_path) {
                     tracing::warn!(target: "go_on::core::bootstrap", "i18n initialization failed: {e:#}");
                 } else {
                     info!("I18n initialized");
@@ -70,6 +68,13 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry
                 // to the on-disk language files (en-US.json / zh-CN.json /
                 // zh-TW.json) are picked up at runtime without a restart.
                 // Best-effort: failures are logged, not fatal.
+                //
+                // Lifecycle: the watcher thread is process-lifetime by design
+                // (hot-reload for the whole server run) and is terminated at
+                // process exit (std::thread). One-shot CLI commands never reach
+                // this point, so the thread is only spawned for the long-running
+                // server / chat processes. LanguageWatcher::stop() remains for
+                // embedders that construct the watcher directly.
                 let watcher_started = crate::i18n::watcher::start_watcher(
                     lang_dir,
                     std::time::Duration::from_secs(5),
@@ -135,4 +140,25 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry
 
     info!("System bootstrap completed");
     Ok(skill_registry)
+}
+
+/// Initialize the global I18N manager without the hot-reload watcher.
+///
+/// Used by one-shot CLI paths (`--init`, `--status`, `--diagnose`,
+/// `--validate-config`, secret/setup commands) that only need `t()`/`tf()`
+/// resolution and exit immediately. Starting a never-stopped watcher thread
+/// there would be pure overhead. Idempotent: when I18N is already
+/// initialized (e.g. a previous call), this is a no-op. I18nManager::new
+/// creates the languages dir when missing, so a fresh install (no
+/// <config-dir>/languages) still initializes the global I18N instead of
+/// silently leaving t()/tf() on raw keys.
+pub fn init_i18n_only(config_path: &Path) -> Result<()> {
+    if crate::i18n::runtime::I18N.get().is_some() {
+        return Ok(());
+    }
+    let lang_dir = config_path
+        .parent()
+        .map(|p| p.join("languages"))
+        .unwrap_or_else(|| Path::new("config/languages").to_path_buf());
+    crate::i18n::runtime::init_i18n(&lang_dir)
 }

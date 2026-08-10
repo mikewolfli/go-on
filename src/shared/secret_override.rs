@@ -129,6 +129,31 @@ pub async fn get_keyring_cached_async(service: &str, account: &str) -> Option<St
         .unwrap_or(None)
 }
 
+/// Store a secret in the system keyring from an async context.
+///
+/// The keyring backend performs blocking pipe/socket I/O on write as well as
+/// read (see `get_keyring_cached_async`); calling `set_password` directly on a
+/// tokio worker starves the runtime. Use this wrapper from async callers.
+/// Returns the underlying `keyring::Error` on failure so callers can surface
+/// the exact reason (credential store unavailable, locked, etc.).
+pub async fn set_keyring_async(
+    service: &str,
+    account: &str,
+    password: &str,
+) -> Result<(), keyring::Error> {
+    let service = service.to_string();
+    let account = account.to_string();
+    let password = password.to_string();
+    tokio::task::spawn_blocking(move || {
+        keyring::Entry::new(&service, &account)?.set_password(&password)
+    })
+    .await
+    .unwrap_or_else(|join_err| {
+        tracing::warn!("set_keyring_async: spawn_blocking join failed: {join_err}");
+        Err(keyring::Error::NoEntry)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

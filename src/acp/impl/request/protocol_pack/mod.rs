@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::*;
 // GovernanceAction and AutonomousEditAuditEntry used by sub-modules via super::*
@@ -81,6 +81,9 @@ pub(super) struct AcpSessionState {
     /// Per-config-id set of favorited value IDs.
     /// Key: config_id (e.g. "model"), Value: set of favorited value IDs.
     pub(super) favorite_config_values: HashMap<String, std::collections::HashSet<String>>,
+    /// Whether the session was cancelled via `session/cancel`. Prompts against
+    /// a cancelled session are rejected (`session_prompt_payload`).
+    pub(super) cancelled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +155,106 @@ static ACP_TERMINAL_STATE: OnceLock<StdMutex<HashMap<String, TerminalProcess>>> 
 
 pub(super) fn acp_terminal_state() -> &'static StdMutex<HashMap<String, TerminalProcess>> {
     ACP_TERMINAL_STATE.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+// ── $/cancel_request support ────────────────────────────────────────────
+// The ACP arm mirrors the MCP transport's `cancelled_requests` registry
+// (src/mcp/handlers.rs): `$/cancel_request` marks a request id, and the
+// token-collection loops of in-flight requests check the mark and abort.
+
+/// Upper bound for the cancelled-request registry (same 10K bound as the MCP
+/// transport's `cancelled_requests`; oldest entry evicted on overflow).
+const MAX_CANCELLED_REQUESTS: usize = 10_000;
+
+/// Request ids flagged by `$/cancel_request` (keyed with `value_to_id`).
+static ACP_CANCELLED_REQUESTS: OnceLock<StdMutex<HashSet<String>>> = OnceLock::new();
+
+fn acp_cancelled_requests() -> &'static StdMutex<HashSet<String>> {
+    ACP_CANCELLED_REQUESTS.get_or_init(|| StdMutex::new(HashSet::new()))
+}
+
+/// Record that the client asked to cancel the request with the given id.
+pub(crate) fn mark_acp_request_cancelled(request_id: &str) {
+    let mut cancelled = acp_cancelled_requests().lock().unwrap_or_else(|poisoned| {
+        warn!("acp_cancelled_requests lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    // Prevent unbounded growth: when over the limit, drop an arbitrary entry
+    // (HashSet iteration order is unspecified — not insertion order, so this
+    // is not an LRU eviction; the bound is what matters for memory safety).
+    if cancelled.len() >= MAX_CANCELLED_REQUESTS {
+        if let Some(arbitrary) = cancelled.iter().next().cloned() {
+            cancelled.remove(&arbitrary);
+        }
+    }
+    cancelled.insert(request_id.to_string());
+}
+
+/// Drop the cancellation mark once the request has finished, so a later
+/// request reusing the same id is not spuriously cancelled.
+pub(crate) fn clear_acp_request_cancelled(request_id: &str) {
+    acp_cancelled_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| {
+            warn!("acp_cancelled_requests lock poisoned, recovering");
+            poisoned.into_inner()
+        })
+        .remove(request_id);
+}
+
+/// Returns true when the client sent `$/cancel_request` for the given id.
+pub(crate) fn is_acp_request_cancelled(request_id: &str) -> bool {
+    acp_cancelled_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| {
+            warn!("acp_cancelled_requests lock poisoned, recovering");
+            poisoned.into_inner()
+        })
+        .contains(request_id)
+}
+
+/// Error message emitted when an in-flight ACP request is aborted because the
+/// client cancelled it. The chat entry maps errors containing this marker to
+/// the `RequestCancelled` JSON-RPC code.
+pub(crate) const REQUEST_CANCELLED_MESSAGE: &str = "request cancelled by client";
+
+// Task-local: the JSON-RPC request id currently being dispatched (keyed with
+// `value_to_id`). Set in `handle_request` so the deep token-collection loops
+// (`run_agent_collecting`, the autonomy loop) can observe `$/cancel_request`
+// marks without threading the id through every call site. Task-locals do not
+// propagate into `tokio::spawn`ed tasks — the loops that check live in the
+// request-handling task itself, so this is safe.
+tokio::task_local! {
+    pub(crate) static ACP_CURRENT_REQUEST_ID: Option<String>;
+}
+
+/// Returns true when the client has cancelled the request currently being
+/// handled (checked against the [`ACP_CURRENT_REQUEST_ID`] task-local).
+/// Returns false when no request is being handled (e.g. CLI paths that never
+/// go through `handle_request`).
+pub(crate) fn current_request_cancelled() -> bool {
+    ACP_CURRENT_REQUEST_ID
+        .try_with(|id| id.as_deref().map(is_acp_request_cancelled).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+/// Abort the current request with the canonical cancellation error message.
+/// Returns `Err` so callers in token loops can `?`-propagate it straight out
+/// of the request pipeline.
+pub(crate) fn cancelled_error() -> anyhow::Error {
+    anyhow::anyhow!(REQUEST_CANCELLED_MESSAGE)
+}
+
+/// Log + return the canonical cancellation error (single site for the abort
+/// path so all token loops use the same message).
+pub(crate) fn log_and_cancel(where_: &str) -> anyhow::Error {
+    info!(
+        target: "acp::protocol_pack",
+        "{}: {}",
+        where_,
+        REQUEST_CANCELLED_MESSAGE
+    );
+    cancelled_error()
 }
 
 // ── Protocol-level negotiated version ────────────────────────────────────

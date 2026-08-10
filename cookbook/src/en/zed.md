@@ -23,8 +23,7 @@ Recommended backend command:
         "--config",
         "/absolute/path/to/zed-config.toml",
         "--protocol-mode",
-        "acp_stdio",
-        "--verbose"
+        "acp_stdio"
       ]
     }
   }

@@ -155,7 +155,7 @@ async fn build_runtime_healthcheck_report_inner(
                         ),
                         details: serde_json::to_value(&report).unwrap_or_else(|_| json!({})),
                     });
-                    components.push(build_provider_dependency_component(&config));
+                    components.push(build_provider_dependency_component(&config).await);
 
                     // Secret pool diagnostics — shows which secrets are resolved.
                     let secret_details = secret_pool_status(&config);
@@ -285,7 +285,7 @@ pub fn persist_runtime_healthcheck(
 
 // ── Internal helpers ──────────────────────────────────────────────────────
 
-fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
+async fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
     let mut status = CheckStatus::Healthy;
     let mut message = String::from("provider dependencies:");
     let mut agents = Vec::new();
@@ -305,9 +305,9 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
         total_count += 1;
 
         // Try keyring first, fall back to env var (same chain as load_secret_value)
-        let api_ready = secret_ref_ready(env_var);
+        let api_ready = secret_ref_ready_async(env_var).await;
         let secret_ready = match secret_env_var {
-            Some(secret_ref) => secret_ref_ready(secret_ref),
+            Some(secret_ref) => secret_ref_ready_async(secret_ref).await,
             None => true,
         };
         let is_ready = api_ready && secret_ready;
@@ -356,22 +356,28 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
     }
 }
 
-fn secret_ref_ready(secret_ref: &str) -> bool {
+async fn secret_ref_ready_async(secret_ref: &str) -> bool {
     // Use get_secret() which checks in-memory override map first, then env vars.
     // This ensures API keys set via GUI/CLI secret overrides are properly detected.
     let keyring_prefix = crate::shared::keyring_ref::KEYRING_PREFIX;
     if secret_ref.starts_with(keyring_prefix) {
         let locator = secret_ref.trim_start_matches(keyring_prefix);
         if let Some((service, account)) = locator.split_once('/') {
-            if crate::agent::keyring_lookup_accounts(service, account)
-                .into_iter()
-                .any(|(service_name, account_name)| {
-                    keyring::Entry::new(&service_name, &account_name)
-                        .and_then(|e| e.get_password())
-                        .is_ok_and(|v| !v.trim().is_empty())
-                })
+            for (service_name, account_name) in
+                crate::agent::keyring_lookup_accounts(service, account)
             {
-                return true;
+                // Async wrapper: keyring reads are blocking I/O (D-Bus /
+                // Keychain) and must not run on a tokio worker. The shared
+                // cache (30s TTL) also short-circuits repeated probes.
+                if crate::shared::secret_override::get_keyring_cached_async(
+                    &service_name,
+                    &account_name,
+                )
+                .await
+                .is_some_and(|v| !v.trim().is_empty())
+                {
+                    return true;
+                }
             }
 
             // Also check env var fallback via get_secret() for in-memory overrides

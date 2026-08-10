@@ -8,6 +8,7 @@
 
 use crate::i18n::runtime::tf;
 use anyhow::{bail, Context, Result};
+use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,6 +20,43 @@ use tokio::task::JoinHandle;
 
 #[cfg(feature = "chaos-testing")]
 use super::chaos::ChaosEngine;
+
+// ---------------------------------------------------------------------------
+// Tool-execution reporting hook (cross-layer bridge)
+// ---------------------------------------------------------------------------
+
+/// Circuit-breaker name used for orchestration-layer tool execution reporting.
+///
+/// The tool executor (`src/orchestration/tool/executor.rs`) maintains its own
+/// local consecutive-failure counter and cannot structurally reach a
+/// `HyperResilienceEngine` instance. This process-wide hook lets that layer
+/// report outcomes into the unified engine so `circuit_breaker_open_count` /
+/// governance status reflect tool-execution breakers.
+pub(crate) const TOOL_EXECUTION_BREAKER: &str = "tool-execution";
+
+/// Process-wide report callback set once at wiring time (see
+/// `set_tool_execution_report_hook`). Invoked with `(breaker_name, success)`.
+static TOOL_EXECUTION_REPORT_HOOK: std::sync::OnceLock<Arc<dyn Fn(String, bool) + Send + Sync>> =
+    std::sync::OnceLock::new();
+
+/// Install the process-wide tool-execution reporting hook. The first call
+/// wins; later calls are ignored (typically only the server's HarnessBus
+/// construction runs this in production).
+pub(crate) fn set_tool_execution_report_hook<F>(hook: F)
+where
+    F: Fn(String, bool) + Send + Sync + 'static,
+{
+    let _ = TOOL_EXECUTION_REPORT_HOOK.set(Arc::new(hook));
+}
+
+/// Report a tool-execution outcome through the hook (no-op when no hook is
+/// installed). Called by `src/orchestration/tool/executor.rs` when its local
+/// circuit breaker trips.
+pub(crate) fn report_tool_execution(breaker_name: &str, success: bool) {
+    if let Some(hook) = TOOL_EXECUTION_REPORT_HOOK.get() {
+        hook(breaker_name.to_string(), success);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Lock helpers
@@ -284,7 +322,15 @@ pub struct ResilienceProfile {
     pub total_circuit_breakers: usize,
     pub open_circuits: usize,
     pub failover_groups: usize,
+    /// Self-healing actions that produced a **real** in-process state change
+    /// (breaker reset, leader promotion, component reinit).
     pub healing_actions_taken: u64,
+    /// Self-healing actions that are infrastructure-level and cannot be
+    /// executed inside this process (node restart, resource scaling) — they
+    /// are simulated (logged only) and counted separately so metrics never
+    /// conflate simulation with execution.
+    #[serde(default)]
+    pub healing_actions_simulated: u64,
     pub uptime_ms: u64,
 }
 
@@ -299,7 +345,8 @@ pub struct ResilienceProfile {
 /// - `config`: `RwLock` (read-heavy, rarely written)
 /// - `circuit_breakers`: `Mutex` (frequently mutated)
 /// - `failover_groups`: `Mutex` (separate from circuit breakers)
-/// - `healing_actions_taken`: `AtomicU64` (lock-free counter)
+/// - `healing_actions_taken`: `AtomicU64` (lock-free counter of **executed** actions)
+/// - `healing_actions_simulated`: `AtomicU64` (lock-free counter of **simulated** actions)
 /// - `test_metrics`: `Mutex<TestMetrics>` (consolidated latency + error rate)
 pub struct HyperResilienceEngine {
     config: RwLock<ResilienceConfig>,
@@ -312,6 +359,9 @@ pub struct HyperResilienceEngine {
     /// Per-service outcome counters driving the health monitor.
     service_counters: Mutex<HashMap<String, ServiceCounters>>,
     healing_actions_taken: AtomicU64,
+    /// Self-healing actions that only logged a simulated effect (node restart
+    /// / resource scaling are infrastructure-level and meaningless in-process).
+    healing_actions_simulated: AtomicU64,
     started_ms: u64,
     test_metrics: Mutex<TestMetrics>,
     cancel_tx: watch::Sender<bool>,
@@ -327,6 +377,7 @@ impl std::fmt::Debug for HyperResilienceEngine {
         f.debug_struct("HyperResilienceEngine")
             .field("started_ms", &self.started_ms)
             .field("healing_actions_taken", &self.healing_actions_taken)
+            .field("healing_actions_simulated", &self.healing_actions_simulated)
             .field("cancel_tx", &"watch::Sender")
             .field("health_check_handle", &"Mutex<Option<JoinHandle>>")
             .finish()
@@ -345,6 +396,7 @@ impl HyperResilienceEngine {
             service_health: Mutex::new(HashMap::new()),
             service_counters: Mutex::new(HashMap::new()),
             healing_actions_taken: AtomicU64::new(0),
+            healing_actions_simulated: AtomicU64::new(0),
             started_ms: now_ms,
             test_metrics: Mutex::new(TestMetrics {
                 avg_latency_ms: 10.0,
@@ -1007,16 +1059,23 @@ impl HyperResilienceEngine {
 
     /// Execute a self-healing action and return a report.
     ///
-    /// Performs a real health check where possible, logs clear actionable
-    /// indicators of what infrastructure changes would be needed, and applies
-    /// in-memory state updates for simulation purposes.
+    /// Performs a real health check where possible and distinguishes **executed**
+    /// actions (which produced a real in-process state change) from **simulated**
+    /// ones (logged only):
+    ///
+    /// - `ClearCircuitBreaker` / `PromoteReplica` / `ReinitializeComponent` —
+    ///   real effects (breaker reset / leader promotion / component state reset)
+    ///   and increment `healing_actions_taken`.
+    /// - `RestartNode` / `ScaleResources` — infrastructure-level actions that are
+    ///   meaningless inside a single process; they are logged as `SIMULATED` and
+    ///   increment `healing_actions_simulated` instead, so metrics never count
+    ///   simulation as execution.
     pub async fn execute_healing(
         &self,
         action: SelfHealingAction,
         target: &str,
     ) -> Result<HealingReport> {
         let started_ms = crate::shared::timestamps::now_ts_ms_u64();
-        self.healing_actions_taken.fetch_add(1, Ordering::Release);
 
         // Perform a real TCP health check to determine if the target is reachable.
         let (healthy, health_check_result) = self.try_health_check(target, 3_000).await;
@@ -1040,14 +1099,14 @@ impl HyperResilienceEngine {
             SelfHealingAction::ReinitializeComponent => 1_000,
         };
 
-        let (success, result) = match &action {
+        let (success, result, real_effect) = match &action {
             SelfHealingAction::ClearCircuitBreaker => {
                 tracing::info!(
                     target: "resilience",
                     action = "ClearCircuitBreaker",
                     target = %target,
                     healthy = %healthy,
-                    "[HEALING] WOULD: reset circuit breaker for '{}' — in production this would reset the failure count to 0 and transition the breaker to Closed state",
+                    "[HEALING] EXECUTED: reset circuit breaker for '{}' — failure count reset to 0 and the breaker transitions to Closed state",
                     target
                 );
                 tracing::info!(
@@ -1065,11 +1124,13 @@ impl HyperResilienceEngine {
                     (
                         true,
                         tf("status.hyper_resilience.breaker_reset", &[("name", target)]),
+                        true,
                     )
                 } else {
                     (
                         false,
                         tf("error.circuit_breaker_not_found", &[("name", target)]),
+                        false,
                     )
                 }
             }
@@ -1079,14 +1140,14 @@ impl HyperResilienceEngine {
                     action = "PromoteReplica",
                     target = %target,
                     healthy = %healthy,
-                    "[HEALING] WOULD: promote a replica for failover group '{}' — in production this would reconfigure the load balancer and update DNS/endpoint routing",
+                    "[HEALING] EXECUTED: promote a replica for failover group '{}' — the failover group's current leader is updated",
                     target
                 );
                 tracing::info!(
                     target: "resilience",
                     "[SUGGESTION] Actionable: ensure replica nodes are pre-warmed and ready to accept traffic. Verify health of the promoted replica before rerouting.",
                 );
-                // Simulate promoting a replica by triggering a failover.
+                // Real effect: promote the first replica as the new leader.
                 let mut fgs = lock_mutex(&self.failover_groups);
                 if let Some(group) = fgs.get_mut(target) {
                     let new_leader = if group.replica_nodes.is_empty() {
@@ -1104,21 +1165,26 @@ impl HyperResilienceEngine {
                             "status.hyper_resilience.replica_promoted",
                             &[("replica", &new_leader), ("group", target)],
                         ),
+                        true,
                     )
                 } else {
                     (
                         false,
                         tf("error.failover_group_not_found", &[("name", target)]),
+                        false,
                     )
                 }
             }
             SelfHealingAction::RestartNode => {
+                // Infrastructure-level: a single process cannot restart itself.
+                // Logged as SIMULATED and counted as simulated — no in-process
+                // state is mutated and `healing_actions_taken` is not bumped.
                 tracing::info!(
                     target: "resilience",
                     action = "RestartNode",
                     target = %target,
                     healthy = %healthy,
-                    "[HEALING] WOULD: restart node '{}' — in production this would send a SIGTERM, wait for graceful shutdown, then restart the process via the process manager (systemd/k8s)",
+                    "[HEALING] SIMULATED: restart node '{}' — in production this would send a SIGTERM, wait for graceful shutdown, then restart the process via the process manager (systemd/k8s); no in-process state was changed",
                     target
                 );
                 tracing::info!(
@@ -1126,38 +1192,24 @@ impl HyperResilienceEngine {
                     "[SUGGESTION] Actionable: implement a /healthz endpoint on '{}' and use a process supervisor that auto-restarts on failure. Configure crash loop backoff.",
                     target
                 );
-                // Reset circuit breaker state for the node's service
-                {
-                    let mut cbs = lock_mutex(&self.circuit_breakers);
-                    if let Some(cb) = cbs.get_mut(target) {
-                        cb.state = CircuitState::Closed;
-                        cb.failure_count = 0;
-                        cb.last_failure_ms = 0;
-                        cb.half_open_attempts = 0;
-                    }
-                }
-                // Reset health_score back to max
-                {
-                    let mut fgs = lock_mutex(&self.failover_groups);
-                    if let Some(group) = fgs.get_mut(target) {
-                        group.health_score = 100.0;
-                    }
-                }
                 (
                     true,
                     tf(
                         "status.hyper_resilience.node_restarted",
                         &[("node", target)],
                     ),
+                    false,
                 )
             }
             SelfHealingAction::ScaleResources => {
+                // Infrastructure-level: scaling CPU/memory/replicas is managed
+                // by the orchestrator, not this process. Logged as SIMULATED.
                 tracing::info!(
                     target: "resilience",
                     action = "ScaleResources",
                     target = %target,
                     healthy = %healthy,
-                    "[HEALING] WOULD: scale resources for '{}' — in production this would increase CPU/memory limits, scale up replica count, or adjust autoscaling thresholds",
+                    "[HEALING] SIMULATED: scale resources for '{}' — in production this would increase CPU/memory limits, scale up replica count, or adjust autoscaling thresholds; no in-process state was changed",
                     target
                 );
                 tracing::info!(
@@ -1165,18 +1217,13 @@ impl HyperResilienceEngine {
                     "[SUGGESTION] Actionable: configure horizontal pod autoscaling on '{}' with target CPU utilization at 70% and memory at 80%. Set min/max replicas.",
                     target
                 );
-                {
-                    let mut fgs = lock_mutex(&self.failover_groups);
-                    if let Some(group) = fgs.get_mut(target) {
-                        group.health_score = (group.health_score * 1.2).min(100.0);
-                    }
-                }
                 (
                     true,
                     tf(
                         "status.hyper_resilience.resources_scaled",
                         &[("target", target)],
                     ),
+                    false,
                 )
             }
             SelfHealingAction::ReinitializeComponent => {
@@ -1185,7 +1232,7 @@ impl HyperResilienceEngine {
                     action = "ReinitializeComponent",
                     target = %target,
                     healthy = %healthy,
-                    "[HEALING] WOULD: reinitialize component '{}' — in production this would reload configuration, clear internal caches, and re-establish connections to dependencies",
+                    "[HEALING] EXECUTED: reinitialize component '{}' — the component's circuit breaker is reset (Closed, failure count 0)",
                     target
                 );
                 tracing::info!(
@@ -1200,17 +1247,33 @@ impl HyperResilienceEngine {
                         cb.failure_count = 0;
                         cb.last_failure_ms = 0;
                         cb.half_open_attempts = 0;
+                        (
+                            true,
+                            tf(
+                                "status.hyper_resilience.component_reinitialized",
+                                &[("component", target)],
+                            ),
+                            true,
+                        )
+                    } else {
+                        (
+                            false,
+                            tf("error.circuit_breaker_not_found", &[("name", target)]),
+                            false,
+                        )
                     }
                 }
-                (
-                    true,
-                    tf(
-                        "status.hyper_resilience.component_reinitialized",
-                        &[("component", target)],
-                    ),
-                )
             }
         };
+
+        // Count the action honestly: real in-process state change → executed;
+        // simulated-only action (logged) → simulated; failed action → nothing.
+        if real_effect {
+            self.healing_actions_taken.fetch_add(1, Ordering::Release);
+        } else if success {
+            self.healing_actions_simulated
+                .fetch_add(1, Ordering::Release);
+        }
 
         // Wait for the simulated execution duration so the reported duration
         // is honest (the state-machine updates above are instantaneous).
@@ -1267,6 +1330,7 @@ impl HyperResilienceEngine {
 
         let uptime_ms = crate::shared::timestamps::now_ts_ms_u64().saturating_sub(self.started_ms);
         let healing_actions_taken = self.healing_actions_taken.load(Ordering::Acquire);
+        let healing_actions_simulated = self.healing_actions_simulated.load(Ordering::Acquire);
 
         ResilienceProfile {
             level,
@@ -1275,6 +1339,7 @@ impl HyperResilienceEngine {
             open_circuits,
             failover_groups,
             healing_actions_taken,
+            healing_actions_simulated,
             uptime_ms,
         }
     }
@@ -1346,9 +1411,12 @@ impl HyperResilienceEngine {
             let cbs = lock_mutex(&self.circuit_breakers);
             cbs.keys().cloned().collect()
         };
-        for name in &breaker_names {
-            self.probe(name).await;
-        }
+        // Probe concurrently: each `probe` acquires the `circuit_breakers`
+        // Mutex only briefly (state transition, no lock held across an await),
+        // so parallel probes cannot deadlock or race — previously the loop
+        // serialized every probe.
+        let probes: Vec<_> = breaker_names.iter().map(|name| self.probe(name)).collect();
+        join_all(probes).await;
 
         // ── Phase 2: Assess system health ──────────────────────────────────
         let health = self.system_health().await;
@@ -1382,7 +1450,7 @@ impl HyperResilienceEngine {
             };
         }
 
-        // ── Phase 4: Auto-heal if degraded ────────────────────────────────
+        // ── Phase 3: Auto-heal if degraded ────────────────────────────────
         if health.level >= DegradationLevel::Constrained {
             let healing_enabled = read_lock(&self.config).self_healing_enabled;
             if healing_enabled {
@@ -1772,6 +1840,59 @@ mod tests {
         // After healing, the breaker should be closed.
         let health = engine.system_health().await;
         assert_eq!(health.open_circuits, 0);
+    }
+
+    /// 10b. Healing counters distinguish executed from simulated actions:
+    /// infrastructure-level actions (RestartNode) never bump the executed
+    /// counter, only the simulated one.
+    #[tokio::test]
+    async fn test_execute_healing_counts_executed_vs_simulated() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine
+            .register_circuit_breaker("cb-real", 1, 10_000)
+            .await
+            .expect("register_circuit_breaker should succeed");
+        engine
+            .register_failover_group("grp", "primary", vec!["replica-1".to_string()])
+            .await
+            .expect("register_failover_group should succeed");
+
+        // Real effects: ClearCircuitBreaker (breaker exists) and PromoteReplica
+        // (group exists) both count as executed.
+        engine
+            .execute_healing(SelfHealingAction::ClearCircuitBreaker, "cb-real")
+            .await
+            .expect("execute_healing should succeed");
+        engine
+            .execute_healing(SelfHealingAction::PromoteReplica, "grp")
+            .await
+            .expect("execute_healing should succeed");
+
+        // Simulated effect: RestartNode is infrastructure-level and must not
+        // count as executed.
+        engine
+            .execute_healing(SelfHealingAction::RestartNode, "some-node")
+            .await
+            .expect("execute_healing should succeed");
+
+        let p = engine.profile().await;
+        assert_eq!(
+            p.healing_actions_taken, 2,
+            "only real effects count as executed"
+        );
+        assert_eq!(
+            p.healing_actions_simulated, 1,
+            "RestartNode counts as simulated, not executed"
+        );
+
+        // A failed action (unknown breaker) counts nowhere.
+        engine
+            .execute_healing(SelfHealingAction::ClearCircuitBreaker, "no-such-breaker")
+            .await
+            .expect("execute_healing should succeed");
+        let p = engine.profile().await;
+        assert_eq!(p.healing_actions_taken, 2);
+        assert_eq!(p.healing_actions_simulated, 1);
     }
 
     /// 11. Profile accurately reflects engine state after operations.

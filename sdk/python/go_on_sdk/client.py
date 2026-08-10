@@ -277,8 +277,9 @@ class GoOnClient:
         Number of retries for transient HTTP failures (default: 3).
     retry_delay:
         Base delay in seconds between retries (default: 1.0).
-        Uses exponential backoff with jitter for faster recovery.
-        Actual delays: retry_delay * 1x, 2x, 4x + random 0-100ms jitter.
+        Uses the unified exponential backoff with multiplicative ±30% jitter
+        (contracts/cross-client-sync.md):
+        delay = min(retry_delay * 2^attempt, 30s) * (0.7 + random() * 0.3).
     use_exponential_backoff:
         Enable exponential backoff with jitter for retries (default: True).
         When True, retry delays grow exponentially, improving throughput
@@ -382,7 +383,9 @@ class GoOnClient:
                     await asyncio.sleep(self._retry_delay_for_attempt(attempt))
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
-                if status in (429, 502, 503):
+                # Unified retryable set (contracts/cross-client-sync.md):
+                # 408 (Request Timeout) + 429 (Too Many Requests) + all 5xx.
+                if status in (408, 429) or 500 <= status <= 599:
                     last_error = e
                     if attempt < self.max_retries:
                         await asyncio.sleep(self._retry_delay_for_attempt(attempt))

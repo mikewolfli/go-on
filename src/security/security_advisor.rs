@@ -443,13 +443,27 @@ impl SecurityAdvisorAgent {
     ) -> Result<(), SecurityAdvisorError> {
         *self.last_dependency_scan.lock().await = Some(scan_result.clone());
 
-        for vuln in &scan_result.vulnerabilities {
-            let fix = if self.config.auto_fix_enabled {
-                self.auto_generate_fix(vuln).await.ok()
-            } else {
-                None
-            };
+        // Fix generation is independent per vulnerability — generate all fixes
+        // concurrently (the daily background task previously serialized them).
+        // Individual failures degrade to `None` (no fix) instead of aborting
+        // the whole batch.
+        let fixes: Vec<Option<FixPatch>> = if self.config.auto_fix_enabled {
+            futures_util::future::join_all(
+                scan_result
+                    .vulnerabilities
+                    .iter()
+                    .map(|vuln| self.auto_generate_fix(vuln)),
+            )
+            .await
+            .into_iter()
+            .map(|result| result.ok())
+            .collect()
+        } else {
+            vec![None; scan_result.vulnerabilities.len()]
+        };
 
+        // WebSocket pushes stay sequential so alert ordering matches the scan.
+        for (vuln, fix) in scan_result.vulnerabilities.iter().zip(fixes) {
             let alert = SecurityAlert {
                 id: format!("dep-{}", vuln.advisory_id),
                 severity: vuln.severity.clone(),
@@ -727,22 +741,22 @@ impl SecurityAdvisorAgent {
 
 // ── Helper: ISO-8601 date ─────────────────────────────────────────────
 
-/// Produce an ISO 8601 date string for the current day.
-fn iso_date_today() -> String {
-    // Uses SystemTime to produce a simple YYYY-MM-DD string.
-    let dur = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs();
-    // Days since epoch.
-    let days = secs / 86400;
-    // Compute year/month/day (simple algorithm).
-    let (y, m, d) = days_to_date(days as i64);
-    format!("{:04}-{:02}-{:02}", y, m, d)
+/// Convert a Unix timestamp (seconds) to a (year, month, day) tuple in the
+/// proleptic Gregorian calendar.
+///
+/// **Single canonical epoch→date conversion** for the security, memory and
+/// governance layers (previously three independent implementations lived in
+/// `security_advisor.rs` (Hinnant), `memory_persistence.rs` (day-loop) and
+/// `hardening.rs` (integer division)). Uses floor division so pre-1970
+/// timestamps map to the correct civil date.
+pub(crate) fn unix_ts_to_ymd(secs: i64) -> (i64, i64, i64) {
+    days_to_date(secs.div_euclid(86_400))
 }
 
+/// Convert days since the Unix epoch (1970-01-01) to a (year, month, day)
+/// tuple. Algorithm adapted from Howard Hinnant's public-domain date
+/// algorithms (`civil_from_days`); leap years handled exactly.
 fn days_to_date(days: i64) -> (i64, i64, i64) {
-    // Algorithm adapted from Howard Hinnant's public-domain date algorithms.
     let z = days + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = z - era * 146097;
@@ -756,6 +770,20 @@ fn days_to_date(days: i64) -> (i64, i64, i64) {
     (y, m, d)
 }
 
+/// Convert a Unix timestamp (seconds) to the day number since the epoch
+/// (floor-divided). Used to detect calendar-day changes for daily resets
+/// (e.g. `governance::hardening::TenantBudgetEnforcer`).
+pub(crate) fn unix_ts_day_number(secs: i64) -> i64 {
+    secs.div_euclid(86_400)
+}
+
+/// Produce an ISO 8601 date string for the current day.
+fn iso_date_today() -> String {
+    let secs = crate::shared::timestamps::now_ts();
+    let (y, m, d) = unix_ts_to_ymd(secs);
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -764,6 +792,26 @@ fn days_to_date(days: i64) -> (i64, i64, i64) {
 mod tests {
     use super::*;
     use crate::security::vulnerability_scan::{Severity, Vulnerability};
+
+    /// Boundary coverage for the canonical epoch→date conversion: century
+    /// leap year (2000), a normal year, leap-day 2024-02-29, and month/year
+    /// boundaries. Guards against the pre-unification day-loop implementation
+    /// disagreeing at month boundaries.
+    #[test]
+    fn test_unix_ts_to_ymd_known_dates() {
+        assert_eq!(unix_ts_to_ymd(0), (1970, 1, 1));
+        assert_eq!(unix_ts_to_ymd(86_400), (1970, 1, 2));
+        assert_eq!(unix_ts_to_ymd(946_684_800), (2000, 1, 1));
+        assert_eq!(unix_ts_to_ymd(1_704_067_200), (2024, 1, 1));
+        // 2024 is a leap year: Feb 29 exists.
+        assert_eq!(unix_ts_to_ymd(1_709_164_800), (2024, 2, 29));
+        assert_eq!(unix_ts_to_ymd(1_709_251_200), (2024, 3, 1));
+        assert_eq!(unix_ts_to_ymd(1_735_689_600), (2025, 1, 1));
+        // Last second of a month stays in that month.
+        assert_eq!(unix_ts_to_ymd(1_709_251_199), (2024, 2, 29));
+        // Pre-epoch timestamps map to the correct civil date (floor division).
+        assert_eq!(unix_ts_to_ymd(-86_400), (1969, 12, 31));
+    }
 
     #[test]
     fn test_fix_patch_serialize_roundtrip() {

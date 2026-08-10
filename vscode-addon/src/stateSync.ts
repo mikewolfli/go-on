@@ -15,17 +15,12 @@
 import * as vscode from "vscode";
 import { parseSseChunk } from "./runtime/sseStream";
 import { StateSyncEvent } from "./generated/stateSyncTypes";
+import { backoffDelayMs } from "./utils";
 
 export { StateSyncEvent };
 
 /** Default SSE connection timeout (in ms). */
 const DEFAULT_SSE_TIMEOUT_MS = 15_000;
-
-/** Maximum delay cap for exponential backoff (30 seconds, matches reconnect.ts / cross-client-sync.md). */
-const MAX_BACKOFF_MS = 30_000;
-
-/** Base delay for exponential backoff (1 second). */
-const BASE_DELAY_MS = 1_000;
 
 /** Callbacks for each event type. */
 export interface StateSyncCallbacks {
@@ -59,25 +54,6 @@ function stateSyncEventSummary(event: StateSyncEvent): string {
     case "heartbeat":
       return "heartbeat";
   }
-}
-
-/**
- * Compute exponential backoff delay with 30% jitter.
- *
- * Unified formula from contracts/cross-client-sync.md:
- * delay = min(1000 * 2^attempt, 30000) * (0.7 + random * 0.3)
- * Matches runtime/reconnect.ts. This prevents thundering herd when
- * multiple clients reconnect simultaneously.
- *
- * @param attempt - zero-based retry attempt number
- * @returns delay in milliseconds
- */
-function backoffDelay(attempt: number): number {
-  const exponential = BASE_DELAY_MS * Math.pow(2, attempt);
-  const capped = Math.min(exponential, MAX_BACKOFF_MS);
-  // 30% jitter: keep at least 70% of the base delay
-  const jitter = 0.7 + Math.random() * 0.3;
-  return Math.round(capped * jitter);
 }
 
 /**
@@ -118,7 +94,7 @@ export function startStateSyncListener(
 
         if (!response.ok || !response.body) {
           log(`connection failed: ${response.status}`);
-          const delay = backoffDelay(retryAttempt);
+          const delay = backoffDelayMs(retryAttempt);
           retryAttempt++;
           await sleep(delay);
           continue;
@@ -148,7 +124,7 @@ export function startStateSyncListener(
 
         log("stream ended, reconnecting...");
         if (!aborted) {
-          const delay = backoffDelay(retryAttempt);
+          const delay = backoffDelayMs(retryAttempt);
           retryAttempt++;
           await sleep(delay);
         }
@@ -158,7 +134,7 @@ export function startStateSyncListener(
         } else {
           log(`error: ${err}`);
         }
-        const delay = backoffDelay(retryAttempt);
+        const delay = backoffDelayMs(retryAttempt);
         retryAttempt++;
         if (!aborted) await sleep(delay);
       } finally {

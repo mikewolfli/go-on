@@ -150,6 +150,26 @@ fn entry_guard_exempt_path(path: &str) -> bool {
     matches!(path, "/" | "/health")
 }
 
+/// Per-IP entry rate limit shared by the ACP and MCP HTTP arms.
+///
+/// Charges the `entry:<source>` bucket in the phase rate limiter using the
+/// runtime's `entry_rate_limit_rpm` / `entry_rate_limit_burst` config.
+/// Returns `true` when the request is allowed; the caller writes the 429
+/// rejection itself so the two arms keep their own response shapes. This is
+/// the single implementation — the MCP arm previously duplicated this block
+/// byte-for-byte.
+pub(crate) fn entry_rate_limit_allowed(server: &AcpServer, source: &str) -> bool {
+    let key = format!("entry:{}", source);
+    let rpm_limit = server.runtime_config.entry_rate_limit_rpm.max(1);
+    let burst = server.runtime_config.entry_rate_limit_burst.max(1);
+    server
+        .resilience
+        .phase_rate_limiter
+        .lock()
+        .map(|guard| guard.allow(&key, rpm_limit, Some(burst)))
+        .unwrap_or(true)
+}
+
 /// Write a structured entry rejection response.
 ///
 /// Uses i18n-aware messages for user-facing strings.
@@ -309,20 +329,17 @@ async fn apply_entry_guards(
         }
     }
 
-    let key = format!("entry:{}", source);
-    let rpm_limit = server.runtime_config.entry_rate_limit_rpm.max(1);
-    let burst = server.runtime_config.entry_rate_limit_burst.max(1);
-    let allowed = server
-        .resilience
-        .phase_rate_limiter
-        .lock()
-        .map(|guard| guard.allow(&key, rpm_limit, Some(burst)))
-        .unwrap_or(true);
+    let source = peer_addr.ip().to_string();
+    let allowed = crate::acp::r#impl::runtime::security::entry_rate_limit_allowed(server, &source);
 
     if !allowed {
         warn!(
             "entry rate limit rejected {} {} from {} (rpm={}, burst={})",
-            method, path, source, rpm_limit, burst
+            method,
+            path,
+            source,
+            server.runtime_config.entry_rate_limit_rpm,
+            server.runtime_config.entry_rate_limit_burst
         );
         write_entry_rejection(
             socket,

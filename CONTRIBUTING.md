@@ -131,7 +131,10 @@ git push origin v1.4.1
 
 ## Architecture Overview
 
-go-on uses a **14-bus capability architecture**:
+go-on uses a **sub-bus capability architecture** with 7 feature-gated sub-buses
+(tool, orchestration, observability, optimization, memory, protocol, and
+distributed-memory), governed by the HarnessBus (governance) and connected
+through a cognitive loop with a unified **DispatchOutput** handler pattern:
 
 ```
 HarnessBus (Governance) → CapabilityBus (Intelligence) → ToolBus / ObservBus / etc.

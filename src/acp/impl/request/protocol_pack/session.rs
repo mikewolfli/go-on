@@ -63,6 +63,7 @@ pub async fn session_new_payload(server: &AcpServer, params: Value) -> Result<Va
                 additional_directories: additional_directories.clone(),
                 config_options: config_options_init.clone(),
                 favorite_config_values: Default::default(),
+                cancelled: false,
             },
         );
     }
@@ -152,6 +153,24 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    // A session marked cancelled via `session/cancel` must not accept new
+    // prompts. Checked before `build_chat_params_from_acp` (which consumes
+    // `params`) so the marker stays observable as a real gate.
+    if let Some(sid) = session_id_for_notification.as_deref() {
+        let cancelled = super::acp_session_state()
+            .read()
+            .await
+            .get(sid)
+            .map(|s| s.cancelled)
+            .unwrap_or(false);
+        if cancelled {
+            return Err(anyhow::anyhow!(
+                "session '{}' has been cancelled via session/cancel",
+                sid
+            ));
+        }
+    }
+
     let chat_params_value = super::build_chat_params_from_acp(params, &session_state);
     let mut chat_params: ChatParams = match serde_json::from_value(chat_params_value) {
         Ok(p) => p,
@@ -167,6 +186,12 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
     if let Some(snapshot) = check_server_shutdown(server).await? {
         tracing::warn!("ACP session/prompt: rejected — server shutting down");
         return Err(anyhow::anyhow!("server is shutting down: {:?}", snapshot));
+    }
+    // $/cancel_request support: abort immediately when the client cancelled
+    // this request id before execution started (mid-flight cancellation is
+    // handled by the token loops in run_agent_collecting / the autonomy loop).
+    if super::current_request_cancelled() {
+        return Err(super::log_and_cancel("session_prompt_payload"));
     }
     match evaluate_pre_chat_gates(server, &mut chat_params).await? {
         crate::acp::r#impl::chat::PreChatGate::Pass => {}
@@ -200,7 +225,15 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
 
     // Spawn bridge task: StreamFrame → session/update JSON-RPC notification
     let bridge_sid = session_id_for_notification.clone();
+    // The bridge task needs an `AcpServer` to reuse the shared `send_chunk`
+    // writer. Take it from the global registry (set by both `run_acp_server`
+    // and `run_acp_http_server`); without it there is no transport to
+    // deliver notifications to, so the bridge exits early.
+    let bridge_server = crate::acp::server::current_acp_server();
     let bridge_handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {
+        let Some(server) = bridge_server else {
+            return;
+        };
         let sid = match bridge_sid {
             Some(ref s) => s.clone(),
             None => return, // No session ID, nothing to bridge
@@ -219,22 +252,14 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                         if !reasoning.is_empty() {
                             // Flush any pending message text before starting thought block
                             if !message_buf.is_empty() {
-                                send_session_update_notification(
-                                    &sid,
-                                    "agent_message_chunk",
-                                    &message_buf,
-                                )
-                                .await;
+                                send_chunk(&server, &sid, "agent_message_chunk", &message_buf)
+                                    .await;
                                 message_buf.clear();
                             }
                             thinking_buf.push_str(reasoning);
                             if thinking_buf.len() >= FLUSH_THRESHOLD {
-                                send_session_update_notification(
-                                    &sid,
-                                    "agent_thought_chunk",
-                                    &thinking_buf,
-                                )
-                                .await;
+                                send_chunk(&server, &sid, "agent_thought_chunk", &thinking_buf)
+                                    .await;
                                 thinking_buf.clear();
                             }
                         }
@@ -244,22 +269,14 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                         if !token.is_empty() {
                             // Flush any pending thinking before starting message
                             if !thinking_buf.is_empty() {
-                                send_session_update_notification(
-                                    &sid,
-                                    "agent_thought_chunk",
-                                    &thinking_buf,
-                                )
-                                .await;
+                                send_chunk(&server, &sid, "agent_thought_chunk", &thinking_buf)
+                                    .await;
                                 thinking_buf.clear();
                             }
                             message_buf.push_str(token);
                             if message_buf.len() >= FLUSH_THRESHOLD {
-                                send_session_update_notification(
-                                    &sid,
-                                    "agent_message_chunk",
-                                    &message_buf,
-                                )
-                                .await;
+                                send_chunk(&server, &sid, "agent_message_chunk", &message_buf)
+                                    .await;
                                 message_buf.clear();
                             }
                         }
@@ -274,7 +291,8 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
                         if !phase.is_empty() && !desc.is_empty() {
-                            send_session_update_notification(
+                            send_chunk(
+                                &server,
                                 &sid,
                                 "agent_thought_chunk",
                                 &format!("[{}] {}", phase, desc),
@@ -360,17 +378,11 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                 "result" | "done" => {
                     // Stream ending — flush remaining buffers
                     if !thinking_buf.is_empty() {
-                        send_session_update_notification(
-                            &sid,
-                            "agent_thought_chunk",
-                            &thinking_buf,
-                        )
-                        .await;
+                        send_chunk(&server, &sid, "agent_thought_chunk", &thinking_buf).await;
                         thinking_buf.clear();
                     }
                     if !message_buf.is_empty() {
-                        send_session_update_notification(&sid, "agent_message_chunk", &message_buf)
-                            .await;
+                        send_chunk(&server, &sid, "agent_message_chunk", &message_buf).await;
                         message_buf.clear();
                     }
                 }
@@ -439,6 +451,11 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
 }
 
 /// Send a typed session/update notification chunk.
+///
+/// Single implementation shared by the tool-execution call sites
+/// (`protocol_pack::mcp::acp_tools_call_payload`) and the session/prompt
+/// streaming bridge task — the former private `send_session_update_notification`
+/// (byte-identical body) was removed.
 pub async fn send_chunk(_server: &AcpServer, session_id: &str, chunk_type: &str, text: &str) {
     use crate::schema::{ContentBlock, ContentChunk, SessionUpdate, TextContent};
     let update = match chunk_type {
@@ -451,25 +468,6 @@ pub async fn send_chunk(_server: &AcpServer, session_id: &str, chunk_type: &str,
     };
     // Delegate to the single envelope writer (previously this rebuilt the
     // jsonrpc envelope via io::send_notification).
-    send_session_update(session_id, update).await;
-}
-
-/// Send a session/update notification via the global transport (no &AcpServer needed).
-///
-/// Used by the streaming bridge task (`session_prompt_payload`) to send
-/// real-time `agent_thought_chunk` and `agent_message_chunk` notifications
-/// from the autonomy loop's `StreamFrame` events directly through the global
-/// transport, without borrowing the `AcpServer` across a `tokio::spawn` boundary.
-async fn send_session_update_notification(session_id: &str, chunk_type: &str, text: &str) {
-    use crate::schema::{ContentBlock, ContentChunk, SessionUpdate, TextContent};
-    let update = match chunk_type {
-        "agent_thought_chunk" => SessionUpdate::AgentThoughtChunk(ContentChunk::new(
-            ContentBlock::Text(TextContent::new(text)),
-        )),
-        _ => SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
-            TextContent::new(text),
-        ))),
-    };
     send_session_update(session_id, update).await;
 }
 
@@ -536,19 +534,40 @@ async fn register_pending_permission_request(
 }
 
 /// Handle `session/cancel` — cancels a session.
-pub async fn session_cancel_payload(_server: &AcpServer, params: Value) -> Result<Value> {
+///
+/// Real cancellation semantics: clears the session's permission / pending-
+/// request state (same cleanup as `session_close_payload` / `session_delete_payload`)
+/// and marks the session as cancelled so later prompts against it are
+/// rejected. Returns a success response — previously this always returned
+/// `Err`, so every `session/cancel` call surfaced a JSON-RPC error with no
+/// cleanup performed.
+pub async fn session_cancel_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let session_id = params
         .get("sessionId")
         .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-    tracing::warn!(
+        .unwrap_or("unknown")
+        .to_string();
+
+    // 1. Clear granted permissions, pending permission requests, and (in
+    //    multi-users-server) the tenant rate-limiter entry — shared cleanup.
+    cleanup_session_permission_state(server, &session_id).await;
+
+    // 2. Mark the session as cancelled so `session/prompt` rejects it.
+    {
+        let mut state = super::acp_session_state().write().await;
+        if let Some(entry) = state.get_mut(&session_id) {
+            entry.cancelled = true;
+        }
+    }
+
+    tracing::info!(
         target: "acp::protocol_pack",
         session_id = %session_id,
-        "session_cancel_payload: session {} cancelled via notification",
+        "session_cancel_payload: session {} cancelled (permission state cleared)",
         session_id
     );
 
-    Err(anyhow::anyhow!("session {} cancelled", session_id))
+    Ok(serde_json::json!({ "cancelled": true, "sessionId": session_id }))
 }
 
 /// Handle `session/list` — lists existing sessions.

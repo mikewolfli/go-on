@@ -5,6 +5,8 @@
 //! `record_trace_event`).  Extracted from the parent `chat.rs` to reduce
 //! the monolithic file size.
 
+use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -15,13 +17,63 @@ use tracing::{debug, info, warn};
 use crate::acp::server::AcpServer;
 use crate::agent::Message;
 use crate::i18n::runtime::{t, tf};
-use crate::orchestration::session_compressor::SessionCompressor;
+use crate::orchestration::session_compressor::{IncrementalState, SessionCompressor};
 use crate::orchestration::session_context::SessionContextManager;
 use crate::rpc_protocol::{chat_trace_context, child_trace_context, RequestTraceContext};
 
 use super::params::ChatParams;
 use super::streaming::StreamObserver;
 use super::{check_server_shutdown, evaluate_pre_chat_gates, process_chat_request};
+
+// ---------------------------------------------------------------------------
+// Per-conversation incremental compression state
+// ---------------------------------------------------------------------------
+
+/// Per-conversation `SessionCompressor` incremental state, keyed by
+/// `conversation_id`.
+///
+/// Previously the chat path constructed a fresh `SessionCompressor::default()`
+/// on every request, so the incremental state (`previously_compressed_count` /
+/// `running_summary`) was permanently empty and `advance_incremental` never
+/// took effect in production. Mounting the state here lets later requests in
+/// the same conversation resume where the previous compression round left off.
+///
+/// Bounds:
+/// - At most [`MAX_TRACKED_COMPRESSION_STATES`] conversations are tracked;
+///   the least-recently-compressed entry is evicted when the cap is exceeded.
+/// - `running_summary` growth is capped inside `advance_incremental`.
+static SESSION_COMPRESSION_STATE: OnceLock<RwLock<HashMap<String, IncrementalState>>> =
+    OnceLock::new();
+
+/// Maximum number of conversations with tracked compression state.
+const MAX_TRACKED_COMPRESSION_STATES: usize = 1024;
+
+/// Load the incremental compression state for a conversation (empty if none).
+fn session_compression_state(conversation_id: &str) -> IncrementalState {
+    let map = SESSION_COMPRESSION_STATE.get_or_init(Default::default);
+    map.read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(conversation_id)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Persist the incremental compression state for a conversation, evicting the
+/// least-recently-compressed entry when the tracked-conversation cap is hit.
+fn update_session_compression_state(conversation_id: &str, state: IncrementalState) {
+    let map = SESSION_COMPRESSION_STATE.get_or_init(Default::default);
+    let mut guard = map.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.insert(conversation_id.to_string(), state);
+    if guard.len() > MAX_TRACKED_COMPRESSION_STATES {
+        if let Some(oldest) = guard
+            .iter()
+            .min_by_key(|(_, s)| s.last_compressed_at.unwrap_or(u64::MAX))
+            .map(|(k, _)| k.clone())
+        {
+            guard.remove(&oldest);
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // handle_chat
@@ -71,7 +123,7 @@ pub(crate) async fn handle_chat(
             send_error(
                 server,
                 id,
-                -32031,
+                crate::acp::r#impl::request::protocol::AcpErrorCode::ShuttingDown as i32,
                 t("error.chat.server_shutting_down"),
                 Some(snapshot),
             )
@@ -121,7 +173,7 @@ pub(crate) async fn handle_chat(
             send_error(
                 server,
                 id,
-                -32040,
+                crate::acp::r#impl::request::protocol::AcpErrorCode::EscalationRequired as i32,
                 t("error.chat.escalation_required"),
                 Some(serde_json::json!({
                     "reason": "Request requires human approval per governance policy",
@@ -133,6 +185,27 @@ pub(crate) async fn handle_chat(
         }
 
         // Determine which observer to use — external (SSE) or internal (JSON-RPC).
+
+        // $/cancel_request support: if the client already cancelled this request
+        // id before the pipeline started, respond with a cancellation error
+        // instead of running the pipeline. Mid-flight cancellation is handled by
+        // the token loops in run_agent_collecting / the autonomy loop, which
+        // bail out with the same message when the mark is set.
+        if id.as_ref().is_some_and(|v| {
+            crate::acp::r#impl::request::protocol_pack::is_acp_request_cancelled(
+                &crate::rpc_protocol::value_to_id(v),
+            )
+        }) {
+            send_error(
+                server,
+                id,
+                crate::acp::r#impl::request::protocol::AcpErrorCode::RequestCancelled as i32,
+                crate::acp::r#impl::request::protocol_pack::REQUEST_CANCELLED_MESSAGE.to_string(),
+                None,
+            )
+            .await?;
+            return Ok(());
+        }
 
         // GAP-46-12: Track session context across requests.
         // Concept extraction only benefits long conversations — for ordinary
@@ -179,15 +252,27 @@ pub(crate) async fn handle_chat(
             let retained_indices = session_mgr.select_retained_messages(&msg_tuples, effective);
 
             // If messages heavily exceed budget (50%+ over), try semantic
-            // compression as an alternative to simple trimming.
-            let compression_applied = if msg_count > effective * 3 / 2 {
-                let compressor = SessionCompressor::default();
+            // compression as an alternative to simple trimming. The compressor
+            // carries the conversation's incremental state across requests so
+            // already-compressed messages are not re-summarized.
+            let estimated_tokens: usize = msg_tuples
+                .iter()
+                .map(|(_, content)| crate::shared::token_estimator::estimate_tokens(content))
+                .sum();
+            let compressor = SessionCompressor {
+                incremental: session_compression_state(&conversation_id),
+                ..SessionCompressor::default()
+            };
+            let compression_applied = if compressor.should_compress(msg_count, estimated_tokens)
+                || compressor.requires_compression(msg_count)
+            {
                 let compressed = session_mgr.compress_messages(&msg_tuples, &compressor);
                 if !compressed.summary.is_empty() {
                     let original_count = compressed.original_count;
+                    let kept_count = compressed.kept_messages.len();
                     let compressed_count = compressed.compressed_count;
                     let compression_ratio = compressed.compression_ratio;
-                    let kept_count = compressed.kept_messages.len();
+                    let split_point = compressed.split_point;
                     let summary_text = compressed.summary.clone();
 
                     warn!(
@@ -211,12 +296,23 @@ pub(crate) async fn handle_chat(
                             role: "system".to_string(),
                             content: format!(
                                 "[Session compressed: {} messages summarized]\n{}",
-                                original_count - kept_count,
+                                original_count.saturating_sub(kept_count),
                                 summary_text,
                             ),
                         },
                     );
                     chat_params.messages = compressed_msgs;
+
+                    // Advance and persist the incremental state so the next
+                    // request resumes from this round's split point. The
+                    // advance amount is the round's increment (split point
+                    // minus messages already accounted for).
+                    let already_compressed = compressor.incremental.previously_compressed_count;
+                    let advanced = compressor.advance_incremental(
+                        split_point.saturating_sub(already_compressed),
+                        &summary_text,
+                    );
+                    update_session_compression_state(&conversation_id, advanced.incremental);
                     true
                 } else {
                     false

@@ -164,6 +164,14 @@ pub async fn run_autonomy_loop(
         let round_start = Instant::now();
         let mut tool_calls: Vec<(String, String)> = Vec::new();
 
+        // $/cancel_request support: abort between rounds when the client
+        // cancelled this request id (task-local set by handle_request).
+        if crate::acp::r#impl::request::protocol_pack::current_request_cancelled() {
+            return Err(crate::acp::r#impl::request::protocol_pack::log_and_cancel(
+                "autonomy_loop",
+            ));
+        }
+
         // ── Emit round iteration progress status ─────────────────────
         if let Some(ref tx) = config.progress_tx {
             let _ = tx.send(StreamFrame {
@@ -244,6 +252,16 @@ pub async fn run_autonomy_loop(
         };
         tokio::pin!(timeout_fut);
         loop {
+            // $/cancel_request support: stop collecting tokens as soon as the
+            // client cancels this request id — do not waste further LLM calls.
+            if crate::acp::r#impl::request::protocol_pack::current_request_cancelled() {
+                tracing::info!(
+                    target: "autonomy_loop",
+                    round = iteration,
+                    "autonomy_loop: request cancelled by client, stopping round"
+                );
+                break;
+            }
             tokio::select! {
                 biased;
                 token = receiver.recv() => {
@@ -319,6 +337,13 @@ pub async fn run_autonomy_loop(
             }
         }
 
+        // $/cancel_request support: abort the whole loop (not just the current
+        // round) on cancellation, and do not wait for the spawned agent task.
+        if crate::acp::r#impl::request::protocol_pack::current_request_cancelled() {
+            return Err(crate::acp::r#impl::request::protocol_pack::log_and_cancel(
+                "autonomy_loop",
+            ));
+        }
         let _ = chat_task.await;
         let round_duration_ms = round_start.elapsed().as_millis() as u64;
 

@@ -74,8 +74,8 @@ impl Default for UiStabilityConfig {
             backend_refresh_interval_secs: 5,
             backend_ui_commit_debounce_ms: 120,
             health_disconnect_debounce_count: 2,
-            chat_stream_chunk_flush_ms: 8,
-            chat_repaint_interval_ms: 16,
+            chat_stream_chunk_flush_ms: 33,
+            chat_repaint_interval_ms: 33,
             chat_max_pending_events_per_frame: 256,
             stream_token_flush_ms: 16,
         }

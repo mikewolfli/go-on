@@ -99,6 +99,8 @@ pub(crate) use super::decide::{
 };
 #[cfg(test)]
 pub(crate) use super::sense::SensingOutput;
+#[cfg(test)]
+pub(crate) use crate::intelligence::capability_bus::learning_optimization_bus::LearningEvent;
 
 // ---------------------------------------------------------------------------
 // Bus event record — each operation produces a traceable event
@@ -114,23 +116,6 @@ pub struct BusEvent {
     pub detail: Value,
 }
 
-// ---------------------------------------------------------------------------
-// WorkflowLearningEvent — shared event type
-// ---------------------------------------------------------------------------
-
-/// Runtime execution event (used by SharedLearning and the BLUE70 LearningOptimizationBus).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkflowLearningEvent {
-    pub task_type: String,
-    pub agent: String,
-    pub success: bool,
-    pub duration_ms: u64,
-    pub token_cost: u64,
-    pub quality_score: f64,
-    pub timestamp_ms: u64,
-}
-
-// (Builder section below)
 // ---------------------------------------------------------------------------
 // CapabilityBus — the top-level scheduling coordinator
 // ---------------------------------------------------------------------------
@@ -1391,7 +1376,7 @@ pub(crate) mod tests {
         let target = format!("{:?}", task.task_type);
 
         let strong = vec![
-            super::WorkflowLearningEvent {
+            super::LearningEvent {
                 task_type: target.clone(),
                 agent: "agent-a".to_string(),
                 success: true,
@@ -1400,7 +1385,7 @@ pub(crate) mod tests {
                 quality_score: 0.9,
                 timestamp_ms: 10,
             },
-            super::WorkflowLearningEvent {
+            super::LearningEvent {
                 task_type: target.clone(),
                 agent: "agent-a".to_string(),
                 success: true,
@@ -1411,7 +1396,7 @@ pub(crate) mod tests {
             },
         ];
         let weak = vec![
-            super::WorkflowLearningEvent {
+            super::LearningEvent {
                 task_type: target,
                 agent: "agent-b".to_string(),
                 success: false,
@@ -1420,7 +1405,7 @@ pub(crate) mod tests {
                 quality_score: 0.2,
                 timestamp_ms: 12,
             },
-            super::WorkflowLearningEvent {
+            super::LearningEvent {
                 task_type: "Other".to_string(),
                 agent: "agent-b".to_string(),
                 success: true,

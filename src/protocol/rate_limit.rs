@@ -83,12 +83,15 @@ impl RateLimitMiddleware {
         self.buckets.with_lock(|buckets| buckets.remove(tenant_id));
     }
 
-    /// Check if a request from the given tenant should be allowed.
-    /// Returns Ok(()) if allowed, or the number of seconds to wait before retrying.
-    pub fn check(&self, tenant_id: &str) -> Result<(), u64> {
+    /// Shared capacity guard for new tenants: lazily evicts idle entries once
+    /// the bucket map is at capacity, and reports whether the tenant must be
+    /// rejected because the map is still full. Used by both [`Self::check`]
+    /// and [`Self::try_consume_tenant`] so no entry path can grow the bucket
+    /// map without bound (previously `try_consume_tenant` bypassed both
+    /// `lazy_evict` and the `max_tenants` cap).
+    fn reject_tenant_if_full(&self, tenant_id: &str) -> bool {
         self.lazy_evict();
-
-        let should_reject = self.buckets.with_lock(|buckets| {
+        self.buckets.with_lock(|buckets| {
             if !buckets.contains_key(tenant_id) && buckets.len() >= self.max_tenants {
                 warn!(
                     "rate limit tenant limit reached (max={}), rejecting tenant '{}'",
@@ -97,9 +100,13 @@ impl RateLimitMiddleware {
                 return true;
             }
             false
-        });
+        })
+    }
 
-        if should_reject {
+    /// Check if a request from the given tenant should be allowed.
+    /// Returns Ok(()) if allowed, or the number of seconds to wait before retrying.
+    pub fn check(&self, tenant_id: &str) -> Result<(), u64> {
+        if self.reject_tenant_if_full(tenant_id) {
             return Err(60);
         }
 
@@ -122,8 +129,15 @@ impl RateLimitMiddleware {
     /// Try to consume tokens for a tenant (sync, no async required).
     ///
     /// Delegates to the canonical `BucketMap::try_consume_n` primitive so the
-    /// create-or-recreate + refill logic lives in exactly one place.
+    /// create-or-recreate + refill logic lives in exactly one place, and
+    /// applies the same lazy-eviction + `max_tenants` capacity guard as
+    /// [`Self::check`] (previously this path bypassed both, letting the bucket
+    /// map grow without bound). Returns `false` when the tenant must be
+    /// rejected because the bucket map is at capacity.
     pub fn try_consume_tenant(&self, tenant_id: &str, tokens: f64) -> bool {
+        if self.reject_tenant_if_full(tenant_id) {
+            return false;
+        }
         let burst = self.default_limit.burst as f64;
         let refill_rate = rpm_to_refill_per_second(self.default_limit.rpm);
         self.buckets

@@ -43,6 +43,31 @@ fn suite_guard() -> &'static Mutex<()> {
 
 impl E2eHarness {
     fn spawn() -> Self {
+        // Minimal test config with synthetic providers (no network deps).
+        let test_config = r#"
+default_phase = "coding"
+
+[flow]
+name = "E2E Test Flow"
+phases = ["coding"]
+
+[runtime]
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 5
+governance_enabled = true
+
+[phases.coding]
+description = "Coding phase for e2e tests"
+agents = []
+fallback = true
+"#;
+        Self::spawn_with_config(test_config)
+    }
+
+    /// Spawn the go-on binary with a caller-provided config file. Used by
+    /// tests that need a specific agent/phase layout (e.g. workflow.execute).
+    fn spawn_with_config(test_config: &str) -> Self {
         let _suite_guard = match suite_guard().lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -66,28 +91,10 @@ impl E2eHarness {
             }
         }
 
-        // Write a minimal test config with synthetic providers (no network deps).
+        // Write the config to a temp dir (no network deps needed).
         let tmp_dir = std::env::temp_dir().join(format!("go-on-e2e-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp_dir);
         let config_path = tmp_dir.join("config.toml");
-        let test_config = r#"
-default_phase = "coding"
-
-[flow]
-name = "E2E Test Flow"
-phases = ["coding"]
-
-[runtime]
-maintenance_interval_seconds = 60
-health_interval_seconds = 120
-shutdown_drain_seconds = 5
-governance_enabled = true
-
-[phases.coding]
-description = "Coding phase for e2e tests"
-agents = []
-fallback = true
-"#;
         std::fs::write(&config_path, test_config).expect("failed to write e2e test config");
 
         let mut child = Command::new(binary_path())
@@ -379,67 +386,117 @@ mod e2e_tests {
         harness.wait_for_exit(Duration::from_secs(5));
     }
 
-    /// E2E-04: Three-endpoint contract structure validation
-    /// Validates repair_readiness and repair_history contract shapes
-    /// across workflow.execute and task.execute responses
+    /// E2E-04: workflow.execute returns the real repair contract
+    /// (repair_readiness + repair_history) with the backend's actual shapes.
+    ///
+    /// Sends a real `workflow.execute` RPC against a spawned go-on process
+    /// (local_echo agents, no LLM/network required) and validates the
+    /// contract fields the backend actually produces. `task.execute` does not
+    /// carry the repair contract, so this test covers the workflow.execute
+    /// endpoint only.
     #[test]
-    fn e2e_three_endpoint_contract_validation() {
-        // Structural validation of the contract shapes
-        let repair_readiness = json!({
-            "eligible": true,
-            "max_iterations": 2,
-            "governance_mode": "assisted",
-            "reason": "test validation"
-        });
+    fn e2e_workflow_execute_returns_repair_contract() {
+        let workflow_config = r#"
+default_phase = "coding"
 
-        // Validate repair_readiness fields
-        assert!(repair_readiness["eligible"].is_boolean());
-        assert!(repair_readiness["max_iterations"].is_u64());
-        assert!(repair_readiness["governance_mode"].is_string());
-        assert!(repair_readiness["reason"].is_string());
+[flow]
+name = "E2E Workflow Flow"
+phases = ["coding"]
 
-        let valid_modes = ["assisted", "conservative", "manual", "disabled"];
-        let mode = repair_readiness["governance_mode"].as_str().unwrap();
-        assert!(
-            valid_modes.contains(&mode),
-            "invalid governance_mode: {mode}"
+[runtime]
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 5
+governance_enabled = true
+
+[agents.local_echo]
+type = "local_echo"
+
+[phases.coding]
+description = "Coding"
+agents = ["local_echo"]
+fallback = true
+
+[phases.coding.options.extra]
+review_min_level = "standard"
+review_required_reviews = 1
+review_timeout_policy = "reject"
+review_required_checks = []
+"#;
+        let mut harness = E2eHarness::spawn_with_config(workflow_config);
+        let resp = harness.request(
+            1,
+            "workflow.execute",
+            Some(json!({
+                "task": "Write a hello-world Rust CLI subcommand",
+                "requirement_confirmed": true,
+                "auto_gates": false,
+            })),
         );
 
-        // Validate repair_history structure
-        let repair_history = json!({
-            "iteration": 1,
-            "max_iterations": 2,
-            "actions": [
-                {
-                    "iteration": 1,
-                    "type": "retry_subtask",
-                    "subtask_id": "subtask-001",
-                    "result": "success"
-                }
-            ]
-        });
+        // The backend must answer with a result object, not an error.
+        let result = resp
+            .get("result")
+            .expect("workflow.execute should return a result object");
+        assert!(
+            resp.get("error").is_none() || resp.get("error").map(Value::is_null).unwrap_or(true),
+            "workflow.execute should not error, got: {resp}"
+        );
 
-        assert!(repair_history["iteration"].is_u64());
-        assert!(repair_history["actions"].is_array());
-        if let Some(actions) = repair_history["actions"].as_array() {
-            for action in actions {
-                assert!(action["result"].is_string());
-                let valid_results = ["success", "in_progress", "failed"];
-                assert!(valid_results.contains(&action["result"].as_str().unwrap()));
-            }
+        // ── repair_readiness contract (real backend shape) ────────────────
+        let readiness = result
+            .get("repair_readiness")
+            .expect("workflow.execute result must carry repair_readiness");
+        assert!(
+            readiness["eligible"].is_boolean(),
+            "repair_readiness.eligible must be a boolean"
+        );
+        assert!(
+            readiness["max_iterations"].is_u64(),
+            "repair_readiness.max_iterations must be an integer"
+        );
+        let mode = readiness["governance_mode"]
+            .as_str()
+            .expect("repair_readiness.governance_mode must be a string");
+        assert!(
+            !mode.is_empty(),
+            "repair_readiness.governance_mode must not be empty"
+        );
+        assert!(
+            readiness["reason"].is_string(),
+            "repair_readiness.reason must be a string"
+        );
+
+        // ── repair_history contract (real backend shape) ─────────────────
+        // With local_echo agents all subtasks succeed, so the backend returns
+        // the empty form `{ "actions": [] }`; the actions array must still be
+        // present and every action must carry the documented fields.
+        let history = result
+            .get("repair_history")
+            .expect("workflow.execute result must carry repair_history");
+        let actions = history["actions"]
+            .as_array()
+            .expect("repair_history.actions must be an array");
+        for action in actions {
+            assert!(action["iteration"].is_u64());
+            assert!(action["type"].is_string());
+            assert!(
+                action["subtask_id"].is_string(),
+                "repair action must carry subtask_id"
+            );
+            assert!(
+                action["result"].is_string(),
+                "repair action must carry a result string"
+            );
+        }
+        // Iteration bookkeeping appears when a repair loop actually ran;
+        // assert on the fields the full form documents without hard-coding
+        // the no-repair case.
+        if let Some(iteration) = history.get("iteration") {
+            assert!(iteration.is_u64(), "repair_history.iteration must be u64");
         }
 
-        // Field name consistency across endpoints
-        let keys: Vec<&str> = repair_readiness
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(|k| k.as_str())
-            .collect();
-        let expected_keys = vec!["eligible", "max_iterations", "governance_mode", "reason"];
-        for k in expected_keys {
-            assert!(keys.contains(&k), "repair_readiness missing field: {k}");
-        }
+        harness.wait_for_exit(Duration::from_secs(5));
     }
 
     /// E2E-05: Capability listing returns structured result

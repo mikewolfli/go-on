@@ -1,8 +1,9 @@
 //! Observability module — telemetry, metrics, performance monitoring, and alerting.
 //!
-//! Initially exported as a public module for out-of-tree consumers who need
-//! observability without an ACP dependency. Modules live one-per-file under
-//! `observability/`.
+//! Exported as a public module. Note: `metrics_exporter` and `live_performance`
+//! depend on `crate::acp::server::AcpServer` for server-scoped metrics, so this
+//! module is not dependency-free with respect to ACP. Modules live one-per-file
+//! under `observability/`.
 
 pub mod alert_manager;
 pub mod live_performance;

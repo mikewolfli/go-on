@@ -206,23 +206,16 @@ async fn run() -> Result<()> {
 
     // ── System bootstrap: i18n, observability, provider, skills discovery ──
     // Telemetry is already initialized above, so skip it here.
-    // The returned SkillRegistry is populated with ~/.agents/skills/ SKILL.md files.
-    let skill_registry =
-        match crate::core::bootstrap::perform_bootstrap(&crate::core::bootstrap::BootstrapConfig {
-            enable_i18n: true,
-            config_path: config_path.clone(),
-        })
-        .await
-        {
-            Ok(registry) => {
-                tracing::info!("bootstrap complete, skill registry populated");
-                Some(Arc::new(std::sync::RwLock::new(registry)))
-            }
-            Err(e) => {
-                tracing::warn!("bootstrap skipped: {e}");
-                None
-            }
-        };
+    // One-shot commands (--init/--status/--diagnose/--validate-config/secret)
+    // only need t()/tf() resolution and exit immediately, so they get the
+    // lightweight sync i18n init here and never pay for the ~/.agents/skills/
+    // full scan or the never-stopped hot-reload watcher thread. The full
+    // bootstrap (skill registry + i18n watcher) is deferred to just before
+    // onboarding/server startup below, where the registry is actually
+    // consumed (start_server / chat mode).
+    if let Err(e) = crate::core::bootstrap::init_i18n_only(&config_path) {
+        tracing::warn!("i18n initialization failed: {e}");
+    }
 
     // GAP-B50-33: Check startup memory (critical check only)
     // Background monitoring is deferred to wire_server() to avoid
@@ -305,6 +298,27 @@ async fn run() -> Result<()> {
     // agent — the previous throwaway cl_agent_handle pipeline was removed
     // because the center never read it.
 
+    // ── Full bootstrap: skill registry + i18n hot-reload watcher ─────────
+    // Deferred to here (instead of the top of run()): only the server and
+    // chat paths consume the SkillRegistry, and only they run long enough to
+    // benefit from the watcher. One-shot commands above already returned.
+    let skill_registry =
+        match crate::core::bootstrap::perform_bootstrap(&crate::core::bootstrap::BootstrapConfig {
+            enable_i18n: true,
+            config_path: config_path.clone(),
+        })
+        .await
+        {
+            Ok(registry) => {
+                tracing::info!("bootstrap complete, skill registry populated");
+                Some(Arc::new(std::sync::RwLock::new(registry)))
+            }
+            Err(e) => {
+                tracing::warn!("bootstrap skipped: {e}");
+                None
+            }
+        };
+
     // Delegate interactive agent onboarding to the onboarding module
     let onboarding_cfg = crate::core::onboarding::OnboardingConfig {
         enabled: !cli.setup
@@ -315,9 +329,13 @@ async fn run() -> Result<()> {
             && !std::env::args().any(|a| a == "--setup" || a == "--init"),
     };
     if crate::core::onboarding::run_onboarding(&onboarding_cfg, &config_path).await? {
+        // The wizard may have rewritten the config file; reload it through the
+        // mtime-checked path (`AppConfig::load`, not load_uncached) so the
+        // already-parsed config from handle_validation_mode is reused whenever
+        // the file did not change (wizard skipped/canceled) — avoiding an
+        // unconditional third full parse of the file.
         let cp = config_path.clone();
-        let config =
-            Arc::new(tokio::task::spawn_blocking(move || AppConfig::load_uncached(&cp)).await??);
+        let config = Arc::new(tokio::task::spawn_blocking(move || AppConfig::load(&cp)).await??);
         tokio::select! {
             result = server::start_server(config.clone(), &cli, &config_path, skill_registry.clone()) => {
                 result?;

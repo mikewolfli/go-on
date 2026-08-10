@@ -1,4 +1,11 @@
-use super::types::{ComplianceConfig, ReputationConfig, RuntimeConfig, StartupContextConfig};
+use std::fs;
+use std::path::Path;
+
+use anyhow::{Context, Result};
+
+use super::types::{
+    AppConfig, ComplianceConfig, ReputationConfig, RuntimeConfig, StartupContextConfig,
+};
 
 pub(crate) use crate::core::providers::provider_specs;
 
@@ -536,4 +543,52 @@ pub fn default_non_ai_config_toml() -> String {
         "request_timeout_seconds = 90",
     ]
     .join("\n")
+}
+
+/// Ensure a non-AI bootstrap config exists at `path`.
+///
+/// Writes [`default_non_ai_config_toml`] when the file is missing or blank,
+/// verifying the defaults parse in memory before touching the disk (same
+/// data-safety ordering the config parser uses). Returns `Ok(true)` when the
+/// file was written, `Ok(false)` when it already had content.
+///
+/// Single helper shared by the config parser (`load/parser.rs`, blank-file
+/// path) and the CLI startup path (`main/server.rs`, missing-file path) so
+/// the "write default config" behavior lives in exactly one place.
+pub(crate) fn ensure_bootstrap_config(path: &Path) -> Result<bool> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(e)
+                .with_context(|| format!("failed to read config file: {}", path.display()))
+        }
+    };
+    if !content.trim().is_empty() {
+        return Ok(false);
+    }
+
+    let bootstrap = default_non_ai_config_toml();
+    // Verify the bootstrap defaults parse correctly in memory before writing to disk.
+    let _parsed: AppConfig = toml::from_str(&bootstrap).map_err(|e| {
+        anyhow::anyhow!(
+            "{}: {}",
+            crate::i18n::runtime::tf(
+                "error.config_parse_failed",
+                &[("error", &path.display().to_string())],
+            ),
+            e,
+        )
+    })?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory: {}", parent.display()))?;
+    }
+    fs::write(path, &bootstrap)
+        .with_context(|| format!("failed to write bootstrap defaults to {}", path.display()))?;
+    tracing::info!(
+        "missing or blank config; wrote non-AI bootstrap defaults to {}",
+        path.display()
+    );
+    Ok(true)
 }

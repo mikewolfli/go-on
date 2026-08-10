@@ -75,12 +75,24 @@ pub async fn mcp_client_connect_payload(params: Value) -> Result<Value> {
 pub async fn mcp_client_list_payload() -> Result<Value> {
     let registry = global_mcp_client_registry();
     let ids = registry.ids().await;
+
+    // Query all connected clients in parallel: each `list_tools()` is a
+    // network round-trip to a remote MCP server, so serialising them would
+    // accumulate N × RTT on the request path.
+    let tool_lists = futures_util::future::join_all(ids.iter().map(|id| {
+        let registry = &registry;
+        let id = id.clone();
+        async move {
+            match registry.get(&id).await {
+                Some(client) => client.list_tools().await.unwrap_or_default(),
+                None => Vec::new(),
+            }
+        }
+    }))
+    .await;
+
     let mut clients = Vec::with_capacity(ids.len());
-    for id in &ids {
-        let tools = match registry.get(id).await {
-            Some(client) => client.list_tools().await.unwrap_or_default(),
-            None => Vec::new(),
-        };
+    for (id, tools) in ids.iter().zip(tool_lists) {
         let tools_json: Vec<serde_json::Value> = tools
             .iter()
             .map(|t| {

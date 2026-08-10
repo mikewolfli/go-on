@@ -536,6 +536,13 @@ impl MetacognitiveController {
     ///
     /// The `reflection_level` is auto-detected based on how many observations
     /// and actions exist for the task.
+    ///
+    /// After the report is generated, the observations it covered are marked
+    /// resolved, so a later `autoreflect()` does not keep regenerating reports
+    /// for the same stale observations (previously they stayed unresolved
+    /// forever and the 30-second background autoreflect spun without
+    /// producing new content). The report itself retains the pre-resolution
+    /// snapshot of the observations.
     pub fn generate_reflection_report(&self, task_id: &str) -> Result<String> {
         let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
@@ -645,6 +652,21 @@ impl MetacognitiveController {
         }
 
         inner.reports.push(report);
+
+        // Mark the covered observations as resolved (mutate the Vec, then
+        // re-sync the HashMap observation index with the updated clones,
+        // mirroring `resolve_observation`). This is what makes autoreflect
+        // idempotent: each observation is reflected on exactly once.
+        for obs in &task_observations {
+            if let Some(stored) = inner.observations.iter_mut().find(|o| o.id == obs.id) {
+                stored.is_resolved = true;
+            }
+        }
+        for obs in &task_observations {
+            if let Some(updated) = inner.observations.iter().find(|o| o.id == obs.id).cloned() {
+                inner.observation_index.insert(obs.id.clone(), updated);
+            }
+        }
 
         Ok(report_id)
     }
@@ -1196,10 +1218,24 @@ mod tests {
         assert_eq!(report.task_id, "task-1");
         assert_eq!(report.observations.len(), 2);
 
-        // Auto-reflect again while still having unresolved observations
-        // should generate another report for the same task.
-        let ids2 = ctrl.autoreflect();
-        assert_eq!(ids2.len(), 1);
+        // Auto-reflect again: the observations covered by the first report are
+        // now resolved, so no duplicate report is generated for the same stale
+        // observations (previously this regenerated a report every 30s).
+        assert!(ctrl.autoreflect().is_empty());
+        assert_eq!(ctrl.list_reports().len(), 1);
+
+        // A single brand-new observation is below the global threshold
+        // (2), so no report is generated yet.
+        ctrl.record_observation("task-2", "agent-b", "error", "medium", "Another")
+            .unwrap();
+        assert!(ctrl.autoreflect().is_empty());
+        assert_eq!(ctrl.list_reports().len(), 1);
+
+        // A second new observation reaches the threshold → fresh report.
+        ctrl.record_observation("task-2", "agent-b", "error", "medium", "Another 2")
+            .unwrap();
+        let ids3 = ctrl.autoreflect();
+        assert_eq!(ids3.len(), 1);
         assert_eq!(ctrl.list_reports().len(), 2);
     }
 
@@ -1239,7 +1275,9 @@ mod tests {
 
         let p = ctrl.profile();
         assert_eq!(p.total_observations, 4);
-        assert_eq!(p.unresolved_observations, 3); // obs2 resolved, the other 3 are not
+        // Both reports covered all 4 observations and generate_reflection_report
+        // marks covered observations resolved, so none remain unresolved.
+        assert_eq!(p.unresolved_observations, 0);
         assert_eq!(p.total_actions_taken, 2); // both left Pending state
         assert_eq!(p.successful_actions, 1); // one Completed
         assert_eq!(p.total_reports, 2);

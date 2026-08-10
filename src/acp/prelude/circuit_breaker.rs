@@ -23,7 +23,8 @@ use serde::Serialize;
 pub struct CircuitBreakerSnapshot {
     /// Circuit breaker name
     pub name: String,
-    /// Current state ("open"/"closed"/"halfopen") from the live source
+    /// Current state ("open"/"closed"/"halfopen" from the live source;
+    /// "unknown" when no live source is attached — never a fake "closed").
     pub state: String,
     /// Failure count
     pub failure_count: u32,
@@ -59,6 +60,11 @@ pub(crate) struct CircuitBreakerState {
 /// When a `source` is attached, `snapshots()` / `open_count()` / `is_healthy()`
 /// / `reset()` read/write the live state through it instead of the (never
 /// produced) built-in map.
+///
+/// **Without a source**, `snapshots()` reports each tracked breaker's state as
+/// `"unknown"` (not `"closed"`) — the built-in map has no producer, so any
+/// concrete state would be fabricated; `open_count()` stays 0. In practice the
+/// server always attaches the engine via [`CircuitBreakerRegistry::attach_source`].
 #[derive(Debug, Default)]
 pub struct CircuitBreakerRegistry {
     pub(crate) inner: HashMap<String, CircuitBreakerState>,
@@ -73,8 +79,9 @@ impl CircuitBreakerRegistry {
     }
 
     /// Attach the unified hyper-resilience engine as the live source.
-    /// Called once during `ServerBuilder::build()`; without a source the
-    /// registry reports empty/closed (degraded observability, no fake data).
+    /// Called once during `ServerBuilder::build()`. Without a source the
+    /// registry reports empty/"unknown" states (degraded observability, no
+    /// fabricated "closed" data).
     pub(crate) fn attach_source(&mut self, hre: Arc<HyperResilienceEngine>) {
         self.source = Some(hre);
     }
@@ -122,7 +129,9 @@ impl CircuitBreakerRegistry {
             .iter()
             .map(|(name, state)| CircuitBreakerSnapshot {
                 name: name.clone(),
-                state: "closed".to_string(),
+                // No live source: report "unknown" instead of a fabricated
+                // "closed" so health surfaces never show false positives.
+                state: "unknown".to_string(),
                 failure_count: state.failure_count,
                 success_count: state.success_count,
                 last_state_change: state.last_state_change,

@@ -99,11 +99,19 @@ pub async fn initialize_payload(_server: &AcpServer, params: &Option<Value>) -> 
 ///
 /// Advertises the same capabilities as the standalone MCP transport via the
 /// shared `crate::mcp::schema::mcp_initialize_capabilities` single source of
-/// truth.
-pub async fn mcp_initialize_payload(_server: &AcpServer) -> Result<Value> {
+/// truth, and negotiates the protocol version with the shared
+/// `crate::mcp::negotiate_mcp_version` (same function the native MCP
+/// `initialize` handler uses, so the two entry points cannot drift).
+pub async fn mcp_initialize_payload(_server: &AcpServer, params: &Option<Value>) -> Result<Value> {
     use crate::mcp::{McpInitializeResult, ServerInfo};
+    let client_version = params
+        .as_ref()
+        .and_then(|p| p.get("protocolVersion"))
+        .and_then(Value::as_str)
+        .unwrap_or(MCP_VERSION);
+    let negotiated_version = crate::mcp::negotiate_mcp_version(client_version);
     let result = McpInitializeResult::new(
-        MCP_VERSION,
+        negotiated_version,
         crate::mcp::mcp_initialize_capabilities(),
         ServerInfo {
             name: "go-on".to_string(),
@@ -144,6 +152,15 @@ pub async fn handle_chat(
                 Ok(DispatchOutput::error(
                     crate::acp::r#impl::request::protocol::AcpErrorCode::RateLimited as i32,
                     super::normalize_rate_limited_message(&message),
+                ))
+            } else if message.contains(super::REQUEST_CANCELLED_MESSAGE) {
+                // The pipeline was aborted by $/cancel_request (token loops in
+                // run_agent_collecting / the autonomy loop bail with the
+                // canonical message) — surface it with the standard
+                // cancellation code instead of a generic internal error.
+                Ok(DispatchOutput::error(
+                    crate::acp::r#impl::request::protocol::AcpErrorCode::RequestCancelled as i32,
+                    message,
                 ))
             } else {
                 Ok(DispatchOutput::error(

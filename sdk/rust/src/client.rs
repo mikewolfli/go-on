@@ -304,7 +304,7 @@ impl GoOnClient {
     /// Only retries on 429 (Too Many Requests), 408 (Request Timeout),
     /// and 5xx (server errors). Client errors (4xx) like 400, 401, 403,
     /// 404 are never retryable — they indicate a problem with the request.
-    fn is_retryable(status: reqwest::StatusCode, _err: Option<&SdkError>) -> bool {
+    fn is_retryable(status: reqwest::StatusCode) -> bool {
         status == reqwest::StatusCode::TOO_MANY_REQUESTS
             || status == reqwest::StatusCode::REQUEST_TIMEOUT
             || status.is_server_error()
@@ -351,7 +351,7 @@ impl GoOnClient {
             };
 
             // ── Determine if retryable ──────────────────────────────────────
-            if Self::is_retryable(status, None) {
+            if Self::is_retryable(status) {
                 last_error = Some(SdkError::UnexpectedShape(format!(
                     "HTTP {} {}",
                     status.as_u16(),

@@ -303,6 +303,45 @@ describe("GoOnClient", () => {
     expect(body.max_tokens).toBeUndefined();
   });
 
+  it("chatStream forwards stream only when explicitly provided", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"token":"Hi"}\n\n'));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: stream,
+      headers: new Headers(),
+    } as Response);
+
+    // stream: false must be forwarded verbatim (not overwritten to true)
+    const generator = client.chatStream({
+      messages: [{ role: "user", content: "Hi" }],
+      stream: false,
+    });
+    // consume one chunk so the request is sent
+    await generator.next();
+    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    const body = JSON.parse(init!.body as string);
+    expect(body.stream).toBe(false);
+
+    // stream: undefined → omitted from the payload (matches Rust/Python)
+    const generator2 = client.chatStream({
+      messages: [{ role: "user", content: "Hi" }],
+    });
+    await generator2.next();
+    const [, init2] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock
+      .calls[1];
+    const body2 = JSON.parse(init2!.body as string);
+    expect(body2.stream).toBeUndefined();
+  });
+
   it("should abort chat stream on signal without hanging", async () => {
     const controller = new AbortController();
     const encoder = new TextEncoder();

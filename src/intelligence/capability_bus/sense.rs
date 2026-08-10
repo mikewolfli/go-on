@@ -6,8 +6,9 @@
 //! Extracted from `core.rs` to isolate the `sense()` method and its helpers.
 //! (BLUE38 ARCH-13)
 
-use super::core::{CapabilityBus, WorkflowLearningEvent};
+use super::core::CapabilityBus;
 use crate::governance::pua::TaskContext;
+use crate::intelligence::capability_bus::learning_optimization_bus::LearningEvent;
 
 // ---------------------------------------------------------------------------
 // Stage output type
@@ -18,7 +19,10 @@ pub struct SensingOutput {
     pub capability_agent_count: usize,
     pub reputation_snapshot: Vec<crate::intelligence::reputation::ReputationRecord>,
     pub recent_agents: Vec<String>,
-    pub learning_snapshot: Vec<crate::intelligence::capability_bus::core::WorkflowLearningEvent>,
+    /// Full learning snapshot — the `LearningOptimizationBus` events used
+    /// as-is (the former capability-bus `WorkflowLearningEvent` was a 1:1
+    /// duplicate of `LearningEvent` and has been removed).
+    pub learning_snapshot: Vec<LearningEvent>,
 }
 
 impl CapabilityBus {
@@ -47,26 +51,16 @@ impl CapabilityBus {
         };
         // BLUE70: Read from LearningOptimizationBus (replaces legacy WorkflowLearningBus)
         // Single snapshot, two derived views: `recent_agents` (names, for
-        // recency scoring in decide) and `learning_snapshot` (full events).
-        // Previously two full `events_snapshot()` clones were taken.
+        // recency scoring in decide) and `learning_snapshot` (full events,
+        // consumed as `LearningEvent` directly — the old per-field copy into
+        // a same-named `WorkflowLearningEvent` struct was removed).
         let lob = crate::read_or_recover!(&self.learning_optimization_bus, "intelligence");
         let lob_events = lob.events_snapshot();
         let recent_agents = lob_events
             .iter()
             .map(|e| e.agent.clone())
             .collect::<Vec<_>>();
-        let learning_snapshot: Vec<WorkflowLearningEvent> = lob_events
-            .into_iter()
-            .map(|e| WorkflowLearningEvent {
-                task_type: e.task_type,
-                agent: e.agent,
-                success: e.success,
-                duration_ms: e.duration_ms,
-                token_cost: e.token_cost,
-                quality_score: e.quality_score,
-                timestamp_ms: e.timestamp_ms,
-            })
-            .collect();
+        let learning_snapshot = lob_events;
 
         // Phase 4: Protocol recommendation (used for routing diagnostics)
         #[cfg(feature = "sub-bus-protocol")]

@@ -22,8 +22,7 @@ Zed 當前可以用兩大類方式接入 `go-on`：
         "--config",
         "/absolute/path/to/zed-config.toml",
         "--protocol-mode",
-        "acp_stdio",
-        "--verbose"
+        "acp_stdio"
       ]
     }
   }

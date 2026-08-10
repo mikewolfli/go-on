@@ -23,6 +23,12 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
 
     let shutdown_notify = Arc::clone(&server.shutdown_notify);
 
+    // Register the server in the process-wide registry. The stdio arm does
+    // this in run_acp_server; without it the session/prompt streaming bridge
+    // and tool-execution permission lookups (which fetch the current server
+    // via current_acp_server()) silently no-op under HTTP.
+    crate::acp::server::set_current_acp_server(Arc::clone(&server));
+
     // Start background tasks in background — HTTP listener must bind IMMEDIATELY
     // (BOTTLENECK-01). Same optimization as run_acp_server.
     {

@@ -1,4 +1,4 @@
-//! Rust SDK for go-on — Phase 4, 14-bus architecture, 21 F-GAP modules.
+//! Rust SDK for go-on — 7 feature-gated sub-bus architecture.
 //!
 //! Provides typed async clients for ACP JSON-RPC endpoints:
 //!   - Runtime: health, initialize, shutdown
@@ -11,6 +11,9 @@
 //!   - Streaming chat: chat_stream
 //!
 //! All methods send JSON-RPC 2.0 requests to `POST {base_url}/rpc`.
+//! See the README for the current architecture description (7 feature-gated
+//! sub-buses: tool, orchestration, observability, optimization, memory,
+//! protocol, distributed-memory).
 
 pub mod client;
 pub mod error;

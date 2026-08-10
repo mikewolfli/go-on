@@ -1,5 +1,19 @@
 # 更新日志
 
+## [Unreleased] - 2026-08-10
+
+### 第 41 轮 — 超级深度/广度扫描 + 依赖审计（2026-08-10，docs/log/log-20260810-1.md）
+
+- `$/cancel_request` / `session/cancel` 取消语义真实化；Council 投票真实参与路由决策；SelfModelCore 假持久化清理；metacognitive llm_agent 假注入链整体删除；熔断器状态机三份合并；工具分类三份映射合并；Cold tier 接通读取（warm 不足回退冷层）；fault_tolerance 状态可恢复；配置双源合并；i18n 启动断点修复；`.goon` 路径统一；大量死代码清理。
+- 依赖升级（全部 84 个直接依赖审计）：reqwest 0.13、base64 0.23、keyring 4、criterion 0.8、egui/eframe 0.36、comrak 0.54、quick-xml 0.41。
+- 验证：4 profile + workspace `cargo check` 零警告；clippy（local/multi-users/GUI）零警告；`cargo test --lib` 1490 通过；Rust SDK 21/21。
+
+### 第 42 轮 — 超级深度/广度扫描 + 统一架构优化（2026-08-10，docs/log/log-20260810-2.md）
+
+- `$/cancel_request` 真实取消机制（ACP 镜像 MCP `cancelled_requests` 注册表，飞行中请求以 -32800 中止）；`session/cancel` 真实语义（取消会话拒绝新提示）。
+- RecoveryAction 真实 dispatch（5 个动作可观察执行 + 恢复后一致性检查）；postgres warm tier DSN 修复，不可达时降级 cold；prompt_layers 注入接线；双遗忘循环统一；council tally 参与路由。
+- 三套校验引擎收敛为单一 `ConfigValidator` + 硬门禁；profile 推荐名真实化（local/simple-server/multi-users-server/full）；keyring async 封装（阻塞 I/O 移出 tokio worker）；四 profile 编译全绿。
+
 ## [1.5.1] - 2026-08-07
 
 ### 版本升级 + 全项目 errors/warnings 清理（2026-08-07，docs/log/log-20260807-1.md）

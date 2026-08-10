@@ -148,6 +148,19 @@ pub async fn run_onboarding(config: &OnboardingConfig, config_path: &Path) -> Re
     let selection = input.trim();
     let selection = if selection.is_empty() { "1" } else { selection };
 
+    // Data-safety gate: the wizard overwrites the whole config file via
+    // fs::write. That is only safe when there is nothing to lose:
+    //   - MissingConfig / BlankConfig: no user content to preserve.
+    //   - NoAgents / AgentsNotReady / InvalidConfig: the file exists and may
+    //     contain user content (phases/security/startup_context/autotune...)
+    //     even when no provider is configured, so run with force=false and let
+    //     run_setup_with_options surface prompts::prompt_yes_no's overwrite
+    //     confirmation instead — never silently destroy existing config.
+    let force_wizard = matches!(
+        state,
+        AiOnboardingState::MissingConfig | AiOnboardingState::BlankConfig
+    );
+
     match selection {
         "2" => {
             crate::setup::run_setup_with_options(
@@ -156,7 +169,7 @@ pub async fn run_onboarding(config: &OnboardingConfig, config_path: &Path) -> Re
                     profile: Some(parse_setup_profile("adaptive")?),
                     level: Some(parse_setup_level("custom")?),
                     secret_mode: None,
-                    force: true,
+                    force: force_wizard,
                     prompt_for_secrets: true,
                 },
             )?;
@@ -175,7 +188,7 @@ pub async fn run_onboarding(config: &OnboardingConfig, config_path: &Path) -> Re
                     profile: Some(parse_setup_profile("adaptive")?),
                     level: Some(parse_setup_level("quick")?),
                     secret_mode: None,
-                    force: true,
+                    force: force_wizard,
                     prompt_for_secrets: true,
                 },
             )?;

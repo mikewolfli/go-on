@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Release Readiness Gate
-# Validates production readiness before release across all 3 profiles.
+# Validates production readiness before release across all 4 profiles.
 set -euo pipefail
 
 BINARY="${2:-./target/debug/go-on}"

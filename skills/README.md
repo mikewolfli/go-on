@@ -47,9 +47,9 @@ Every PR that modifies `skills/` triggers the `skill-market.yml` workflow:
 4. Submit a Pull Request
 4. After review and merge, the index is auto-updated
 
-## Available Skills (44 skills)
+## Available Skills (34 skills)
 
-### Built-in Skills (35)
+### Built-in Skills (34)
 
 | Skill | Tags | Description |
 |-------|------|-------------|
@@ -88,20 +88,33 @@ Every PR that modifies `skills/` triggers the `skill-market.yml` workflow:
 | [web-scraper](web-scraper/SKILL.md) | web, scraping, data-extraction | Scrapes and extracts data from websites |
 | [**workflow-optimizer**](workflow-optimizer/SKILL.md) | workflow, optimization, pipeline | Analyzes and optimizes multi-step workflows |
 
-### GRILL Skills (10)
+### External Agent Skills (installed at `~/.agents/skills`, not in this repo)
+
+The following global agent skills live in the user's `~/.agents/skills/` directory
+(auto-discovered by go-on on startup); they are **not** part of this repository's
+`skills/` marketplace. The list reflects what is actually installed on the
+developer machine at the time of writing:
 
 | Skill | Source | Description |
 |-------|--------|-------------|
-| [grilling](grilling/SKILL.md) | productivity | Relentless one-at-a-time interview to stress-test plans/decisions |
-| [grill-with-docs](grill-with-docs/SKILL.md) | engineering | Grilling + domain-modeling that produces ADRs and glossary |
-| [handoff](handoff/SKILL.md) | productivity | Compact session handoff documents for cross-session continuity |
-| [code-review](code-review/SKILL.md) | engineering | Two-axis (Standards + Spec) code review with parallel sub-agents |
-| [diagnosing-bugs](diagnosing-bugs/SKILL.md) | engineering | 6-phase structured debugging protocol |
-| [domain-modeling](domain-modeling/SKILL.md) | engineering | Build and sharpen domain model with glossary + ADRs |
-| [wayfinder](wayfinder/SKILL.md) | engineering | Multi-session work planning via decision-ticket maps |
-| [research](research/SKILL.md) | engineering | Sub-agent based fact-finding from primary sources |
-| [triage](triage/SKILL.md) | engineering | Issue tracker state machine: triage, verify, route, close |
-| [implement](implement/SKILL.md) | engineering | TDD-based spec execution with code review and commit |
+| grilling | productivity | Relentless one-at-a-time interview to stress-test plans/decisions |
+| grill-with-docs | engineering | Grilling + domain-modeling that produces ADRs and glossary |
+| code-review | engineering | Two-axis (Standards + Spec) code review with parallel sub-agents |
+| diagnosing-bugs | engineering | 6-phase structured debugging protocol |
+| domain-modeling | engineering | Build and sharpen domain model with glossary + ADRs |
+| wayfinder | engineering | Multi-session work planning via decision-ticket maps |
+
+> Note: previously-listed `handoff`, `research`, `triage`, and `implement` are
+> not installed in this workspace's `~/.agents/skills/` and have been removed
+> from this list. These skills (if desired) live outside this repository.
+
+> ⚠️ **Backend registry drift**: the backend's `builtin_skills()` fallback
+> (`src/orchestration/skill_market.rs`) still returns 33 entries using the
+> **old pre-merge names** (e.g. `code-reviewer`, `commit-message-generator`,
+> `decision-logger`, `dependency-analyzer`, `review-pr`, `embed-text`), while
+> this directory contains 34 skills under the **new merged names**. The
+> backend registry should be synced to the new names in a separate backend
+> change (out of scope for this repository's docs/SDK/GUI layer).
 
 ### Removed (merged into others)
 

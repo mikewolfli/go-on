@@ -36,14 +36,6 @@ Usage: go-on.exe [OPTIONS]
 go-on --config D:\go-on\config.toml
 ```
 
-### `--phase <PHASE>`
-
-選擇要運行的特定階段（phase）配置文件。當你的配置定義了多個階段行為，並希望使用一個確定的入口點時使用。
-
-### `--verbose`
-
-啟用詳細日誌輸出。在診斷啟動、配置、傳輸或 Provider 就緒問題時首先使用此選項。
-
 ## Phase 與 Sub-Phase 配置
 
 Phase 定義運行時執行的工作流階段。每個 phase 可以包含可選的 sub-phase，實現更精細的控制。
@@ -140,6 +132,8 @@ Sub-phases 會繼承父級的 `options` 作為默認值，可在每個 sub-phase
 | `zed-config.toml` | think, act, check, review, done | IDE 集成（Zed、VS Code） |
 | `config.simple-server.toml` | think, act, check, done | 單服務部署 |
 | `config.multi-users-server.toml` | think, act, check, done | 多用戶企業環境 |
+
+註：當完全不存在配置文件時，運行時寫入的 bootstrap 預設 flow 為 `planning` → `coding` → `review` → `delivery`（見 `src/core/config/defaults.rs`）；上表內置預設使用 `think`/`act`/`check`/`done`（Zed 版含 `review`）。
 
 ### 使用特定 phase 配置
 
@@ -426,7 +420,7 @@ go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:80
 為編輯器啟動的集成運行 ACP over stdio：
 
 ```bash
-go-on --config config.toml --protocol-mode acp_stdio --verbose
+go-on --config config.toml --protocol-mode acp_stdio
 ```
 
 終端聊天（互動式，類似 Claude Code / Codex）：
