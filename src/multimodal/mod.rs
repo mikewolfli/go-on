@@ -58,8 +58,15 @@ pub use code_repo_analyzer::REPO_PREFIX;
 /// processor (document parser, ASR pipeline, vision model, etc.).
 ///
 /// Maximum allowed size for image payloads (10 MB).
+///
+/// `#[allow(dead_code)]`: documented public size contract of the library
+/// crate (referenced by rustdoc and by the GUI's inline-attachment limit);
+/// the binary crate's private `mod multimodal` compilation unit does not
+/// reference them, so rustc flags them there — they are not dead code.
+#[allow(dead_code)]
 pub const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024;
 /// Maximum allowed size for audio payloads (25 MB).
+#[allow(dead_code)]
 pub const MAX_AUDIO_SIZE: usize = 25 * 1024 * 1024;
 
 /// ## Variants
@@ -151,33 +158,6 @@ impl MultimodalInput {
             Self::Text(t) => t.as_bytes(),
             Self::Image(b) | Self::Audio(b) | Self::Video(b) | Self::Document(b, _) => b.as_slice(),
         }
-    }
-
-    /// Create an `Image` variant, returning an error if the payload exceeds
-    /// [`MAX_IMAGE_SIZE`].
-    pub fn try_new_image(bytes: Vec<u8>) -> Result<Self, &'static str> {
-        if bytes.len() > MAX_IMAGE_SIZE {
-            return Err("image payload exceeds MAX_IMAGE_SIZE (10 MB)");
-        }
-        Ok(Self::Image(bytes))
-    }
-
-    /// Create an `Audio` variant, returning an error if the payload exceeds
-    /// [`MAX_AUDIO_SIZE`].
-    pub fn try_new_audio(bytes: Vec<u8>) -> Result<Self, &'static str> {
-        if bytes.len() > MAX_AUDIO_SIZE {
-            return Err("audio payload exceeds MAX_AUDIO_SIZE (25 MB)");
-        }
-        Ok(Self::Audio(bytes))
-    }
-
-    /// Create a `Document` variant, returning an error if the payload exceeds
-    /// a reasonable limit (also [`MAX_AUDIO_SIZE`] for documents).
-    pub fn try_new_document(bytes: Vec<u8>, ext: String) -> Result<Self, &'static str> {
-        if bytes.len() > MAX_AUDIO_SIZE {
-            return Err("document payload exceeds maximum allowed size (25 MB)");
-        }
-        Ok(Self::Document(bytes, ext))
     }
 
     /// Consume `self` and return the contained bytes together with any

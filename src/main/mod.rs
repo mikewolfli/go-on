@@ -240,8 +240,23 @@ async fn run() -> Result<()> {
     }
     // Memory background monitor starts in wire_server() (deduplicated).
 
-    // Handle secret management commands, local model setup, and onboarding
-    if server::handle_secret_commands(&cli, &config_path)? {
+    // Handle secret management commands, local model setup, and onboarding.
+    //
+    // Sync boundary: this whole dispatch performs synchronous I/O — keyring
+    // access (setup::run_secret_command), config file writes, and interactive
+    // stdin/stdout prompts in the setup wizard — so it runs on a blocking
+    // thread via spawn_blocking instead of stalling a tokio worker (see the
+    // sync-boundary note in Cargo.toml and the doc on
+    // `setup::secrets::run_secret_command`). The `Cli` snapshot is cloned
+    // because spawn_blocking requires `'static` owned data; `run()` keeps the
+    // original for the server/chat paths below.
+    let handled = {
+        let cli = cli.clone();
+        let config_path = config_path.clone();
+        tokio::task::spawn_blocking(move || server::handle_secret_commands(&cli, &config_path))
+            .await??
+    };
+    if handled {
         return Ok(());
     }
 
@@ -324,9 +339,12 @@ async fn run() -> Result<()> {
         enabled: !cli.setup
             && !cli.chat
             && std::env::var("GO_ON_ENABLE_LOCAL_TEST_AGENTS").is_err(),
+        // `cli.setup` already covers both `--setup` and `--init` (the Init
+        // subcommand sets `cli.setup = true` above), so the previous raw
+        // `std::env::args()` scan is redundant.
         is_terminal: std::io::stdin().is_terminal()
             && std::io::stdout().is_terminal()
-            && !std::env::args().any(|a| a == "--setup" || a == "--init"),
+            && !cli.setup,
     };
     if crate::core::onboarding::run_onboarding(&onboarding_cfg, &config_path).await? {
         // The wizard may have rewritten the config file; reload it through the

@@ -81,17 +81,73 @@ pub(crate) struct PgPoolPair {
 /// runtime" (principle #20). A separate current-thread runtime is safe to
 /// block on from any thread — runtime worker, blocking pool, or plain sync.
 /// Created once and reused to avoid per-call runtime construction overhead.
+///
+/// This function is **not re-entrant**: while the current thread is blocked on
+/// [`FALLBACK_RT`] it *is* the runtime's worker, and a nested `pool_get` on
+/// that same thread would deadlock the current-thread runtime. `pool_get`
+/// detects that case (see [`IN_FALLBACK_RT`]) and panics with a clear message
+/// so the misuse fails fast instead of hanging.
 #[cfg(feature = "backend-postgres")]
 static FALLBACK_RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
 
+// Guards [`FALLBACK_RT`] against re-entrant `pool_get` calls.
+//
+// `FALLBACK_RT` is a current-thread runtime: while a thread is blocked on it,
+// that thread *is* the runtime's worker. If code running inside that
+// `block_on` (directly or transitively) called `pool_get` again, the nested
+// `block_on` on the same thread would deadlock (the worker waits on itself)
+// or panic with tokio's "Cannot start a runtime from within a runtime".
+// `pool_get` sets this marker for the duration of the outer `block_on` and
+// rejects any nested call it observes.
+// NOTE: this is a plain comment, not a doc comment — `thread_local!` expands
+// to a macro invocation and cannot carry `///` documentation.
+#[cfg(feature = "backend-postgres")]
+thread_local! {
+    static IN_FALLBACK_RT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Clears the [`IN_FALLBACK_RT`] marker on drop, including during unwinding.
+#[cfg(feature = "backend-postgres")]
+struct FallbackRtMarker;
+
+#[cfg(feature = "backend-postgres")]
+impl FallbackRtMarker {
+    fn enter() -> Self {
+        IN_FALLBACK_RT.with(|flag| flag.set(true));
+        FallbackRtMarker
+    }
+}
+
+#[cfg(feature = "backend-postgres")]
+impl Drop for FallbackRtMarker {
+    fn drop(&mut self) {
+        IN_FALLBACK_RT.with(|flag| flag.set(false));
+    }
+}
+
 #[cfg(feature = "backend-postgres")]
 pub(crate) fn pool_get(pool: &PgPool) -> Result<deadpool::managed::Object<PgClientManager>> {
+    // Non-reentrancy guard: if the current thread is already the FALLBACK_RT
+    // worker (this call originates from inside a future driven by
+    // `FALLBACK_RT.block_on`), blocking on the same current-thread runtime
+    // again would deadlock. Fail fast with a clear message instead.
+    if IN_FALLBACK_RT.with(|flag| flag.get()) {
+        panic!(
+            "pool_get called re-entrantly from inside the fallback runtime worker thread; \
+             blocking on the same current-thread runtime would deadlock. \
+             Call pool_get from a spawn_blocking closure instead."
+        );
+    }
     let rt = FALLBACK_RT.get_or_init(|| {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("failed to build fallback runtime for pool get")
     });
+    // Mark the calling thread as the FALLBACK_RT worker for the duration of
+    // `block_on` so a nested `pool_get` is rejected by the guard above. The
+    // marker is cleared on drop, including during unwinding.
+    let _marker = FallbackRtMarker::enter();
     rt.block_on(pool.get())
         .map_err(|e| anyhow::anyhow!("pool get failed: {e}"))
 }

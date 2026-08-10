@@ -36,6 +36,7 @@ use crate::cli::markdown_renderer::StreamMarkdownRenderer;
 use crate::config::AppConfig;
 use crate::i18n::runtime::{t, tf};
 use crate::orchestration::mode::{resolve_mode_runtime, GenericModeRuntime, ModeKind, ModeRuntime};
+use crate::orchestration::session_compressor::DEFAULT_TOKEN_WINDOW;
 
 use crate::governance::status::quick_check_tool as governance_gate;
 use crate::intelligence::capability_graph::CapabilityGraph;
@@ -125,6 +126,14 @@ impl Drop for AutoSaveGuard {
 }
 
 /// Max lines to display for help text.
+///
+/// Human-readable summary of the chat commands and tool *categories* — shown
+/// to the user on `/help`. This is intentionally a concise curated list, NOT
+/// the instruction text sent to the model: the model-facing tool inventory is
+/// built dynamically from `tool_registry().all_names()` in the system prompt
+/// and in `build_cli_principles()` below. Keeping the three lists separate is
+/// deliberate — the help text reads well for a human, while the prompt must
+/// list every registered tool by its real name.
 const HELP_TEXT: &str = "\
 Commands:
   /quit        Exit chat
@@ -189,6 +198,72 @@ struct ChatSession {
     agent_name: String,
     #[serde(default)]
     mode: String,
+}
+
+/// Build the persisted `ChatSession` snapshot for the current conversation.
+///
+/// Shared by the three session-persistence paths (manual `/save`,
+/// per-turn auto-save, save-on-exit) so the serialized shape cannot drift
+/// between them. Each caller keeps its own JSON serializer (`to_string_pretty`
+/// for the user-facing `/save`, compact `to_string` for background saves).
+#[allow(clippy::borrowed_box)]
+fn serialize_session(
+    messages: &[Message],
+    current_agent_name: &str,
+    current_mode: &Box<dyn ModeRuntime>,
+) -> ChatSession {
+    ChatSession {
+        messages: messages.to_vec(),
+        agent_name: current_agent_name.to_string(),
+        mode: format!("{:?}", current_mode.kind()).to_lowercase(),
+    }
+}
+
+/// Semantic classification of a streaming token.
+///
+/// Shared by the three streaming loops (primary agent phase, follow-up phase,
+/// `chat_simple`) so the marker/telemetry filter rules cannot drift between
+/// them. The predicates are mutually exclusive, so the check order does not
+/// matter; each caller keeps its own display behavior per kind.
+enum TokenKind<'a> {
+    /// `__tool_call__:name:args` protocol token (tool name; args are not
+    /// inspected by the chat display loops).
+    ToolCall(&'a str),
+    /// Reasoning-content start marker.
+    ReasoningStart,
+    /// Reasoning-content end marker.
+    ReasoningEnd,
+    /// `__thinking__`-prefixed reasoning token (payload after the prefix).
+    Thinking(&'a str),
+    /// Finish-reason or usage telemetry — never displayed.
+    Telemetry,
+    /// Regular content token.
+    Content,
+}
+
+/// Classify a streaming token using the canonical marker/telemetry rules.
+///
+/// See [`TokenKind`] for the semantics of each kind. `__model_used__:` tokens
+/// match none of the markers and are classified as `Content`, preserving the
+/// historical behavior of the chat loops (they are only intercepted by the
+/// ACP-side `classify_agent_token` used in the server path).
+fn classify_token(token: &str) -> TokenKind<'_> {
+    if let Some((tool_name, _)) = parse_tool_call_token(token) {
+        return TokenKind::ToolCall(tool_name);
+    }
+    if token == REASONING_START {
+        return TokenKind::ReasoningStart;
+    }
+    if token == REASONING_END {
+        return TokenKind::ReasoningEnd;
+    }
+    if let Some(think) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
+        return TokenKind::Thinking(think);
+    }
+    if token.starts_with(TOKEN_FINISH_REASON_PREFIX) || token.starts_with(TOKEN_USAGE_PREFIX) {
+        return TokenKind::Telemetry;
+    }
+    TokenKind::Content
 }
 
 /// Estimate token count from text using the canonical CJK/ASCII-weighted
@@ -417,6 +492,12 @@ async fn setup_chat_environment(
     print_chat_banner(&current_agent_name, current_mode.kind());
 
     // ── Build initial system message ──
+    // The static category lines below are a curated highlight for the model;
+    // the exhaustive, authoritative inventory is the dynamic "All registered
+    // tools ({} total)" list that follows (and, per turn, `build_cli_principles`
+    // re-states the live names). The category highlights intentionally differ
+    // from `HELP_TEXT` (which is a human summary) — this text must name the
+    // exact `__tool_call__` protocol tools the agent can invoke.
     let mut messages = Vec::new();
     let all_tool_names = tool_registry().all_names();
     let tool_list_str = all_tool_names.join(", ");
@@ -857,11 +938,7 @@ async fn handle_save_command(
     current_mode: &Box<dyn ModeRuntime>,
     session_path: &std::path::Path,
 ) {
-    let session = ChatSession {
-        messages: messages.to_vec(),
-        agent_name: current_agent_name.to_string(),
-        mode: format!("{:?}", current_mode.kind()).to_lowercase(),
-    };
+    let session = serialize_session(messages, current_agent_name, current_mode);
     match serde_json::to_string_pretty(&session) {
         Ok(json) => match tokio::fs::write(session_path, &json).await {
             Ok(()) => eprintln!(
@@ -1097,7 +1174,10 @@ fn display_context(messages: &[Message]) {
             "cli.chat.context_used_pct",
             &[(
                 "pct",
-                &format!("{:.1}", (est_tokens as f64 / 128_000.0 * 100.0).min(100.0))
+                &format!(
+                    "{:.1}",
+                    (est_tokens as f64 / DEFAULT_TOKEN_WINDOW as f64 * 100.0).min(100.0)
+                )
             )]
         )
     );
@@ -1902,12 +1982,12 @@ fn auto_save_turn(
         return;
     }
     SAVE_IN_FLIGHT.store(true, Ordering::Release);
-    let session = ChatSession {
-        messages: messages.to_vec(),
-        agent_name: current_agent_name.to_string(),
-        mode: format!("{:?}", current_mode.kind()).to_lowercase(),
-    };
-    let json = serde_json::to_string(&session).unwrap_or_default();
+    let json = serde_json::to_string(&serialize_session(
+        messages,
+        current_agent_name,
+        current_mode,
+    ))
+    .unwrap_or_default();
     let path = session_path.to_path_buf();
     let guard = AutoSaveGuard;
     tokio::spawn(async move {
@@ -1962,12 +2042,12 @@ async fn save_session_on_exit(
             _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
         }
     }
-    let session = ChatSession {
-        messages: messages.to_vec(),
-        agent_name: current_agent_name.to_string(),
-        mode: format!("{:?}", current_mode.kind()).to_lowercase(),
-    };
-    let json = serde_json::to_string(&session).unwrap_or_default();
+    let json = serde_json::to_string(&serialize_session(
+        messages,
+        current_agent_name,
+        current_mode,
+    ))
+    .unwrap_or_default();
     if let Err(e) = tokio::fs::write(session_path, &json).await {
         tracing::warn!("Failed to save session on exit: {e}");
     } else {
@@ -2096,33 +2176,33 @@ async fn run_agent_streaming_phase(
                         // Forward ALL tokens to the shared collector
                         let _ = fwd_tx.send(token.clone());
 
-                        // Tool call notification
-                        if let Some((tool_name, _)) = parse_tool_call_token(&token) {
-                            eprintln!("{}🔧 [Tool call: {tool_name}]{}", ansi!("33"), ansi!("0"));
-                            continue;
-                        }
-
-                        // Reasoning content markers
-                        if token == REASONING_START {
-                            in_reasoning = true;
-                            continue;
-                        }
-                        if token == REASONING_END {
-                            in_reasoning = false;
-                            continue;
-                        }
-
-                        // __thinking__ prefixed tokens
-                        if let Some(think) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
-                            eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
-                            continue;
-                        }
-
-                        // Skip finish_reason and usage telemetry tokens
-                        if token.starts_with(TOKEN_FINISH_REASON_PREFIX)
-                            || token.starts_with(TOKEN_USAGE_PREFIX)
-                        {
-                            continue;
+                        match classify_token(&token) {
+                            // Tool call notification
+                            TokenKind::ToolCall(tool_name) => {
+                                eprintln!(
+                                    "{}🔧 [Tool call: {tool_name}]{}",
+                                    ansi!("33"),
+                                    ansi!("0")
+                                );
+                                continue;
+                            }
+                            // Reasoning content markers
+                            TokenKind::ReasoningStart => {
+                                in_reasoning = true;
+                                continue;
+                            }
+                            TokenKind::ReasoningEnd => {
+                                in_reasoning = false;
+                                continue;
+                            }
+                            // __thinking__ prefixed tokens
+                            TokenKind::Thinking(think) => {
+                                eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
+                                continue;
+                            }
+                            // Skip finish_reason and usage telemetry tokens
+                            TokenKind::Telemetry => continue,
+                            TokenKind::Content => {}
                         }
 
                         if in_reasoning {
@@ -2524,31 +2604,34 @@ async fn run_followup_phase(
                 token = rx2.recv() => {
                     match token {
                         Some(token) => {
-                            if token == REASONING_START {
-                                in_reasoning2 = true;
-                                eprint!("{}", ansi!("90"));
-                                continue;
-                            }
-                            if token == REASONING_END {
-                                in_reasoning2 = false;
-                                eprint!("{}", ansi!("0"));
-                                eprintln!();
-                                continue;
-                            }
-                            // Tool call notification (same as primary phase)
-                            if let Some((tool_name, _)) = parse_tool_call_token(&token) {
-                                eprintln!("{}🔧 [Tool call: {tool_name}]{}", ansi!("33"), ansi!("0"));
-                                continue;
-                            }
-                            if let Some(think) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
-                                eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
-                                continue;
-                            }
-                            // Skip finish_reason and usage telemetry tokens
-                            if token.starts_with(TOKEN_FINISH_REASON_PREFIX)
-                                || token.starts_with(TOKEN_USAGE_PREFIX)
-                            {
-                                continue;
+                            match classify_token(&token) {
+                                TokenKind::ReasoningStart => {
+                                    in_reasoning2 = true;
+                                    eprint!("{}", ansi!("90"));
+                                    continue;
+                                }
+                                TokenKind::ReasoningEnd => {
+                                    in_reasoning2 = false;
+                                    eprint!("{}", ansi!("0"));
+                                    eprintln!();
+                                    continue;
+                                }
+                                // Tool call notification (same as primary phase)
+                                TokenKind::ToolCall(tool_name) => {
+                                    eprintln!(
+                                        "{}🔧 [Tool call: {tool_name}]{}",
+                                        ansi!("33"),
+                                        ansi!("0")
+                                    );
+                                    continue;
+                                }
+                                TokenKind::Thinking(think) => {
+                                    eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
+                                    continue;
+                                }
+                                // Skip finish_reason and usage telemetry tokens
+                                TokenKind::Telemetry => continue,
+                                TokenKind::Content => {}
                             }
                             if in_reasoning2 {
                                 eprint!("{}{}{}", ansi!("90"), token, ansi!("0"));
@@ -3043,21 +3126,18 @@ async fn chat_simple(
 
     let mut response = String::new();
     while let Some(token) = rx.recv().await {
-        // Skip reasoning markers and tool calls for simple chat
-        if token == REASONING_START || token == REASONING_END {
-            continue;
-        }
-        if parse_tool_call_token(&token).is_some() {
-            continue;
-        }
-        // Strip __thinking__ prefix from reasoning tokens
-        if let Some(think) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
-            eprintln!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
-            continue;
-        }
-        // Skip finish_reason and usage telemetry tokens
-        if token.starts_with(TOKEN_FINISH_REASON_PREFIX) || token.starts_with(TOKEN_USAGE_PREFIX) {
-            continue;
+        match classify_token(&token) {
+            // Skip reasoning markers and tool calls for simple chat
+            TokenKind::ReasoningStart | TokenKind::ReasoningEnd => continue,
+            TokenKind::ToolCall(..) => continue,
+            // Strip __thinking__ prefix from reasoning tokens
+            TokenKind::Thinking(think) => {
+                eprintln!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
+                continue;
+            }
+            // Skip finish_reason and usage telemetry tokens
+            TokenKind::Telemetry => continue,
+            TokenKind::Content => {}
         }
         response.push_str(&token);
     }

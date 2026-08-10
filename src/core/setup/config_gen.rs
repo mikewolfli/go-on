@@ -81,6 +81,33 @@ impl Default for ProviderRecommendations {
     }
 }
 
+/// Default recommendation snapshot — the `ProviderRecommendations::default`
+/// values projected into the public snapshot shape, with `default_phase`
+/// resolved to its canonical fallback.
+///
+/// Shared with the report engine (`src/main/report.rs`), which uses it as the
+/// fallback thresholds when no provider is configured, so the report cannot
+/// drift from the values used to generate a fresh config.
+///
+/// `pub` (rather than `pub(crate)`) because `config_gen` is compiled in both
+/// the library and the binary crate: `src/main/report.rs` lives only in the
+/// binary, so a `pub(crate)` item would be dead code in the library unit.
+pub fn default_recommendation_snapshot() -> ProviderRecommendationSnapshot {
+    let rec = ProviderRecommendations::default();
+    ProviderRecommendationSnapshot {
+        default_phase: rec.default_phase.unwrap_or_else(|| "coding".to_string()),
+        planning_request_timeout_seconds: rec.planning_request_timeout_seconds,
+        coding_request_timeout_seconds: rec.coding_request_timeout_seconds,
+        review_request_timeout_seconds: rec.review_request_timeout_seconds,
+        delivery_request_timeout_seconds: rec.delivery_request_timeout_seconds,
+        coding_review_timeout_seconds: rec.coding_review_timeout_seconds,
+        cache_enabled: rec.cache_enabled,
+        vector_enabled: rec.vector_enabled,
+        phase_max_inflight: rec.phase_max_inflight,
+        global_max_inflight: rec.global_max_inflight,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Recommendation aggregation
 
@@ -188,6 +215,27 @@ pub fn recommendation_snapshot_for_config(
     })
 }
 
+/// Apply provider capability recommendations to the config file in place.
+///
+/// # Why this bypasses `AppConfig::load` (sync-boundary note)
+///
+/// This mutator operates on the raw `toml::Value` tree (read → targeted key
+/// updates → re-serialize) instead of going through `AppConfig::load` +
+/// `AppConfig::load_uncached` + typed re-serialization:
+///
+/// 1. `AppConfig` derives only `Deserialize` — there is no typed `Serialize`
+///    round-trip for the full config surface.
+/// 2. Even a hypothetical typed round-trip would drop unknown top-level keys
+///    and keys not modeled by the typed structs, whereas raw-Toml mutation
+///    preserves every unrelated key exactly.
+/// 3. The wizard-style paths (`--setup` / `--apply-recommended` / `--add-model`)
+///    may run on a config that is structurally TOML-valid but fails the typed
+///    validation (`AppConfig::load` bails on unknown/legacy combinations); the
+///    raw-TOML edit still succeeds, which is the desired behavior here.
+///
+/// The upstream pipeline (migration / auto-rules / legacy-key sync) is only
+/// re-applied on the next real load; this command intentionally does not
+/// materialize those derived values into the file.
 pub fn apply_recommended_to_config(config_path: &Path) -> Result<()> {
     if !config_path.exists() {
         anyhow::bail!("config file does not exist: {}", config_path.display());

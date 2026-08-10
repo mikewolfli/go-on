@@ -9,6 +9,12 @@
 //! 2. **Council deliberation** — for high-risk, multi-agent requests with the
 //!    `council_deliberation_enabled` option turned on, runs a council vote
 //!    to select the best routing agent among candidates.
+//!
+//! Reputation-safety note: every ballot here is a self-endorsement (no LLM
+//! ballot exists), so outcomes are deliberately NOT recorded into council
+//! member reputation (`record_outcome` is not called) — scoring self-
+//! endorsement accuracy against the reputation-ranked winner would be a
+//! self-produced feedback loop (see `run_council_route_deliberation`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -132,8 +138,20 @@ pub(crate) fn run_council_deliberation_and_fallback(
 /// score (a genuine tie), the tally outcome (`winning_option`) decides the
 /// winner — the tally is reputation-weighted via the council's
 /// `effective_voting_power`, so it carries real information even though every
-/// ballot is a self-endorsement. Vote-accuracy learning is not simulated
-/// (`record_vote_accuracy` was removed as unwired).
+/// ballot is a self-endorsement.
+///
+/// Reputation-learning guard: because every ballot is a self-endorsement,
+/// `council.record_outcome` is intentionally NOT called for these proposals.
+/// Recording an outcome would mark each member's self-endorsement as
+/// "accurate iff it equals the reputation-ranked winner" — i.e. the members'
+/// own prior ranking would manufacture their accuracy, a self-reinforcing
+/// loop that would inflate the winner's council influence (agent_selector's
+/// `total_votes >= 3` boost) and drive `auto_eject_low_performers`
+/// (quorum/consensus.rs) against the rest without any real evidence. Votes
+/// are still cast (tally/quorum semantics preserved) but member reputation
+/// records stay at their seeded state (`total_votes == 0`), so both
+/// mechanisms remain dormant until a real, non-self-endorsement ballot path
+/// exists.
 fn run_council_route_deliberation(
     cb: &CapabilityBus,
     phase_name: &str,
@@ -248,9 +266,10 @@ fn run_council_route_deliberation(
 
     // Cast real votes: each member endorses itself with its nominal voting
     // power (no LLM ballot exists, so a self-endorsement is the honest vote).
-    // This seeds the council reputation map (`ensure_reputation`) so the
-    // auto-ejection scan has real data. The outcome of the decision is
-    // recorded after the winner is chosen below (`record_outcome`).
+    // Votes are genuine records: they seed the council reputation map
+    // (`ensure_reputation`) and the tally below is reputation-weighted, so
+    // quorum/tally semantics are real. No outcome is recorded for these
+    // ballots — see the reputation-learning guard in the doc comment above.
     for agent in candidate_agents {
         if let Err(e) = council.cast_vote(CouncilVote {
             member_id: agent.clone(),
@@ -304,13 +323,20 @@ fn run_council_route_deliberation(
         (winner_by_reputation.clone(), "reputation_ranked")
     };
 
-    // Record the real decision outcome for reputation learning: each member
-    // voted for itself, so its self-endorsement was accurate iff it is the
-    // routed winner. This closes the loop for `auto_eject_low_performers`
-    // (quorum/consensus.rs) and the `total_votes >= 3` reputation boost in
-    // agent_selector — before this call, no production path recorded
-    // outcomes, so neither mechanism could ever engage.
-    council.record_outcome(&submitted_id, Some(&winner));
+    // Deliberately NOT recording an outcome for these ballots.
+    //
+    // Every vote here is a self-endorsement (member votes for itself), so
+    // `council.record_outcome(&submitted_id, Some(&winner))` would score each
+    // member's accuracy as "did I pick the reputation-ranked winner" — a
+    // self-produced signal: the reputation-ranked winner is marked accurate
+    // and every other member inaccurate, feeding `agent_selector`'s council
+    // boost (total_votes >= 3) and `auto_eject_low_performers`
+    // (quorum/consensus.rs) purely from the members' own prior ranking. That
+    // is a self-reinforcing loop, not competence evidence, so self-
+    // endorsement must not advance member reputation. `get_reputation(...)
+    // .total_votes` therefore stays 0 and both mechanisms stay dormant.
+    // Observability is preserved through the decision payload returned below
+    // and the council's proposal/vote records.
 
     Some((
         winner.clone(),
@@ -330,3 +356,76 @@ fn run_council_route_deliberation(
 
 // NOTE: `reorder_agents_with_priority` lives once in crate::acp::r#impl::chat
 // (deduplicated from this module); council deliberation calls it via that path.
+
+#[cfg(all(
+    test,
+    any(
+        feature = "sub-bus-tool",
+        feature = "simple-server",
+        feature = "multi-users-server"
+    )
+))]
+mod tests {
+    use super::*;
+    use crate::governance::harness_bus::default_harness_bus;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    /// Self-endorsement ballots must not advance council member reputation:
+    /// the routed winner (chosen by reputation ranking) must not receive an
+    /// accuracy/boost record and the losers must not be penalized — otherwise
+    /// the council's own prior ranking manufactures accuracy (pseudo-signal)
+    /// that feeds `agent_selector`'s boost and `auto_eject_low_performers`.
+    #[tokio::test]
+    async fn self_endorsement_does_not_boost_member_reputation() {
+        let harness = Arc::new(default_harness_bus());
+        let bus = CapabilityBus::new_default(harness, None);
+
+        let candidates = vec![
+            "candidate-a".to_string(),
+            "candidate-b".to_string(),
+            "candidate-c".to_string(),
+        ];
+        let mut reputation_scores = HashMap::new();
+        reputation_scores.insert("candidate-a".to_string(), 0.9);
+        reputation_scores.insert("candidate-b".to_string(), 0.5);
+        reputation_scores.insert("candidate-c".to_string(), 0.5);
+
+        let (winner, decision) =
+            run_council_route_deliberation(&bus, "test-phase", &candidates, &reputation_scores)
+                .expect("deliberation should return a winner");
+
+        // Decision result unchanged: reputation-ranked winner still selected.
+        assert_eq!(winner, "candidate-a");
+        assert_eq!(decision["winner"], "candidate-a");
+        // Tally semantics preserved: 3 members × 100 nominal voting power each
+        // (reputation weighting is inert during warmup).
+        assert_eq!(decision["total_votes"], 300, "tally semantics preserved");
+        assert_eq!(decision["candidate_count"], 3);
+
+        let council = bus
+            .council
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for agent in &candidates {
+            let record = council
+                .get_reputation(agent)
+                .unwrap_or_else(|| panic!("{} should have a seeded reputation record", agent));
+            assert_eq!(
+                record.total_votes, 0,
+                "self-endorsement must not be recorded as a competence outcome for {}",
+                agent
+            );
+            assert_eq!(
+                record.warmup_remaining, 5,
+                "warmup must not be consumed by self-endorsement for {}",
+                agent
+            );
+            assert_eq!(
+                record.influence_multiplier, 1.0,
+                "{} must stay neutral",
+                agent
+            );
+        }
+    }
+}

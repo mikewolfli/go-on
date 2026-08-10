@@ -83,6 +83,20 @@ fn has_http_bind(http_bind: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+/// Resolve the effective access selection from the configured protocol mode
+/// and HTTP bind address.
+///
+/// ## Dual-stack (adaptive) method-routing semantics
+///
+/// In `adaptive` mode (`RequestDispatchMode::Auto`) both ACP and MCP clients
+/// are served. Bare standard MCP method names (`ping`, `tools/list`,
+/// `resources/*`, `notifications/initialized`, ...) are normalized to their
+/// `mcp.*` form before dispatch (`normalize_mcp_method` in
+/// `acp/impl/request/protocol.rs`), so MCP clients route to the `mcp.*`
+/// handlers. `initialize` is the deliberate exception: it keeps ACP semantics
+/// in Auto mode so an ACP client's handshake is not hijacked by the MCP
+/// bridge. ACP method names (e.g. `chat`, `session/new`) pass through
+/// unchanged.
 pub fn resolve_access_selection(
     configured_mode: Option<&str>,
     http_bind: Option<&str>,

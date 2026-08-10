@@ -78,7 +78,8 @@ pub fn parse_secret_action(value: &str) -> Result<SecretAction> {
 /// This function performs synchronous keyring I/O via the `keyring` crate.
 /// When called from an async context (e.g. a tokio task), the caller MUST
 /// wrap this call in `tokio::task::spawn_blocking` to avoid blocking the
-/// async runtime.
+/// async runtime. The production caller (`main/server.rs::handle_secret_commands`)
+/// is invoked from `main/mod.rs::run()` inside `spawn_blocking`.
 pub fn run_secret_command(
     action: SecretAction,
     name: Option<&str>,

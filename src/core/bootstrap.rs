@@ -12,20 +12,14 @@ use crate::orchestration::skill::SkillRegistry;
 /// Configuration for the bootstrap process.
 ///
 /// Used by [`perform_bootstrap`] during application startup and constructed
-/// in `main/mod.rs`. Reserved for future expansion of init-time parameters.
+/// explicitly in `main/mod.rs::run()` (enable_i18n + the resolved config
+/// path). No `Default` impl is provided because the config path is always
+/// derived from the CLI at startup and a hard-coded `config/config.toml`
+/// default would be wrong for non-default `-c` invocations.
 #[derive(Debug, Clone)]
 pub struct BootstrapConfig {
     pub enable_i18n: bool,
     pub config_path: std::path::PathBuf,
-}
-
-impl Default for BootstrapConfig {
-    fn default() -> Self {
-        Self {
-            enable_i18n: true,
-            config_path: Path::new("config/config.toml").to_path_buf(),
-        }
-    }
 }
 
 /// Perform all initialization steps. Call once at startup.

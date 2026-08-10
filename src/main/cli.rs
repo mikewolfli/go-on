@@ -42,7 +42,12 @@ pub(crate) fn validate_cli_protocol_mode(raw: Option<&str>) -> Result<Option<Str
 }
 
 /// Command-line interface arguments for the go-on application
-#[derive(Debug, Parser)]
+///
+/// `Clone` is required so the secret/setup dispatch in `main/mod.rs::run()`
+/// can snapshot the parsed CLI into `tokio::task::spawn_blocking` (which
+/// needs `'static` owned data) while `run()` keeps the original for the
+/// server/chat paths.
+#[derive(Debug, Clone, Parser)]
 #[command(name = "go-on")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "ACP proxy with flow, phases and multi-agent routing")]
@@ -164,7 +169,7 @@ pub struct Cli {
     pub low_memory: bool,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum CliCommand {
     /// Generate default configuration interactively
     Init,
@@ -186,7 +191,7 @@ pub enum CliCommand {
     },
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum SkillCommand {
     /// List available skills from the marketplace
     List {

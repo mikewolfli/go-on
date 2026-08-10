@@ -104,22 +104,81 @@ use super::sse::write_sse_event;
 use super::sse::write_sse_headers;
 use super::tcp_write_timeout;
 use super::tls::build_root_capabilities_response;
+/// Read an HTTP request header from the socket into a growable buffer.
+///
+/// Returns the raw bytes read (header plus any body bytes already received in
+/// the same reads) once the `\r\n\r\n` header terminator is found. Reads
+/// loop until the terminator appears, a 30s read timeout elapses, or the
+/// buffer exceeds `MAX_HEADER_BUFFER_SIZE`.
+///
+/// This handles TCP segmentation (slow clients / proxies): the former
+/// implementation issued a single read and then ran the parsed text through
+/// `parse_http_request`, so a first segment lacking `\r\n\r\n` was misreported
+/// as "missing header terminator" and the connection was dropped.
+///
+/// Returns an empty `Vec` on a clean EOF before any byte was read (no request
+/// at all — caller should close quietly).
+pub(crate) async fn read_http_header<R: tokio::io::AsyncRead + Unpin>(
+    socket: &mut R,
+) -> Result<Vec<u8>> {
+    const INITIAL_HEADER_BUFFER_SIZE: usize = 4096;
+    const MAX_HEADER_BUFFER_SIZE: usize = 64 * 1024;
+
+    let mut buffer = vec![0u8; INITIAL_HEADER_BUFFER_SIZE];
+    let mut total_bytes_read: usize = 0;
+
+    loop {
+        if total_bytes_read >= buffer.len() {
+            // Grow the buffer (double until max)
+            let new_size = std::cmp::min(buffer.len() * 2, MAX_HEADER_BUFFER_SIZE);
+            if new_size <= buffer.len() {
+                anyhow::bail!(
+                    "HTTP request header exceeds {} bytes",
+                    MAX_HEADER_BUFFER_SIZE
+                );
+            }
+            buffer.resize(new_size, 0u8);
+        }
+
+        let bytes_read = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            socket.read(&mut buffer[total_bytes_read..]),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("timeout reading HTTP request"))??;
+
+        if bytes_read == 0 {
+            if total_bytes_read == 0 {
+                return Ok(Vec::new());
+            }
+            // Partial header with no data left — missing terminator
+            anyhow::bail!("incomplete HTTP request header --missing header terminator");
+        }
+
+        total_bytes_read += bytes_read;
+
+        let request_text = String::from_utf8_lossy(&buffer[..total_bytes_read]);
+        if request_text.contains("\r\n\r\n") {
+            break;
+        }
+    }
+
+    buffer.truncate(total_bytes_read);
+    Ok(buffer)
+}
+
 /// Main HTTP connection handler — parses, guards, routes, and times the request.
 pub(crate) async fn handle_http_connection(
     socket: &mut HttpStream,
     server: Arc<AcpServer>,
     peer_addr: SocketAddr,
 ) -> Result<()> {
-    let mut buffer = vec![0u8; 64 * 1024];
-    let bytes_read =
-        tokio::time::timeout(std::time::Duration::from_secs(30), socket.read(&mut buffer))
-            .await
-            .map_err(|_| anyhow::anyhow!("timeout reading HTTP request"))??;
-    if bytes_read == 0 {
+    let raw = read_http_header(socket).await?;
+    if raw.is_empty() {
         return Ok(());
     }
 
-    let request_text = String::from_utf8_lossy(&buffer[..bytes_read]);
+    let request_text = String::from_utf8_lossy(&raw);
     let parsed = parse_http_request(&request_text)?;
 
     // Compute CORS headers for this request (empty string when disabled)
@@ -1135,5 +1194,68 @@ mod tests {
         assert!(raw.contains("X-Test: 1\r\n"));
         // Exactly one blank separator line between headers and body.
         assert_eq!(raw.matches("\r\n\r\n").count(), 1, "raw: {raw:?}");
+    }
+
+    #[tokio::test]
+    async fn read_http_header_assembles_tcp_segmented_request() {
+        // A slow client / proxy can deliver the HTTP header in several TCP
+        // segments. The reader must keep reading until the `\r\n\r\n`
+        // terminator instead of failing on the first partial segment (the
+        // former single-read implementation reported "missing header
+        // terminator" and dropped the connection).
+        let (mut tx, mut rx) = tokio::io::duplex(128);
+        let writer = tokio::spawn(async move {
+            tx.write_all(b"POST /rpc HTTP/1.1\r\nHost: localhost\r\nCon")
+                .await
+                .expect("write first segment");
+            // Simulate the inter-segment gap of a slow sender.
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            tx.write_all(b"tent-Length: 2\r\n\r\n{\"a\":1}")
+                .await
+                .expect("write second segment");
+        });
+
+        let raw = super::read_http_header(&mut rx)
+            .await
+            .expect("segmented header must assemble");
+        let text = String::from_utf8_lossy(&raw);
+        let parsed = parse_http_request(&text).expect("assembled header must parse");
+
+        assert_eq!(parsed.method, "POST");
+        assert_eq!(parsed.path, "/rpc");
+        assert!(
+            parsed.header_part.contains("Content-Length: 2"),
+            "full header must be present, got: {text:?}"
+        );
+        // Body bytes received in the same reads are preserved for the body
+        // reader downstream.
+        assert_eq!(parsed.body_initial_part, "{\"a\":1}");
+        writer.await.expect("writer task must finish");
+    }
+
+    #[tokio::test]
+    async fn read_http_header_clean_eof_returns_empty() {
+        let (tx, mut rx) = tokio::io::duplex(64);
+        drop(tx);
+        let raw = super::read_http_header(&mut rx)
+            .await
+            .expect("clean EOF must not error");
+        assert!(raw.is_empty(), "clean EOF before any byte is not a request");
+    }
+
+    #[tokio::test]
+    async fn read_http_header_partial_eof_reports_missing_terminator() {
+        let (mut tx, mut rx) = tokio::io::duplex(64);
+        tx.write_all(b"POST /rpc HTTP/1.1\r\nHost: x\r\n")
+            .await
+            .unwrap();
+        drop(tx);
+        let err = super::read_http_header(&mut rx)
+            .await
+            .expect_err("partial header without terminator must error");
+        assert!(
+            format!("{err}").contains("missing header terminator"),
+            "unexpected error: {err}"
+        );
     }
 }

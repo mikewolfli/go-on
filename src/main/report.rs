@@ -1,6 +1,7 @@
 use crate::config::{AppConfig, ConfigWarning, ConfigWarningSeverity};
 use crate::i18n::runtime::tf;
 use crate::reinforcement::RuntimeHealthcheckReport;
+use crate::setup::config_gen::default_recommendation_snapshot;
 use crate::setup::recommendation_snapshot_for_config;
 
 /// Emit configuration warnings to the log and optionally to stderr
@@ -249,6 +250,12 @@ pub(crate) fn build_completeness_report(
     let mut out = StatusCompleteness::default();
     let mut score = 0.0_f64;
     let provider_recommendation = recommendation_snapshot_for_config(config);
+    // Fallback thresholds when no provider is configured: reuse the shared
+    // `ProviderRecommendations::default` projection (config_gen.rs) so the
+    // report thresholds cannot drift from the values used to generate a
+    // fresh config. All fallback literals below were previously duplicated
+    // from that default — behavior is unchanged.
+    let fallback = default_recommendation_snapshot();
 
     let provider = report
         .components
@@ -289,10 +296,10 @@ pub(crate) fn build_completeness_report(
                 _ => item.delivery_request_timeout_seconds,
             })
             .unwrap_or(match phase_name {
-                "planning" => 120,
-                "coding" => 150,
-                "review" => 60,
-                _ => 90,
+                "planning" => fallback.planning_request_timeout_seconds,
+                "coding" => fallback.coding_request_timeout_seconds,
+                "review" => fallback.review_request_timeout_seconds,
+                _ => fallback.delivery_request_timeout_seconds,
             });
 
         let actual = config
@@ -320,7 +327,7 @@ pub(crate) fn build_completeness_report(
     let expected_review_timeout = provider_recommendation
         .as_ref()
         .map(|item| item.coding_review_timeout_seconds)
-        .unwrap_or(60);
+        .unwrap_or(fallback.coding_review_timeout_seconds);
     let actual_review_timeout = config
         .phases
         .get("coding")
@@ -343,11 +350,11 @@ pub(crate) fn build_completeness_report(
     let expected_phase_inflight = provider_recommendation
         .as_ref()
         .map(|item| item.phase_max_inflight as i64)
-        .unwrap_or(24);
+        .unwrap_or(fallback.phase_max_inflight as i64);
     let expected_global_inflight = provider_recommendation
         .as_ref()
         .map(|item| item.global_max_inflight as i64)
-        .unwrap_or(128);
+        .unwrap_or(fallback.global_max_inflight as i64);
     let coding_options = config
         .phases
         .get("coding")
@@ -406,7 +413,7 @@ pub(crate) fn build_completeness_report(
     let recommended_cache = provider_recommendation
         .as_ref()
         .map(|item| item.cache_enabled)
-        .unwrap_or(true);
+        .unwrap_or(fallback.cache_enabled);
     let cache_enabled = config
         .cache
         .as_ref()
@@ -421,7 +428,7 @@ pub(crate) fn build_completeness_report(
     let recommended_vector = provider_recommendation
         .as_ref()
         .map(|item| item.vector_enabled)
-        .unwrap_or(true);
+        .unwrap_or(fallback.vector_enabled);
     let vector_enabled = config
         .vector
         .as_ref()

@@ -199,12 +199,6 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
         })
         .unwrap_or((0, 0, 0));
 
-    let _platform_mode = params
-        .get("platform_mode")
-        .and_then(Value::as_str)
-        .or(server.runtime_config.platform_mode.as_deref())
-        .unwrap_or("phase_compat");
-
     // The runtime tracks a single platform mode (phase-compat / universal).
     // A "dual-track reconciliation" would compare a value against its own
     // copy and is structurally always consistent; we report that fact
@@ -291,9 +285,11 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
     } else {
         "single_user"
     };
-    let governance_schema_version = "blue26-governance-v1";
-    let governance_artifact_schema_version = "blue26-governance-v1";
-    let _companion_readiness_schema_version = "blue26-release-readiness-v2";
+    // Governance report schema version — anchored to the canonical constant in
+    // the governance module (never inline a second copy; the former twin
+    // `governance_artifact_schema_version` and its always-false comparison
+    // were removed — two copies of the same literal can never mismatch).
+    let governance_schema_version = crate::governance::GOVERNANCE_SCHEMA_VERSION;
     let dual_track_inference_source_valid = matches!(
         server_mode_source,
         "request" | "deployment_target" | "default"
@@ -308,9 +304,6 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
             | ("single-user", "single_user")
     );
     let mut dual_track_consistency_issues = Vec::new();
-    if governance_schema_version != governance_artifact_schema_version {
-        dual_track_consistency_issues.push("governance_schema_artifact_mismatch");
-    }
     if !dual_track_inference_source_valid {
         dual_track_consistency_issues.push("invalid_inference_source");
     }
@@ -648,8 +641,6 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
     let custom_role_registry_ready = blue34_release_closure_ready && status.lifecycle.is_healthy;
     let custom_role_dynamic_matching_ready = custom_role_registry_ready && reconciliation_ok;
     let compliance_audit_metadata_ready = custom_role_dynamic_matching_ready && strict_component_ok;
-    let _self_rationalization_guard_ready =
-        compliance_audit_metadata_ready && !pua_learning.is_empty();
     let startup_context_loader_ready = crate::orchestration::startup_context::get()
         .as_ref()
         .map(|ctx| ctx.loaded)
@@ -1291,7 +1282,7 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
     Ok(json!({
         "ok": true,
         "governance": {
-            "version": "blue26-governance-v1",
+            "version": crate::governance::GOVERNANCE_SCHEMA_VERSION,
             "schema_version": governance_schema_version,
             "schema": governance_schema_version,
             "artifact_contract": {

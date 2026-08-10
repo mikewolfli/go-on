@@ -392,9 +392,12 @@ impl HyperResilienceEngine {
             healing_actions_taken: AtomicU64::new(0),
             healing_actions_simulated: AtomicU64::new(0),
             started_ms: now_ms,
+            // No data yet: both start at 0.0 and are populated by
+            // `health_check_cycle` from real breaker states + measured
+            // per-service latencies (0.0 = "no data", not a measurement).
             test_metrics: Mutex::new(TestMetrics {
-                avg_latency_ms: 10.0,
-                error_rate: 0.001,
+                avg_latency_ms: 0.0,
+                error_rate: 0.0,
             }),
             cancel_tx,
             health_check_handle: Mutex::new(None),
@@ -1421,10 +1424,6 @@ impl HyperResilienceEngine {
                 .values()
                 .filter(|cb| matches!(cb.state, CircuitState::Open))
                 .count();
-            let half_open = cbs
-                .values()
-                .filter(|cb| matches!(cb.state, CircuitState::HalfOpen))
-                .count();
             drop(cbs);
 
             let mut metrics = lock_mutex(&self.test_metrics);
@@ -1434,11 +1433,34 @@ impl HyperResilienceEngine {
             } else {
                 metrics.error_rate = 0.0;
             }
-            // Estimate latency from half-open attempts (higher when failing)
-            metrics.avg_latency_ms = if half_open > 0 {
-                15.0 + (half_open as f64 * 5.0)
+            // Real latency: average of the per-service measured latencies (EMA
+            // values updated by `record_outcome` / `record_execution`). Lock
+            // order mirrors `record_service_outcome` (service_counters →
+            // service_health) so the two maps can't deadlock against it.
+            // Services with zero recorded requests contribute nothing, and with
+            // no data at all the metric stays 0.0 ("no data") instead of the
+            // former fabricated 8/15ms estimate.
+            let (latency_sum, latency_services) = {
+                let counters = lock_mutex(&self.service_counters);
+                let health = lock_mutex(&self.service_health);
+                health
+                    .iter()
+                    .fold((0.0_f64, 0_usize), |(sum, n), (name, h)| {
+                        let has_requests = counters
+                            .get(name)
+                            .map(|c| c.total_requests > 0)
+                            .unwrap_or(false);
+                        if has_requests {
+                            (sum + h.avg_latency_ms, n + 1)
+                        } else {
+                            (sum, n)
+                        }
+                    })
+            };
+            metrics.avg_latency_ms = if latency_services > 0 {
+                latency_sum / latency_services as f64
             } else {
-                8.0
+                0.0
             };
         }
 
@@ -1581,9 +1603,10 @@ impl HyperResilienceEngine {
 /// Consolidated test metrics (latency + error rate under one Mutex).
 #[derive(Debug, Clone)]
 struct TestMetrics {
-    /// Average latency estimate in milliseconds.
+    /// Average measured latency in milliseconds (0.0 = no data yet; populated
+    /// by `health_check_cycle` from per-service measured latencies).
     avg_latency_ms: f64,
-    /// Error rate estimate (0.0 – 1.0).
+    /// Error rate derived from real circuit breaker states (0.0 – 1.0).
     error_rate: f64,
 }
 

@@ -11,6 +11,14 @@
 //! `CREATE TABLE IF NOT EXISTS`, running both is safe — the migration creates
 //! the base schema, and the dynamic DDL adds anything the migration does not
 //! cover (such as the HNSW index with configurable dimensions).
+//!
+//! **`warm_memory` is intentionally NOT in `MIGRATIONS`:** the table is created
+//! inline by `WarmStore::new` in `memory_persistence.rs` (both the sqlite and
+//! postgres variants). The warm tier has no versioned schema-evolution
+//! requirements — its DDL is idempotent (`CREATE TABLE IF NOT EXISTS` + `CREATE
+//! INDEX IF NOT EXISTS`) and is owned by the store that uses it, so adding it
+//! here would create a second, duplicate DDL path. Keep it inline unless the
+//! warm tier gains real migration needs.
 
 #![cfg_attr(not(feature = "backend-postgres"), allow(unused_imports))]
 

@@ -7,6 +7,21 @@
 //!
 //! This replaces the three separate KnowledgeBus, ReputationStore, and
 //! ExperienceKnowledgeBase components with a single cohesive bus.
+//!
+//! OBSERVABILITY-ONLY NOTE (F4/P1-7): Knowledge insights written here
+//! (`record_outcome` success path → `add_insight`) are currently consumed for
+//! observability only — the sole production read is `insight_count()` in
+//! `capability_bus_profile`, plus unit tests. There is deliberately no
+//! production query wired into `decide()` candidate ranking, because the
+//! stored schema has no agent dimension (`KnowledgeInsight` is indexed only by
+//! task-type tags, its `pattern`/`solution_summary` is the raw outcome-summary
+//! string, and `confidence` is a fixed 0.5), and per-agent routing signals
+//! already flow through the reputation EMA (`get_reputation`, consumed by
+//! `sense()`) and the learning snapshot (`recent_outcome_score`). Ranking off
+//! insights would double-count the same outcomes. If insights are to
+//! influence routing, the schema must first grow structured fields (agent,
+//! task_type, reusable-solution) and a dedicated query wired into `decide.rs`
+//! scoring.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -885,9 +885,14 @@ impl WarmStore {
     /// once and then `.expect()`, so an `Err` here would panic the server.
     /// All business methods short-circuit on `pool: None` (see below).
     ///
-    /// Connections come from the shared `PgPoolPair` write pool (the same pool
-    /// infrastructure cache.rs / vector.rs use) instead of a single
-    /// `Mutex<PgClient>` direct connection.
+    /// Connections do **not** come from a shared pool: the warm tier builds
+    /// its own independent pool (max 4, created lazily via `create_pool`)
+    /// rather than sharing the pools cache.rs / vector.rs construct. Only the
+    /// DSN *resolver* (`resolve_pg_dsn`) is shared infrastructure. The
+    /// independence is deliberate: warm-tier traffic (and its max-4 connection
+    /// cap) stays isolated from the cache/vector pools so warm-tier
+    /// backpressure or connection churn cannot starve the other stores, and
+    /// warm-store startup is not coupled to whichever store boots first.
     fn new(_db_conn_str: &Path, max_entries: usize) -> Result<Self> {
         let disabled = || {
             tracing::warn!(

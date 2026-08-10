@@ -276,6 +276,14 @@ pub(crate) async fn handle_chat_mode(
 /// Handle secret management commands, local model setup, recommended config, setup wizard, and AI onboarding.
 ///
 /// Returns `true` if a command was handled and `run()` should return early.
+///
+/// # Sync boundary
+///
+/// This function performs synchronous I/O throughout: keyring access
+/// (`setup::run_secret_command`), config file writes, and interactive
+/// stdin/stdout prompts (setup wizard / `--add-model` URL prompt). The caller
+/// in `main/mod.rs::run()` (async context) therefore invokes it inside
+/// `tokio::task::spawn_blocking`. Future async callers must do the same.
 pub(crate) fn handle_secret_commands(cli: &Cli, config_path: &Path) -> Result<bool> {
     // Handle secret management commands
     if let Some(action) = cli.secret.as_deref() {

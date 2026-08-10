@@ -850,6 +850,24 @@ pub(crate) fn prompt_secret_pool_values(prompt: &str) -> Result<Vec<String>> {
 // add_local_model
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Add or update a local model agent entry in the config file.
+///
+/// # Why this bypasses `AppConfig::load` (sync-boundary note)
+///
+/// Like [`apply_recommended_to_config`](crate::setup::config_gen::apply_recommended_to_config),
+/// this mutates the raw `toml::Value` tree (read → insert agent/phases entries
+/// → re-serialize) rather than a typed `AppConfig` round-trip, because:
+///
+/// 1. `AppConfig` has no `Serialize` impl, so a typed load→modify→save cycle
+///    is not possible.
+/// 2. Raw-TOML mutation preserves all unrelated keys (unknown keys, comments
+///    are lost either way, but unknown keys survive), while a typed round-trip
+///    would drop anything the structs do not model.
+/// 3. `--add-model` may target a config that parses as TOML but fails typed
+///    validation; the surgical edit should still succeed.
+///
+/// Migration / auto-rules / legacy-key sync are re-applied on the next real
+/// `AppConfig::load` — this command does not materialize them into the file.
 pub fn add_local_model(config_path: &Path, mut options: LocalModelOptions) -> Result<()> {
     if !config_path.exists() {
         anyhow::bail!("config file does not exist: {}", config_path.display());

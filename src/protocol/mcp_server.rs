@@ -1,7 +1,8 @@
-//! MCP Server implementation with stdio transport
+//! MCP Server implementation with stdio + HTTP transports
 //!
-//! Provides a JSON-RPC 2.0 server that communicates over stdin/stdout,
-//! implementing the Model Context Protocol specification.
+//! Provides a JSON-RPC 2.0 server that communicates over stdin/stdout
+//! (`McpStdioServer`) and HTTP/SSE (`McpHttpServer`), implementing the Model
+//! Context Protocol specification.
 
 use anyhow::Result;
 use futures_util::future::join_all;
@@ -17,6 +18,7 @@ use tracing::{debug, info, warn};
 
 use crate::acp::r#impl::cors::{build_preflight_response_headers, is_origin_allowed};
 use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
+use crate::acp::r#impl::runtime::protocol::{parse_http_request, ParsedHttpRequest};
 use crate::acp::r#impl::runtime::sse::write_sse_raw_event;
 use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
@@ -294,8 +296,9 @@ fn tools_list_changed_notification() -> String {
 /// Returns the number of active receivers the payload was delivered to (0 when
 /// no SSE client is currently subscribed — a broadcast with zero receivers is
 /// a no-op, not an error). This is the single send path for the SSE
-/// broadcaster; it is fed by tool/resource list change points and by the
-/// server-initialized notification in `McpHttpServer::run`.
+/// broadcaster; the only payload published today is the
+/// `notifications/tools/list_changed` notification (sent at server startup, on
+/// SSE subscribe, and by `McpHttpServer::run`'s startup broadcast).
 fn broadcast_sse_notification(sse_broadcaster: &SseBroadcaster, payload: String) -> usize {
     // `Err(SendError)` means zero receivers (no connected SSE client); the
     // broadcast channel never closes while the server owns the sender, so
@@ -323,13 +326,18 @@ pub struct McpHttpServer {
     /// processing each request in `handle_http_connection`.
     rate_limiter: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
     /// SSE broadcaster for pushing MCP notifications to connected SSE clients.
-    /// Subscription-based (resource change, tool list change, etc.) notifications
-    /// are sent through this channel.
+    /// Only the `notifications/tools/list_changed` notification is currently
+    /// published through this channel (see `tools_list_changed_notification`).
     sse_broadcaster: Arc<SseBroadcaster>,
 }
 
 impl McpHttpServer {
-    /// Create a new MCP HTTP server
+    /// Create a new MCP HTTP server without ACP features.
+    ///
+    /// Thin wrapper over [`Self::new_with_acp`] with `acp_server = None`;
+    /// kept for API convenience and test call sites. Prefer
+    /// [`Self::new_with_acp`] when an `AcpServer` reference is available so
+    /// CORS/entry-auth/rate-limiting hardening applies to MCP HTTP.
     pub fn new(
         agent_registry: Arc<AgentRegistry>,
         tool_registry: Arc<ToolRegistry>,
@@ -337,20 +345,14 @@ impl McpHttpServer {
         server_version: String,
         bind_addr: String,
     ) -> Self {
-        let sse_broadcaster = Arc::new(tokio::sync::broadcast::channel::<String>(256).0);
-        let mcp_server = McpServer::new(agent_registry, tool_registry, server_name, server_version);
-        Self {
-            mcp_server: Arc::new(mcp_server),
+        Self::new_with_acp(
+            agent_registry,
+            tool_registry,
+            server_name,
+            server_version,
             bind_addr,
-            shutdown_notify: Arc::new(Notify::new()),
-            acp_server: None,
-            tls_acceptor: None,
-            mtls_ca_cert_path: None,
-            mtls_server_cert_path: None,
-            mtls_server_key_path: None,
-            rate_limiter: None,
-            sse_broadcaster,
-        }
+            None,
+        )
     }
 
     /// Create a new MCP HTTP server with an optional AcpServer reference
@@ -557,6 +559,59 @@ impl McpHttpServer {
     }
 }
 
+/// Outcome of evaluating an MCP CORS preflight (`OPTIONS`) request.
+enum McpPreflightOutcome {
+    /// Origin is outside the whitelist — respond 403 with no CORS headers.
+    Reject,
+    /// Origin is allowed — respond 204 carrying these CORS headers.
+    Allow { extra_headers: String },
+}
+
+/// Evaluate an MCP CORS preflight request against the server CORS config.
+///
+/// Pure decision logic used by `handle_http_connection` and covered directly
+/// by unit tests. Semantics match the ACP HTTP arm (`handle_cors_preflight`
+/// in `acp/impl/runtime/http.rs`):
+///
+/// - An origin outside the whitelist is rejected with 403 instead of echoing
+///   `Access-Control-Allow-Origin: *` (the old MCP arm echoed `*` for
+///   disallowed origins, which effectively whitelisted every browser origin).
+/// - Header negotiation reads `Access-Control-Request-Headers`; the old arm
+///   passed the `Origin` value there, so `Access-Control-Allow-Headers` was
+///   never emitted for concrete whitelists.
+/// - `*` in `allowed_origins` grants every origin, and the response then
+///   echoes `*` (same as the ACP arm).
+fn evaluate_mcp_preflight(
+    header_part: &str,
+    cfg: &crate::acp::r#impl::cors::CorsConfig,
+) -> McpPreflightOutcome {
+    let origin = crate::acp::r#impl::runtime::protocol::extract_header_value(header_part, "origin");
+    let allow_origin = origin.as_deref().filter(|o| is_origin_allowed(o, cfg));
+
+    if allow_origin.is_none() && !cfg.allowed_origins.iter().any(|o| o == "*") {
+        return McpPreflightOutcome::Reject;
+    }
+
+    let request_headers = crate::acp::r#impl::runtime::protocol::extract_header_value(
+        header_part,
+        "access-control-request-headers",
+    );
+    let preflight_headers = build_preflight_response_headers(request_headers.as_deref(), cfg);
+    let origin_val = allow_origin.unwrap_or("*").to_string();
+
+    let mut extra = format!("Access-Control-Allow-Origin: {}\r\n", origin_val);
+    for (k, v) in &preflight_headers {
+        extra.push_str(&format!("{}: {}\r\n", k, v));
+    }
+    extra.push_str(&format!(
+        "Access-Control-Max-Age: {}\r\n",
+        cfg.max_age_seconds
+    ));
+    McpPreflightOutcome::Allow {
+        extra_headers: extra,
+    }
+}
+
 async fn handle_http_connection(
     socket: &mut MaybeTlsStream,
     mcp_server: Arc<McpServer>,
@@ -567,15 +622,16 @@ async fn handle_http_connection(
 ) -> Result<()> {
     // ── Connection: keep-alive — compliance only, no multiplexing ──────
     // Responses include `Connection: keep-alive` (set in
-    // write_http_json_response) for HTTP/1.1 spec compliance.  However,
-    // this handler currently processes exactly **one** request per TCP
-    // connection and then returns, so the keep-alive header is
-    // metadata-only — no multiplexing occurs.
+    // write_http_json_response) for HTTP/1.1 spec compliance. This handler
+    // processes exactly **one** request per TCP connection and then returns
+    // (the connection is closed when the socket drops), so the keep-alive
+    // header is metadata-only — no request multiplexing occurs today.
     //
     // Future enhancement: wrap the handler body in a loop that reads
     // subsequent requests on the same connection while `Connection:
     // keep-alive` is present, and breaks when `Connection: close` is
-    // received.
+    // received. Until then the header must stay `keep-alive` (clients like
+    // the MCP SDK rely on it) — only the comment documents the gap.
     //
     // ── Header buffer: start small, grow dynamically ────────────────────
     // Allocate only INITIAL_HEADER_BUFFER_SIZE bytes up front, then grow
@@ -587,7 +643,7 @@ async fn handle_http_connection(
     let mut buffer = vec![0u8; INITIAL_HEADER_BUFFER_SIZE];
     let mut total_bytes_read: usize = 0;
 
-    let header_end = loop {
+    loop {
         if total_bytes_read >= buffer.len() {
             // Grow the buffer (double until max)
             let new_size = std::cmp::min(buffer.len() * 2, MAX_HEADER_BUFFER_SIZE);
@@ -620,34 +676,22 @@ async fn handle_http_connection(
         total_bytes_read += bytes_read;
 
         let request_text = String::from_utf8_lossy(&buffer[..total_bytes_read]);
-        if let Some(pos) = request_text.find("\r\n\r\n") {
-            break pos;
+        if request_text.contains("\r\n\r\n") {
+            break;
         }
-    };
+    }
 
     let request_text = String::from_utf8_lossy(&buffer[..total_bytes_read]);
-    let (header_part, body_initial_part) = request_text.split_at(header_end + 4);
-    let mut lines = header_part.lines();
-    let request_line = lines.next().ok_or_else(|| {
-        warn!("MCP HTTP: invalid request --missing request line");
-        anyhow::anyhow!("{}", t("error.http_missing_request_line"))
-    })?;
-
-    let mut request_line_parts = request_line.split_whitespace();
-    let method = request_line_parts.next().ok_or_else(|| {
-        warn!(
-            "MCP HTTP: invalid request --missing method in request line: {}",
-            request_line
-        );
-        anyhow::anyhow!("{}", t("error.http_missing_method"))
-    })?;
-    let path = request_line_parts.next().ok_or_else(|| {
-        warn!(
-            "MCP HTTP: invalid request --missing path in request line: {}",
-            request_line
-        );
-        anyhow::anyhow!("{}", t("error.http_missing_path"))
-    })?;
+    // Shared request-line parser: splits at the first `\r\n\r\n` and
+    // whitespace-splits the request line into method/path. Semantics are
+    // identical to the former inline copy (no path-prefix stripping in either
+    // implementation), so both HTTP arms now share one parser.
+    let ParsedHttpRequest {
+        method,
+        path,
+        header_part,
+        body_initial_part,
+    } = parse_http_request(&request_text)?;
 
     // ── Content-Length validation (before any auth processing) ────────
     // Check Content-Length before allocating buffers to prevent OOM.
@@ -702,28 +746,34 @@ async fn handle_http_connection(
     if method == "OPTIONS" {
         if let Some(ref server) = acp_server {
             if let Some(ref cfg) = server.runtime_config.cors_config() {
-                let origin = crate::acp::r#impl::runtime::protocol::extract_header_value(
-                    header_part,
-                    "origin",
-                );
-                let preflight_headers = build_preflight_response_headers(origin.as_deref(), cfg);
-                let origin_val: &str = origin
-                    .as_deref()
-                    .filter(|o| is_origin_allowed(o, cfg))
-                    .unwrap_or("*");
-
-                let mut extra = format!("Access-Control-Allow-Origin: {}\r\n", origin_val);
-                for (k, v) in &preflight_headers {
-                    extra.push_str(&format!("{}: {}\r\n", k, v));
+                match evaluate_mcp_preflight(header_part, cfg) {
+                    McpPreflightOutcome::Reject => {
+                        // Origin outside the whitelist: refuse the preflight
+                        // with 403 instead of echoing `Access-Control-Allow-
+                        // Origin: *` (echoing `*` would implicitly whitelist
+                        // every browser origin). Same semantics as the ACP arm
+                        // (`handle_cors_preflight` in acp/impl/runtime/http.rs).
+                        write_http_json_response(
+                            socket,
+                            403,
+                            serde_json::json!({"error": "Origin not allowed"}),
+                            "",
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                    McpPreflightOutcome::Allow { extra_headers } => {
+                        // CORS preflight — return 204 No Content per HTTP spec
+                        write_http_json_response(
+                            socket,
+                            204,
+                            serde_json::json!(null),
+                            &extra_headers,
+                        )
+                        .await?;
+                        return Ok(());
+                    }
                 }
-                extra.push_str(&format!(
-                    "Access-Control-Max-Age: {}\r\n",
-                    cfg.max_age_seconds
-                ));
-
-                // CORS preflight — return 204 No Content per HTTP spec
-                write_http_json_response(socket, 204, serde_json::json!(null), &extra).await?;
-                return Ok(());
             }
         }
         // No CORS config → reject OPTIONS
@@ -766,27 +816,34 @@ async fn handle_http_connection(
             }
         }
 
-        // Entry rate limiting (per-IP), matching the ACP HTTP arm. Applied only
-        // when entry auth is enabled so it complements rather than doubles the
-        // transport-level TenantRateLimit middleware. Shared with the ACP arm
-        // via the single `entry_rate_limit_allowed` implementation.
-        if server.runtime_config.entry_auth_enabled {
-            let source = peer_addr.ip().to_string();
-            let allowed =
-                crate::acp::r#impl::runtime::security::entry_rate_limit_allowed(server, &source);
-            if !allowed {
-                write_http_json_response(
-                    socket,
-                    429,
-                    serde_json::json!({
-                        "error": t("error.chat.rate_limited"),
-                        "code": "ENTRY_RATE_LIMITED"
-                    }),
-                    &cors_headers,
-                )
-                .await?;
-                return Ok(());
-            }
+        // Entry rate limiting (per-IP), shared with the ACP HTTP arm via the
+        // single `entry_rate_limit_allowed` implementation.
+        //
+        // Strategy (both arms): entry rate limiting is an independent
+        // per-IP flood-protection layer and is applied unconditionally — it is
+        // NOT bound to `entry_auth_enabled`. Rationale: the knobs
+        // `entry_rate_limit_rpm`/`entry_rate_limit_burst` are independently
+        // configurable from entry auth, governance status reports the quota
+        // component separately from auth, and binding the limit to auth would
+        // disable per-IP protection under the default (auth-disabled)
+        // configuration. The transport-level TenantRateLimit middleware is a
+        // different dimension (per-tenant, not per-IP), so applying both is
+        // complementing, not doubling — the ACP arm has always done so.
+        let source = peer_addr.ip().to_string();
+        let allowed =
+            crate::acp::r#impl::runtime::security::entry_rate_limit_allowed(server, &source);
+        if !allowed {
+            write_http_json_response(
+                socket,
+                429,
+                serde_json::json!({
+                    "error": t("error.chat.rate_limited"),
+                    "code": "ENTRY_RATE_LIMITED"
+                }),
+                &cors_headers,
+            )
+            .await?;
+            return Ok(());
         }
     }
 
@@ -1349,6 +1406,89 @@ mod tests {
         let parsed = parse_request_target_for_test(request).expect("request line should parse");
         assert_eq!(parsed.0, "POST");
         assert_eq!(parsed.1, "/api/v1/chat");
+    }
+
+    #[test]
+    fn mcp_preflight_allowed_origin_echoes_origin_and_negotiates_headers() {
+        let cfg = crate::acp::r#impl::cors::CorsConfig {
+            allowed_origins: vec!["https://app.go-on.dev".to_string()],
+            ..crate::acp::r#impl::cors::CorsConfig::default()
+        };
+        let headers = "OPTIONS /mcp HTTP/1.1\r\nHost: x\r\nOrigin: https://app.go-on.dev\r\nAccess-Control-Request-Headers: X-Api-Key\r\n\r\n";
+        match evaluate_mcp_preflight(headers, &cfg) {
+            McpPreflightOutcome::Allow { extra_headers } => {
+                assert!(
+                    extra_headers.contains("Access-Control-Allow-Origin: https://app.go-on.dev"),
+                    "allowed origin must be echoed, got: {extra_headers:?}"
+                );
+                assert!(
+                    !extra_headers.contains("Access-Control-Allow-Origin: *"),
+                    "must not echo wildcard for a whitelisted origin, got: {extra_headers:?}"
+                );
+                // Header negotiation must be driven by
+                // Access-Control-Request-Headers (not the Origin value), so
+                // the requested allowed header is reflected.
+                assert!(
+                    extra_headers.contains("Access-Control-Allow-Headers: X-Api-Key"),
+                    "requested allowed header must be reflected, got: {extra_headers:?}"
+                );
+            }
+            McpPreflightOutcome::Reject => panic!("whitelisted origin must not be rejected"),
+        }
+    }
+
+    #[test]
+    fn mcp_preflight_disallowed_origin_is_rejected_not_wildcarded() {
+        let cfg = crate::acp::r#impl::cors::CorsConfig {
+            allowed_origins: vec!["https://app.go-on.dev".to_string()],
+            ..crate::acp::r#impl::cors::CorsConfig::default()
+        };
+        let headers = "OPTIONS /mcp HTTP/1.1\r\nHost: x\r\nOrigin: https://evil.example\r\n\r\n";
+        // Regression for the `Access-Control-Allow-Origin: *` echo: an origin
+        // outside the whitelist must be rejected (403 at the HTTP layer),
+        // never answered with a wildcard.
+        assert!(
+            matches!(
+                evaluate_mcp_preflight(headers, &cfg),
+                McpPreflightOutcome::Reject
+            ),
+            "disallowed origin must be rejected"
+        );
+    }
+
+    #[test]
+    fn mcp_preflight_wildcard_config_echoes_star() {
+        let cfg = crate::acp::r#impl::cors::CorsConfig {
+            allowed_origins: vec!["*".to_string()],
+            ..crate::acp::r#impl::cors::CorsConfig::default()
+        };
+        let headers =
+            "OPTIONS /mcp HTTP/1.1\r\nHost: x\r\nOrigin: https://anything.example\r\n\r\n";
+        match evaluate_mcp_preflight(headers, &cfg) {
+            McpPreflightOutcome::Allow { extra_headers } => {
+                assert!(
+                    extra_headers.contains("Access-Control-Allow-Origin: *"),
+                    "wildcard config must allow any origin, got: {extra_headers:?}"
+                );
+            }
+            McpPreflightOutcome::Reject => panic!("wildcard config must not reject origins"),
+        }
+    }
+
+    #[test]
+    fn mcp_preflight_missing_origin_without_wildcard_is_rejected() {
+        let cfg = crate::acp::r#impl::cors::CorsConfig {
+            allowed_origins: vec!["https://app.go-on.dev".to_string()],
+            ..crate::acp::r#impl::cors::CorsConfig::default()
+        };
+        let headers = "OPTIONS /mcp HTTP/1.1\r\nHost: x\r\n\r\n";
+        assert!(
+            matches!(
+                evaluate_mcp_preflight(headers, &cfg),
+                McpPreflightOutcome::Reject
+            ),
+            "missing origin must be rejected when no wildcard is configured"
+        );
     }
 
     #[test]

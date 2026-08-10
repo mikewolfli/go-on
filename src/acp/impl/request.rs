@@ -464,6 +464,19 @@ pub async fn handle_request(
         RequestDispatchMode::Auto => {
             // If MCP method, prefer MCP branch; otherwise fall through to ACP.
             // Mixed-protocol requests are allowed in Auto mode.
+            //
+            // Normalize bare MCP method names (`ping` -> `mcp.ping`,
+            // `tools/list` -> `mcp.tools.list`, `notifications/initialized` ->
+            // `mcp.notifications_initialized`) so standard MCP clients are
+            // routed to the `mcp.*` handlers instead of falling into the
+            // `_ =>` MethodNotFound branch. `initialize` is deliberately left
+            // unnormalized: in Auto mode it keeps ACP semantics (the ACP
+            // handshake), so an ACP client's `initialize` is not hijacked by
+            // the MCP bridge. See `normalize_mcp_method` and the dual-stack
+            // note in `src/protocol/access_mode.rs`.
+            if is_mcp_request(method.as_ref()) && method.as_ref() != "initialize" {
+                method = Cow::Owned(normalize_mcp_method(method.as_ref()));
+            }
         }
     }
 
@@ -2415,6 +2428,101 @@ mod tests {
     use crate::vector::VectorStore;
     #[cfg(not(feature = "backend-postgres"))]
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn auto_mode_normalizes_bare_mcp_methods() {
+        // Regression: in Auto (adaptive) mode a bare MCP method name such as
+        // `ping` previously fell into the dispatch `_ =>` branch and was
+        // answered with -32601 MethodNotFound, because the Auto arm did not
+        // run `normalize_mcp_method` (only the Mcp arm did). Auto mode must
+        // normalize bare MCP methods (`ping` -> `mcp.ping`) while keeping
+        // `initialize` on ACP semantics.
+        use crate::acp::server::ServerBuilder;
+        use crate::acp::transport::{
+            clear_current_transport, set_current_transport, RpcBufferTransport,
+        };
+        use std::sync::Arc;
+
+        let buffer = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let transport = Arc::new(RpcBufferTransport::new(buffer.clone()));
+        clear_current_transport();
+        set_current_transport(transport.clone() as Arc<dyn crate::acp::transport::Transport>);
+
+        let mut server = ServerBuilder::new().build();
+        // Adaptive (Auto) dispatch mode is the default when protocol_mode is
+        // unset; pin it explicitly so the test does not depend on defaults.
+        server.runtime_config.protocol_mode = Some("adaptive".to_string());
+
+        // Bare `ping` must produce the mcp.ping result, not MethodNotFound.
+        super::handle_request(
+            &server,
+            crate::rpc_protocol::JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                method: "ping".to_string(),
+                params: Some(json!({})),
+                id: Some(json!(1)),
+            },
+            None,
+        )
+        .await
+        .expect("handle_request must complete");
+        let ping_resp = transport
+            .last_response()
+            .await
+            .expect("dispatch must emit a JSON-RPC response");
+        assert_eq!(ping_resp["id"], json!(1));
+        assert!(
+            ping_resp.get("error").is_none(),
+            "bare ping in Auto mode must not be MethodNotFound, got: {ping_resp}"
+        );
+        assert!(
+            ping_resp.get("result").is_some(),
+            "bare ping in Auto mode must produce the mcp.ping result, got: {ping_resp}"
+        );
+
+        // Bare `notifications/initialized` is an MCP notification — it must be
+        // recognized (normalized to mcp.notifications_initialized) and produce
+        // no response, rather than falling into MethodNotFound.
+        clear_current_transport();
+        set_current_transport(transport.clone() as Arc<dyn crate::acp::transport::Transport>);
+        super::handle_request(
+            &server,
+            crate::rpc_protocol::JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                method: "notifications/initialized".to_string(),
+                params: Some(json!({})),
+                id: None,
+            },
+            None,
+        )
+        .await
+        .expect("handle_request must complete");
+        assert!(
+            buffer.lock().await.len() >= 1,
+            "dispatch must have written the notification path output"
+        );
+
+        // Negative control: a genuinely unknown method is still MethodNotFound.
+        super::handle_request(
+            &server,
+            crate::rpc_protocol::JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                method: "no.such.method".to_string(),
+                params: Some(json!({})),
+                id: Some(json!(2)),
+            },
+            None,
+        )
+        .await
+        .expect("handle_request must complete");
+        let unknown_resp = transport
+            .last_response()
+            .await
+            .expect("dispatch must emit a JSON-RPC response");
+        assert_eq!(unknown_resp["error"]["code"], json!(-32601));
+
+        clear_current_transport();
+    }
 
     #[test]
     fn is_acp_request_recognizes_known_methods() {

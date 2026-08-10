@@ -20,181 +20,19 @@ fn lang_color(lang: &str) -> &'static str {
     }
 }
 
-/// Render markdown text to ANSI-colored output.
-///
-/// Returns a `String` with embedded ANSI escape codes suitable for
-/// writing to a terminal that supports basic ANSI (all modern terminals).
-///
 /// Render markdown text to ANSI-colored output (test-only convenience).
 ///
 /// Production code uses `StreamMarkdownRenderer` for incremental rendering.
-/// This function is kept under `#[cfg(test)]` as a testing helper.
+/// This function is kept under `#[cfg(test)]` as a testing helper and is
+/// implemented by feeding the whole text through `StreamMarkdownRenderer`
+/// (feed → flush), so the single line-processing pipeline lives in exactly
+/// one place instead of a second static renderer.
 #[cfg(test)]
 pub(crate) fn render_markdown(text: &str) -> String {
-    // Pre-allocate ~10% more than input for ANSI escape overhead
-    let mut out = String::with_capacity(text.len() + text.len() / 10 + 16);
-    let mut in_code_block = false;
-    let mut code_lang = String::new();
-    let mut code_content = String::new();
-    let mut in_table = false;
-    let mut table_col_widths: Vec<usize> = Vec::new();
-    let mut table_rows: Vec<Vec<String>> = Vec::new();
-
-    for line in text.lines() {
-        // ── Code block fences ──
-        if line.trim_start().starts_with("```") {
-            if in_code_block {
-                // End code block — render accumulated content
-                out.push_str(&render_code_block(&code_content, &code_lang));
-                code_content.clear();
-                code_lang.clear();
-                in_code_block = false;
-            } else {
-                // Start code block
-                in_code_block = true;
-                code_lang = line
-                    .trim_start()
-                    .trim_start_matches("```")
-                    .trim()
-                    .to_string();
-            }
-            continue;
-        }
-
-        if in_code_block {
-            code_content.push_str(line);
-            code_content.push('\n');
-            continue;
-        }
-
-        // ── Tables ──
-        if line.trim_start().starts_with('|') {
-            let cells: Vec<&str> = line
-                .split('|')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            // Detect separator row (e.g. |---|---|)
-            if cells
-                .iter()
-                .all(|c| c.chars().all(|ch| ch == '-' || ch == ':' || ch == ' '))
-            {
-                continue; // skip separator row
-            }
-
-            if !in_table {
-                in_table = true;
-                table_rows.clear();
-                table_col_widths = cells.iter().map(|c| c.chars().count()).collect();
-            } else {
-                // Update max column widths
-                for (i, cell) in cells.iter().enumerate() {
-                    if i < table_col_widths.len() {
-                        table_col_widths[i] = table_col_widths[i].max(cell.chars().count());
-                    }
-                }
-            }
-            table_rows.push(cells.iter().map(|s| s.to_string()).collect());
-            continue;
-        } else if in_table {
-            // End of table — render it
-            out.push_str(&render_table(&table_rows, &table_col_widths));
-            in_table = false;
-            table_rows.clear();
-            table_col_widths.clear();
-        }
-
-        // ── Horizontal rules ──
-        let trimmed = line.trim();
-        if trimmed == "---" || trimmed == "***" || trimmed == "___" {
-            out.push_str(&format!(
-                "{}{}{}\n",
-                ansi("90"),
-                "─".repeat(terminal_width().min(60)),
-                ansi("0")
-            ));
-            continue;
-        }
-
-        // ── Headings ──
-        if let Some(level) = heading_level(trimmed) {
-            let content = trimmed.trim_start_matches('#').trim();
-            let color = match level {
-                1 => "1;36", // bold cyan
-                2 => "1;34", // bold blue
-                3 => "1;33", // bold yellow
-                _ => "1;90", // bold gray
-            };
-            let prefix = "#".repeat(level);
-            out.push_str(&format!(
-                "\n{}{}{}{} {}\n",
-                ansi(color),
-                prefix,
-                ansi("0"),
-                ansi("1"),
-                render_inline(content)
-            ));
-            continue;
-        }
-
-        // ── Blockquotes ──
-        if let Some(content) = trimmed.strip_prefix('>') {
-            out.push_str(&format!(
-                " {}│ {}\n",
-                ansi("90"),
-                render_inline(content.trim())
-            ));
-            continue;
-        }
-
-        // ── Lists ──
-        if let Some(content) = trimmed
-            .strip_prefix("- ")
-            .or_else(|| trimmed.strip_prefix("* "))
-            .or_else(|| trimmed.strip_prefix("+ "))
-        {
-            out.push_str(&format!(
-                "  {}{} {}{}\n",
-                ansi("33"),
-                "•",
-                ansi("0"),
-                render_inline(content)
-            ));
-            continue;
-        }
-        // Ordered list
-        if let Some((num_str, content)) = trimmed.split_once(". ") {
-            if num_str.chars().all(|c| c.is_ascii_digit()) {
-                out.push_str(&format!(
-                    "  {}.{} {}\n",
-                    ansi("36"),
-                    ansi("0"),
-                    render_inline(content)
-                ));
-                continue;
-            }
-        }
-
-        // ── Regular paragraph with inline formatting ──
-        let rendered = render_inline(trimmed);
-        if !rendered.is_empty() {
-            out.push_str(&rendered);
-            out.push('\n');
-        } else if trimmed.is_empty() {
-            out.push('\n');
-        }
-    }
-
-    // Flush remaining code block / table
-    if in_code_block {
-        out.push_str(&render_code_block(&code_content, &code_lang));
-    }
-    if in_table {
-        out.push_str(&render_table(&table_rows, &table_col_widths));
-    }
-
-    out
+    let mut renderer = StreamMarkdownRenderer::new();
+    renderer.feed(text);
+    let (formatted, _) = renderer.flush();
+    formatted
 }
 
 /// Render inline formatting: bold, italic, inline code, links.

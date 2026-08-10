@@ -462,6 +462,12 @@ pub async fn start_background_tasks(
     // ── BLUE56-GAP-C04: Hyper-resilience health checks ─────────────────
     // Start background health checks for circuit breaker self-healing.
     // The health check interval is configured in ResilienceConfig.
+    //
+    // Engine boundary (dual-engine design, see the fault-tolerance loop
+    // below): hyper_resilience owns circuit-breaker / degradation health
+    // (probe → half-open → self-heal) on a 5s cycle; fault_tolerance owns
+    // node heartbeat / recovery-plan orchestration on a 10s cycle. The two
+    // engines are deliberately kept separate and do not drive each other.
     server
         .resilience
         .hyper_resilience
@@ -479,6 +485,11 @@ pub async fn start_background_tasks(
     // (e.g. hub workers) register via FaultToleranceEngine directly; the
     // evolve cycle no longer registers itself as a fake heartbeat node
     // (see CapabilityBus::evolve).
+    //
+    // Engine boundary (dual-engine design, see the hyper-resilience health
+    // check above): fault_tolerance owns node heartbeats + recovery plans
+    // (10s cycle); hyper_resilience owns circuit-breaker / degradation
+    // health (5s cycle). Both run concurrently; neither drives the other.
     if let Some(ref harness) = server.governance_deps.harness_bus {
         let ft = Arc::clone(&harness.fault_tolerance);
         let shutdown = shutdown_notify.clone();

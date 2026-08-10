@@ -469,6 +469,18 @@ pub async fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (
     // Multi-factor risk scoring — single keyword table used by both the
     // Delphi-debate proposal and the rationalization threshold below (they
     // previously maintained two separate keyword sets that disagreed).
+    //
+    // RISK-KEYWORD CROSS-REFERENCE (F8): this table is one of three
+    // overlapping keyword sources in the codebase:
+    //   1. this table (rationalization guard / Delphi-debate risk level),
+    //   2. `ModeRuntime::compute_risk_score` (src/orchestration/mode.rs) —
+    //      additive scoring with word-boundary matching,
+    //   3. `TaskRouter::analyze_task().has_safety_concerns`
+    //      (src/orchestration/task_router.rs) — boolean flag.
+    // They intentionally differ in semantics (ratio vs additive vs boolean),
+    // so they are NOT yet merged; keep the tables in sync when adding a risk
+    // keyword. Consolidation direction: extract a single `TaskRiskClassifier`
+    // that both the rationalization guard and mode degradation consume.
     let risk_keywords = [
         "delete", "remove", "exec", "shell", "rm", "sudo", "admin", "override", "bypass", "secret",
         "token", "password", "key", "cert", "database", "drop", "truncate", "alter", "grant",

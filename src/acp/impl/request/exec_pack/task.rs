@@ -741,14 +741,21 @@ pub(crate) async fn execute_runtime_subtasks(
 // ============================================================================
 
 /// Build `ContextFeatures` for the adaptive model selector from the executed
-/// subtask: UTC hour-of-day bucket, a coarse task-type derived from keywords,
-/// and a latency tier from the measured duration. This restores the
-/// per-context learning signal (previously only the global `record_result`
-/// was fed, so the UCB context arms never learned).
+/// subtask: UTC hour-of-day bucket, a task-type derived from the single
+/// authoritative `TaskRouter::analyze_task` classification, and a latency
+/// tier from the measured duration. This restores the per-context learning
+/// signal (previously only the global `record_result` was fed, so the UCB
+/// context arms never learned).
+///
+/// The former third keyword classifier (a private code/reasoning/chat
+/// keyword table) was removed: `TaskRouter::analyze_task` owns task-type
+/// classification, and the coarse labels below are a lossy projection of its
+/// `TaskType` so the UCB context keys stay stable and comparable across runs.
 fn model_context_features(
     task: &str,
     duration_ms: u64,
 ) -> crate::intelligence::adaptive_selector::ContextFeatures {
+    use crate::orchestration::task_router::TaskType;
     use std::time::{SystemTime, UNIX_EPOCH};
     let hour = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -760,23 +767,16 @@ fn model_context_features(
         18..=23 => "evening",
         _ => "night",
     };
-    let lower = task.to_ascii_lowercase();
-    let task_type = if lower.contains("code")
-        || lower.contains("file")
-        || lower.contains("implement")
-        || lower.contains("refactor")
-        || lower.contains("function")
-        || lower.contains("test")
-    {
-        "code"
-    } else if lower.contains("research")
-        || lower.contains("explain")
-        || lower.contains("analyze")
-        || lower.contains("compare")
-    {
-        "reasoning"
-    } else {
-        "chat"
+    let task_type = match TaskRouter::analyze_task(task).task_type {
+        TaskType::BugFix
+        | TaskType::FeatureImplementation
+        | TaskType::Refactoring
+        | TaskType::TestImplementation
+        | TaskType::PerformanceOptimization => "code",
+        TaskType::Documentation | TaskType::ArchitectureDesign | TaskType::CodeReview => {
+            "reasoning"
+        }
+        TaskType::Unknown => "chat",
     };
     let latency_tier = if duration_ms < 500 {
         "low"
@@ -1660,4 +1660,50 @@ pub(crate) async fn handle_task_execute(
     });
 
     Ok(DispatchOutput::ok(response_payload))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// F5: the context task-type must be derived from the single authoritative
+    /// `TaskRouter::analyze_task` classification (not a third private keyword
+    /// table).
+    #[test]
+    fn model_context_features_uses_task_router_classification() {
+        assert_eq!(
+            model_context_features("implement a login form", 100).task_type,
+            "code"
+        );
+        assert_eq!(
+            model_context_features("fix the null pointer bug", 100).task_type,
+            "code"
+        );
+        assert_eq!(
+            model_context_features("explain the architecture", 100).task_type,
+            "reasoning"
+        );
+        assert_eq!(
+            model_context_features("write a poem about rust", 100).task_type,
+            "chat"
+        );
+    }
+
+    #[test]
+    fn model_context_features_keeps_time_and_latency_tiers() {
+        assert_eq!(model_context_features("any task", 100).latency_tier, "low");
+        assert_eq!(
+            model_context_features("any task", 1_000).latency_tier,
+            "medium"
+        );
+        assert_eq!(
+            model_context_features("any task", 5_000).latency_tier,
+            "high"
+        );
+        let features = model_context_features("any task", 100);
+        assert!(matches!(
+            features.time_bucket.as_str(),
+            "morning" | "afternoon" | "evening" | "night"
+        ));
+    }
 }

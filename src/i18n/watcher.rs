@@ -150,6 +150,13 @@ impl LanguageWatcher {
     }
 
     /// Stop watching
+    ///
+    /// #[doc(hidden)]: kept for tests and for embedders that construct a
+    /// `LanguageWatcher` directly (see the lifecycle note in
+    /// `src/core/bootstrap.rs::perform_bootstrap`). The production watcher
+    /// spawned via `start_watcher` is process-lifetime by design and stopped
+    /// at process exit; nothing else calls this.
+    #[doc(hidden)]
     pub fn stop(&self) {
         self.should_stop
             .store(true, std::sync::atomic::Ordering::Relaxed);

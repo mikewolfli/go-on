@@ -314,11 +314,6 @@ impl I18nManager {
         key.to_string()
     }
 
-    /// Get translated message with format arguments
-    pub fn get_formatted(&self, key: &str, format_args: &[(&str, &str)]) -> String {
-        format_template(self.get(key), format_args)
-    }
-
     /// Hot reload language files (monitors for changes)
     pub fn hot_reload(&self) -> Result<()> {
         self.load_all_languages()?;
@@ -364,8 +359,8 @@ pub fn tf(key: &str, args: &[(&str, &str)]) -> String {
 }
 
 /// Apply `{placeholder}` substitutions to a translated template, escaping
-/// `{{` literals so they survive substitution untouched. Shared by
-/// `I18nManager::get_formatted` and the global `tf` helper.
+/// `{{` literals so they survive substitution untouched. Shared by the
+/// global `tf` helper.
 fn format_template(message: String, args: &[(&str, &str)]) -> String {
     let mut message = message.replace("{{", ESCAPED_SENTINEL);
     for (placeholder, value) in args {

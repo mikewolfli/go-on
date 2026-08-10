@@ -21,6 +21,15 @@ use super::migrator;
 /// `config.reload`), so a cached parse is always fresh for read-only loads.
 /// Startup (`main/server.rs`) and explicit reload paths bypass this cache by
 /// calling the uncached `load` when they need to force a re-parse.
+///
+/// # Known limitation (single slot)
+///
+/// The cache holds exactly ONE (path, mtime, config) entry. A process that
+/// loads a second config path (e.g. the Hub daemon or tests switching
+/// `-c` paths) invalidates the previous slot on every successful parse;
+/// correctness is unaffected (mtime comparison always wins), only the hit
+/// rate for multi-config workloads is reduced. Keep the single slot unless a
+/// hot multi-path workload appears — a HashMap cache would need eviction.
 type ConfigCacheEntry = (PathBuf, std::time::SystemTime, Arc<AppConfig>);
 static CONFIG_CACHE: OnceLock<Mutex<Option<ConfigCacheEntry>>> = OnceLock::new();
 

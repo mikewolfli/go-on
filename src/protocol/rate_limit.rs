@@ -1,6 +1,11 @@
-//! RateLimitMiddleware — per-tenant rate limiting based on JWT claims
+//! RateLimitMiddleware — per-tenant rate limiting over shared token buckets
 //!
-//! GAP-B49-11: Extends PhaseRateLimiter with tenant-level tracking.
+//! Tracks one token bucket per tenant identifier in a shared [`BucketMap`], so
+//! each tenant gets independent RPM/burst limits and idle tenants are evicted.
+//! The tenant key is derived from the request session/params (see the call
+//! sites in the MCP and ACP HTTP arms) — **not** from JWT claims. This module
+//! is an independent implementation from [`PhaseRateLimiter`] (which backs the
+//! per-IP entry rate limiter); the two compose at the HTTP arms.
 //! Returns 429 + Retry-After when exceeded.
 
 // F-GAP-49: Module wired into production protocol pipeline.

@@ -451,15 +451,6 @@ impl EvolutionHistory {
             .collect()
     }
 
-    /// Get entries that should be auto-rolled back based on metrics degradation.
-    pub async fn entries_needing_rollback(&self) -> Vec<EvolutionEntry> {
-        self.list()
-            .await
-            .into_iter()
-            .filter(|e| !e.is_rolled_back() && e.should_auto_rollback())
-            .collect()
-    }
-
     /// Get the most recent entry.
     pub async fn latest(&self) -> Option<EvolutionEntry> {
         let ids = self.ordered_ids.lock().await;
