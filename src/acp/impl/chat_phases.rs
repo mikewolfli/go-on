@@ -99,7 +99,7 @@ use crate::i18n::runtime::tf;
 use crate::intelligence::token_cache::{
     estimate_messages_token_count, messages_to_text, ContextLengthClass,
 };
-use crate::observability::performance::record_global_operation;
+
 use crate::orchestration::flow::ResolvedPhase;
 use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};
 use crate::orchestration::multi_agent_pipeline::MultiAgentPipeline;
@@ -992,7 +992,6 @@ pub(crate) async fn act_phase(
     resolve_out: &mut ObserveOutput,
     routing_out: &ThinkOutput,
 ) -> Result<ActOutput> {
-    let act_started = Instant::now();
     let mut selected_agent = String::new();
     let mut response_text = String::new();
     let mut reasoning_text = String::new();
@@ -1576,11 +1575,12 @@ pub(crate) async fn act_phase(
         });
     }
 
-    // O-FIX4: Record global performance metric (cache-hit or fallback-early path)
-    let success = !response_text.is_empty() && last_err.is_none();
-    let elapsed_ms = act_started.elapsed().as_secs_f64() * 1000.0;
-    record_global_operation(success, elapsed_ms);
-
+    // Global performance accounting for chat happens at the transport
+    // boundary: the HTTP route (`route_http_post`) and the stdio dispatch
+    // loop (`runtime.rs`) each record one op per request. Recording here as
+    // well would double-count HTTP chat requests (route + act_phase) in the
+    // same global store. Cache-hit and fallback-early chats are covered by
+    // the transport-level records.
     Ok(ActOutput {
         selected_agent,
         response_text,

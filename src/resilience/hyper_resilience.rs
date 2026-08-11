@@ -148,6 +148,34 @@ enum BreakerOutcome {
     Failure,
 }
 
+/// Reset a breaker to its fresh Closed state (failure count 0, no last-failure
+/// timestamp). Single reset implementation — manual reset paths
+/// (recover_service, ClearCircuitBreaker, ReinitializeComponent) and the
+/// half-open success transition all use this so the reset semantics cannot
+/// drift.
+fn reset_breaker(cb: &mut CircuitBreaker) {
+    cb.state = CircuitState::Closed;
+    cb.failure_count = 0;
+    cb.last_failure_ms = 0;
+}
+
+/// Map open-breaker / failover counts to a system degradation level.
+///
+/// Single implementation shared by `system_health()` and `profile()` so the
+/// thresholds (`> n/2` Emergency, `> n/3` Constrained) cannot drift between
+/// the two views.
+fn degradation_from_counts(open: usize, total: usize, failovers: usize) -> DegradationLevel {
+    if open > 0 && open > total / 2 {
+        DegradationLevel::Emergency
+    } else if open > total / 3 && open > 0 {
+        DegradationLevel::Constrained
+    } else if open > 0 || failovers > 0 {
+        DegradationLevel::Degraded
+    } else {
+        DegradationLevel::Normal
+    }
+}
+
 /// Apply a single execution outcome to the circuit breaker state machine.
 ///
 /// This is the **single** state-transition authority: the sync
@@ -159,9 +187,7 @@ fn transition_breaker(cb: &mut CircuitBreaker, outcome: BreakerOutcome, now: u64
     match outcome {
         BreakerOutcome::Success => match cb.state {
             CircuitState::HalfOpen => {
-                cb.state = CircuitState::Closed;
-                cb.failure_count = 0;
-                cb.last_failure_ms = 0;
+                reset_breaker(cb);
             }
             CircuitState::Closed => {
                 cb.failure_count = 0;
@@ -247,6 +273,23 @@ pub struct CircuitBreaker {
     pub last_failure_mode: Option<FailureMode>,
     /// Rolling history of recent failure modes (most recent first, max 10).
     pub failure_history: Vec<FailureMode>,
+}
+
+impl CircuitBreaker {
+    /// Create a fresh closed breaker with the given threshold and recovery
+    /// timeout. Single construction point — new fields need only one edit.
+    fn new(name: String, threshold: u64, recovery_timeout_ms: u64) -> Self {
+        Self {
+            name,
+            state: CircuitState::Closed,
+            failure_count: 0,
+            threshold,
+            recovery_timeout_ms,
+            last_failure_ms: 0,
+            last_failure_mode: None,
+            failure_history: Vec::new(),
+        }
+    }
 }
 
 /// A group of nodes forming a failover set with one primary and one or more replicas.
@@ -440,16 +483,7 @@ impl HyperResilienceEngine {
         }
         cbs.insert(
             name.to_string(),
-            CircuitBreaker {
-                name: name.to_string(),
-                state: CircuitState::Closed,
-                failure_count: 0,
-                threshold,
-                recovery_timeout_ms,
-                last_failure_ms: 0,
-                last_failure_mode: None,
-                failure_history: Vec::new(),
-            },
+            CircuitBreaker::new(name.to_string(), threshold, recovery_timeout_ms),
         );
         Ok(())
     }
@@ -490,16 +524,7 @@ impl HyperResilienceEngine {
             if !cbs.contains_key(name) {
                 cbs.insert(
                     name.to_string(),
-                    CircuitBreaker {
-                        name: name.to_string(),
-                        state: CircuitState::Closed,
-                        failure_count: 0,
-                        threshold,
-                        recovery_timeout_ms: recovery,
-                        last_failure_ms: 0,
-                        last_failure_mode: None,
-                        failure_history: Vec::new(),
-                    },
+                    CircuitBreaker::new(name.to_string(), threshold, recovery),
                 );
             }
         }
@@ -607,18 +632,9 @@ impl HyperResilienceEngine {
 
         // Drive the breaker from the same outcome (sync inline update).
         let mut cbs = lock_mutex(&self.circuit_breakers);
-        let cb = cbs
-            .entry(name.to_string())
-            .or_insert_with(|| CircuitBreaker {
-                name: name.to_string(),
-                state: CircuitState::Closed,
-                failure_count: 0,
-                threshold: max_failure_threshold,
-                recovery_timeout_ms,
-                last_failure_ms: 0,
-                last_failure_mode: None,
-                failure_history: Vec::new(),
-            });
+        let cb = cbs.entry(name.to_string()).or_insert_with(|| {
+            CircuitBreaker::new(name.to_string(), max_failure_threshold, recovery_timeout_ms)
+        });
         apply_breaker_outcome(cb, success);
     }
 
@@ -702,9 +718,7 @@ impl HyperResilienceEngine {
         {
             let mut cbs = lock_mutex(&self.circuit_breakers);
             if let Some(cb) = cbs.get_mut(name) {
-                cb.state = CircuitState::Closed;
-                cb.failure_count = 0;
-                cb.last_failure_ms = 0;
+                reset_breaker(cb);
             }
         }
         {
@@ -866,26 +880,11 @@ impl HyperResilienceEngine {
     /// transition to half-open.  Returns `true` if the breaker is accepting
     /// requests after the probe (i.e. closed or half-open).
     ///
-    /// This is the state-mutating counterpart of `is_available()`.
+    /// Delegates to [`Self::is_available`] — the two were byte-identical
+    /// (both mutate Open → HalfOpen on timeout elapse), so keeping one
+    /// implementation prevents future drift.
     pub async fn probe(&self, breaker_name: &str) -> bool {
-        let mut cbs = lock_mutex(&self.circuit_breakers);
-        let cb = match cbs.get_mut(breaker_name) {
-            Some(cb) => cb,
-            None => return false,
-        };
-
-        match cb.state {
-            CircuitState::Closed | CircuitState::HalfOpen => true,
-            CircuitState::Open => {
-                let now = crate::shared::timestamps::now_ts_ms_u64();
-                if now >= cb.last_failure_ms + cb.recovery_timeout_ms {
-                    cb.state = CircuitState::HalfOpen;
-                    true
-                } else {
-                    false
-                }
-            }
-        }
+        self.is_available(breaker_name).await
     }
 
     /// Register a failover group with a primary node and a list of replicas.
@@ -984,15 +983,8 @@ impl HyperResilienceEngine {
         drop(fgs);
 
         // Determine degradation level based on the ratio of open circuits.
-        let level = if open_circuits > 0 && open_circuits > active_circuit_breakers / 2 {
-            DegradationLevel::Emergency
-        } else if open_circuits > active_circuit_breakers / 3 && open_circuits > 0 {
-            DegradationLevel::Constrained
-        } else if open_circuits > 0 || active_failovers > 0 {
-            DegradationLevel::Degraded
-        } else {
-            DegradationLevel::Normal
-        };
+        let level =
+            degradation_from_counts(open_circuits, active_circuit_breakers, active_failovers);
 
         SystemHealth {
             level,
@@ -1111,9 +1103,7 @@ impl HyperResilienceEngine {
                 // Clear the circuit breaker if it exists.
                 let mut cbs = lock_mutex(&self.circuit_breakers);
                 if let Some(cb) = cbs.get_mut(target) {
-                    cb.state = CircuitState::Closed;
-                    cb.failure_count = 0;
-                    cb.last_failure_ms = 0;
+                    reset_breaker(cb);
                     (
                         true,
                         tf("status.hyper_resilience.breaker_reset", &[("name", target)]),
@@ -1242,9 +1232,7 @@ impl HyperResilienceEngine {
                 {
                     let mut cbs = lock_mutex(&self.circuit_breakers);
                     if let Some(cb) = cbs.get_mut(target) {
-                        cb.state = CircuitState::Closed;
-                        cb.failure_count = 0;
-                        cb.last_failure_ms = 0;
+                        reset_breaker(cb);
                         (
                             true,
                             tf(
@@ -1316,15 +1304,7 @@ impl HyperResilienceEngine {
         };
 
         // Determine system health degradation (aligned with system_health()).
-        let system_health = if open_circuits > 0 && open_circuits > total_circuit_breakers / 2 {
-            DegradationLevel::Emergency
-        } else if open_circuits > total_circuit_breakers / 3 && open_circuits > 0 {
-            DegradationLevel::Constrained
-        } else if open_circuits > 0 {
-            DegradationLevel::Degraded
-        } else {
-            DegradationLevel::Normal
-        };
+        let system_health = degradation_from_counts(open_circuits, total_circuit_breakers, 0);
 
         let uptime_ms = crate::shared::timestamps::now_ts_ms_u64().saturating_sub(self.started_ms);
         let healing_actions_taken = self.healing_actions_taken.load(Ordering::Acquire);
@@ -1554,18 +1534,9 @@ impl HyperResilienceEngine {
         {
             let mut cbs = lock_mutex(&self.circuit_breakers);
 
-            let cb_ref = cbs
-                .entry(breaker_name.to_string())
-                .or_insert_with(|| CircuitBreaker {
-                    name: breaker_name.to_string(),
-                    state: CircuitState::Closed,
-                    failure_count: 0,
-                    threshold,
-                    recovery_timeout_ms,
-                    last_failure_ms: 0,
-                    last_failure_mode: None,
-                    failure_history: Vec::new(),
-                });
+            let cb_ref = cbs.entry(breaker_name.to_string()).or_insert_with(|| {
+                CircuitBreaker::new(breaker_name.to_string(), threshold, recovery_timeout_ms)
+            });
 
             let now = crate::shared::timestamps::now_ts_ms_u64();
 

@@ -3,9 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::types::{
-    AppConfig, ComplianceConfig, ReputationConfig, RuntimeConfig, StartupContextConfig,
-};
+use super::types::{AppConfig, ComplianceConfig, RuntimeConfig, StartupContextConfig};
 
 #[cfg(test)]
 mod tests {
@@ -108,17 +106,6 @@ mod default_functions {
     }
     pub fn default_startup_io_timeout_ms() -> u64 {
         5_000
-    }
-
-    // ── Reputation defaults ─────────────────────────────────────
-    pub fn default_reputation_alpha() -> f64 {
-        0.2
-    }
-    pub fn default_reputation_degraded() -> f64 {
-        0.65
-    }
-    pub fn default_reputation_excluded() -> f64 {
-        0.30
     }
 
     // ── Runtime defaults ────────────────────────────────────────
@@ -265,17 +252,6 @@ impl Default for StartupContextConfig {
             readme_max_chars: default_startup_readme_max_chars(),
             recent_commits: default_startup_recent_commits(),
             io_timeout_ms: default_startup_io_timeout_ms(),
-        }
-    }
-}
-
-impl Default for ReputationConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            ema_alpha: default_reputation_alpha(),
-            degraded_threshold: default_reputation_degraded(),
-            exclusion_threshold: default_reputation_excluded(),
         }
     }
 }

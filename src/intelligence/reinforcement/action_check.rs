@@ -80,7 +80,7 @@ pub fn run_action_check(
     kind: ActionCheckKind,
 ) -> Result<ActionCheckReport> {
     ledger.ensure_ready()?;
-    let generated_at = now_ts();
+    let generated_at = crate::shared::timestamps::now_ts();
     let mut checks_run = Vec::new();
     let mut evidence_refs = Vec::new();
     let mut overall_status = CheckStatus::Healthy;
@@ -280,8 +280,4 @@ fn check_json_artifact(
             artifact_path: Some(path.display().to_string()),
         }
     }
-}
-
-fn now_ts() -> i64 {
-    crate::shared::timestamps::now_ts()
 }

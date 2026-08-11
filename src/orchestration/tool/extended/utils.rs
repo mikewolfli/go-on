@@ -127,14 +127,10 @@ impl Tool for RandomTokenTool {
                     .collect()
             }
             _ => {
-                // hex
-                (0..length)
-                    .map(|_| format!("{:02x}", rand::rng().random::<u8>()))
-                    .collect::<Vec<_>>()
-                    .join("")
-                    .chars()
-                    .take(length)
-                    .collect()
+                // hex: `length` hex characters from ceil(length/2) random bytes
+                let byte_len = (length + 1) / 2;
+                let bytes: Vec<u8> = (0..byte_len).map(|_| rand::rng().random::<u8>()).collect();
+                hex::encode(bytes).chars().take(length).collect()
             }
         };
 
@@ -208,12 +204,7 @@ impl Tool for EncodeDecodeTool {
                     .context("Failed to decode base64 input")?;
                 String::from_utf8(bytes).context("Base64 decoded data is not valid UTF-8")?
             }
-            "hex_encode" => input_str
-                .as_bytes()
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-                .join(""),
+            "hex_encode" => hex::encode(input_str.as_bytes()),
             "hex_decode" => {
                 let cleaned: String = input_str
                     .chars()
@@ -323,12 +314,7 @@ impl Tool for HashFileTool {
                 use sha2::{Digest, Sha512};
                 let mut hasher = Sha512::new();
                 hasher.update(&data);
-                hasher
-                    .finalize()
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<Vec<_>>()
-                    .join("")
+                hex::encode(hasher.finalize())
             }
             "sha256" => crate::shared::sha256_hex(&data),
             // Unknown algorithms are rejected instead of silently returning a

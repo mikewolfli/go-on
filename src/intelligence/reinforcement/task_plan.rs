@@ -13,9 +13,9 @@ use serde_json::{json, Value};
 use crate::task_decomposer::{TaskDecomposer, TaskDecomposition};
 use crate::task_router::{RoutingDecision, TaskCharacteristics, TaskRouter};
 
-use super::health::now_ts;
 use super::learning::WorkflowLearningBusArtifact;
 use super::ArtifactLedger;
+use crate::shared::timestamps::now_ts;
 
 /// Load and parse the persisted learning bus artifact (`latest-learning.json`)
 /// once per request. Callers that need several recommendations should load a

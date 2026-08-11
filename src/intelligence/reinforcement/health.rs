@@ -250,7 +250,7 @@ async fn build_runtime_healthcheck_report_inner(
 
     let overall_status = aggregate_status(components.iter().map(|component| component.status));
     Ok(RuntimeHealthcheckReport {
-        generated_at: now_ts(),
+        generated_at: crate::shared::timestamps::now_ts(),
         overall_status,
         components,
     })
@@ -503,8 +503,4 @@ fn missing_envs_for_agent(config: &AppConfig) -> Vec<Value> {
         }
     }
     missing
-}
-
-pub fn now_ts() -> i64 {
-    crate::shared::timestamps::now_ts()
 }

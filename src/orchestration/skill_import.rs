@@ -335,7 +335,7 @@ impl SkillImportStore {
             sha256: computed_sha,
             manifest_path: manifest_path.display().to_string(),
             enabled: request.enabled,
-            imported_at: now_ts(),
+            imported_at: crate::shared::timestamps::now_ts(),
         };
 
         // If the manifest declares an MCP endpoint, validate that a RemoteSkill
@@ -874,11 +874,6 @@ pub(crate) fn parse_skill_md(content: &[u8]) -> Result<SkillImportManifest> {
         allow_implicit_invocation: !disable_model_invocation,
     })
 }
-
-fn now_ts() -> i64 {
-    crate::shared::timestamps::now_ts()
-}
-
 /// A remote skill that wraps an MCP endpoint as a Skill trait implementation.
 ///
 /// This allows remote MCP skills to be registered in the SkillRegistry and
@@ -1054,7 +1049,7 @@ mod tests {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join("skill_import_test_ws")
-            .join(format!("{}-{}", name, now_ts()));
+            .join(format!("{}-{}", name, crate::shared::timestamps::now_ts()));
         fs::create_dir_all(&root).expect("create test workspace");
         root
     }

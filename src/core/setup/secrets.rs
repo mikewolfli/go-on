@@ -272,16 +272,34 @@ fn required_envs_for_provider(provider: &str) -> Vec<String> {
 }
 
 /// Detect providers whose env vars are all set.
+///
+/// Specs carry `keyring://` URIs (not plain env names), so a bare
+/// `std::env::var(uri)` would always fail. Resolve each reference to its
+/// env-var candidates via the shared fallback mapping (same chain the runtime
+/// uses in `load_secret_value`) so detection matches runtime resolution.
 pub(super) fn detect_available_providers_from_env() -> Vec<String> {
     super::provider_specs()
         .iter()
         .filter(|spec| {
             let required_envs = required_envs_for_provider(spec.name.as_str());
-            !required_envs.is_empty()
-                && required_envs.iter().all(|name| std::env::var(name).is_ok())
+            !required_envs.is_empty() && required_envs.iter().all(|name| env_var_available(name))
         })
         .map(|spec| spec.name.clone())
         .collect()
+}
+
+/// Whether the given env reference (plain name or `keyring://` URI) resolves
+/// to a set environment variable.
+fn env_var_available(env_name: &str) -> bool {
+    if let Some(locator) = env_name.strip_prefix(crate::shared::keyring_ref::KEYRING_PREFIX) {
+        let (service, account) = locator
+            .split_once('/')
+            .unwrap_or((super::KEYRING_SERVICE, locator));
+        return crate::agents::agent::keyring_env_fallback_candidates(service, account)
+            .iter()
+            .any(|candidate| std::env::var(candidate).is_ok());
+    }
+    std::env::var(env_name).is_ok()
 }
 
 /// Detect providers whose keyring entries all exist.
@@ -314,8 +332,21 @@ fn keyring_secret_available(env_name: &str) -> bool {
         .is_ok()
 }
 
-/// Map an env-var name to a keyring account name.
+/// Map an env-var reference to a keyring account name.
+///
+/// Provider specs carry `keyring://<service>/<account>` URIs directly
+/// (e.g. `keyring://go-on/openai_api_key`). The account part of that URI is
+/// what the runtime resolves in `load_secret_value` (agents/agent.rs), so the
+/// setup side must derive the SAME account — otherwise secrets written here
+/// are silently lost (stored under a different account than the runtime reads).
 fn keyring_account_for_env(env_name: &str) -> String {
+    // Specs now use keyring:// URIs as their `api_key_env` / `secret_key_env`.
+    if let Some(locator) = env_name.strip_prefix(crate::shared::keyring_ref::KEYRING_PREFIX) {
+        return locator
+            .split_once('/')
+            .map(|(_, account)| account.to_string())
+            .unwrap_or_else(|| locator.to_string());
+    }
     match env_name {
         "GITHUB_COPILOT_TOKEN" => "github_copilot_token".to_string(),
         _ => env_name.to_ascii_lowercase(),
@@ -593,4 +624,53 @@ pub(super) fn mask_secret_pool_entry(secret: &str) -> String {
     let prefix: String = chars.iter().take(4).collect();
     let suffix: String = chars.iter().skip(len.saturating_sub(4)).collect();
     format!("{}...{}", prefix, suffix)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: provider specs carry `keyring://<service>/<account>` URIs as
+    /// their `api_key_env` / `secret_key_env`. The account derived for keyring
+    /// writes MUST equal the account the runtime parses in
+    /// `agents::agent::load_secret_value` — otherwise secrets stored via
+    /// keyring-mode setup are silently lost (written under a different account
+    /// than the runtime reads).
+    #[test]
+    fn keyring_account_from_uri_matches_runtime_parse() {
+        // Runtime parse (agents/agent.rs `load_secret_value`): strip prefix,
+        // split on '/' → service=go-on, account=openai_api_key.
+        let uri = "keyring://go-on/openai_api_key";
+        assert_eq!(keyring_account_for_env(uri), "openai_api_key");
+
+        // The setup write target must land on that same account.
+        let (service, account) = keyring_target_for_env(uri).expect("target");
+        assert_eq!(service, "go-on");
+        assert_eq!(account, "openai_api_key");
+
+        // Round-trip: the reference built from a spec URI reproduces it.
+        assert_eq!(keyring_reference(uri).as_deref(), Some(uri));
+    }
+
+    /// Regression: `detect_available_providers_from_env` must not look up the
+    /// literal URI as an env var (it never exists); it resolves the URI to the
+    /// same env-var candidates the runtime fallback uses.
+    #[test]
+    fn env_detection_resolves_uri_to_env_candidates() {
+        // Without the candidate set, the URI itself is never an env var:
+        // a bare lookup would always report unavailable.
+        assert!(!env_var_available("keyring://go-on/openai_api_key"));
+
+        // With OPENAI_API_KEY set, the URI resolves to available (same chain
+        // the runtime fallback uses in load_secret_value).
+        temp_env::with_var("OPENAI_API_KEY", Some("test-key"), || {
+            assert!(env_var_available("keyring://go-on/openai_api_key"));
+        });
+
+        // Plain env names pass through unchanged.
+        assert!(!env_var_available("SOME_PLAIN_NAME"));
+        temp_env::with_var("SOME_PLAIN_NAME", Some("x"), || {
+            assert!(env_var_available("SOME_PLAIN_NAME"));
+        });
+    }
 }

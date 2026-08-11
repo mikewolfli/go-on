@@ -25,7 +25,6 @@ pub use load::{
 };
 pub use types::{
     AdaptiveConfig, AgentConfig, AppConfig, CacheConfig, ComplianceConfig, FeatureConfig,
-    FlowConfig, MinimalConfig, PhaseConfig, PhaseOptions, ProviderConfig, ReputationConfig,
-    RuntimeConfig, SecurityConfig, StartupContextConfig, UrlPolicyConfig, VectorConfig,
-    WorkflowType,
+    FlowConfig, MinimalConfig, PhaseConfig, PhaseOptions, ProviderConfig, RuntimeConfig,
+    SecurityConfig, StartupContextConfig, UrlPolicyConfig, VectorConfig, WorkflowType,
 };

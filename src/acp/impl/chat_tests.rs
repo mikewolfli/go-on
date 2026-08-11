@@ -382,14 +382,7 @@ mod unit_tests {
             }),
         );
 
-        let mut config = test_config();
-        config.reputation = Some(crate::config::ReputationConfig {
-            enabled: true,
-            ema_alpha: 0.3,
-            exclusion_threshold: 0.1,
-            degraded_threshold: 0.3,
-        });
-        let config = Arc::new(config);
+        let config = Arc::new(test_config());
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
 
         let harness_bus = Arc::new(crate::governance::harness_bus::default_harness_bus());

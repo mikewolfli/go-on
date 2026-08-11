@@ -213,11 +213,18 @@ impl TokenMultiLevelCache {
 
         // L2: Semantic match (medium/long inputs) — read-only peek, then
         // best-effort hit-count touch so "least-hit" eviction is real.
-        if context_class != ContextLengthClass::Short {
-            let query_vec = simple_embedding(input);
+        // The embedding is computed once and reused by the L3 promotion path
+        // below (L2 miss → L3 hit adds the same vector to L2), avoiding a
+        // duplicate 256-dim embedding per lookup.
+        let query_vec = if context_class != ContextLengthClass::Short {
+            Some(simple_embedding(input))
+        } else {
+            None
+        };
+        if let Some(query_vec) = query_vec.as_ref() {
             let l2_hit = {
                 let guard = self.l2.read().await;
-                guard.peek_similar(&query_vec)
+                guard.peek_similar(query_vec)
             };
             if let Some((idx, entry, score)) = l2_hit {
                 if entry.output.len() > 10 {
@@ -256,11 +263,8 @@ impl TokenMultiLevelCache {
                     // Promote into L1 (and L2 for non-short inputs) so the
                     // durable hit is served from memory on the next request.
                     self.l1.write().await.put(l1_key.clone(), entry.clone());
-                    if context_class != ContextLengthClass::Short {
-                        self.l2
-                            .write()
-                            .await
-                            .add(simple_embedding(input), entry.clone());
+                    if let Some(query_vec) = query_vec.as_ref() {
+                        self.l2.write().await.add(query_vec.clone(), entry.clone());
                     }
                     self.stats
                         .write()
@@ -630,7 +634,6 @@ pub struct TokenCacheStats {
     // Total tracking
     pub total_entries: usize,
     pub total_tokens_saved: u64,
-    pub total_tokens_served: u64,
     // Per-class breakdown
     pub short_hits: u64,
     pub medium_hits: u64,
@@ -649,7 +652,6 @@ impl TokenCacheStats {
             CacheLevel::L3 => self.l3_hits += 1,
         }
         self.total_tokens_saved += tokens_saved as u64;
-        self.total_tokens_served += tokens_saved as u64;
     }
 
     /// Record a cache miss for a context class.

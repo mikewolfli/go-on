@@ -244,9 +244,6 @@ pub struct AppConfig {
     /// Startup context loader configuration (S5)
     #[serde(default)]
     pub startup_context: Option<StartupContextConfig>,
-    /// Reputation tracking configuration (S13)
-    #[serde(default)]
-    pub reputation: Option<ReputationConfig>,
     /// Protocol configuration (S15) — supports `[protocol]` TOML section
     /// for protocol mode selection and transport configuration.
     #[serde(default)]
@@ -714,18 +711,6 @@ pub struct StartupContextConfig {
     /// Per-file I/O timeout in milliseconds (used by the startup context loader).
     #[serde(default = "super::defaults::default_startup_io_timeout_ms")]
     pub io_timeout_ms: u64,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ReputationConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "super::defaults::default_reputation_alpha")]
-    pub ema_alpha: f64,
-    #[serde(default = "super::defaults::default_reputation_degraded")]
-    pub degraded_threshold: f64,
-    #[serde(default = "super::defaults::default_reputation_excluded")]
-    pub exclusion_threshold: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

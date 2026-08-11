@@ -145,6 +145,9 @@ struct HnswIndex {
     metadata: Vec<HnswNodeMeta>,
     /// Adjacency lists per layer: layers[layer][node_id] = Vec<neighbor_id>
     layers: Vec<Vec<Vec<usize>>>,
+    /// Per-node random level (parallel to `vectors`/`metadata`), used to
+    /// re-point `entry_point` when the current one is removed.
+    node_levels: Vec<usize>,
     /// Current entry point (node id at the topmost layer)
     entry_point: Option<usize>,
     /// Highest layer that has any element
@@ -171,6 +174,7 @@ impl HnswIndex {
             vectors: Vec::new(),
             metadata: Vec::new(),
             layers: vec![Vec::new()], // layer 0 exists and is empty
+            node_levels: Vec::new(),
             entry_point: None,
             max_level: 0,
             m,
@@ -303,6 +307,7 @@ impl HnswIndex {
 
         self.vectors.push(vector.clone());
         self.metadata.push(meta);
+        self.node_levels.push(level);
 
         if self.entry_point.is_none() {
             // First element
@@ -355,25 +360,65 @@ impl HnswIndex {
         }
     }
 
-    /// Remove a node from the index by its memory_key.
+    /// Remove all nodes matching a memory_key from the index.
     ///
-    /// Replaces the node's vector with a zero-vector and clears metadata
-    /// so it is effectively filtered out during distance computations.
+    /// Zeroes the vectors and clears metadata so they are filtered out during
+    /// distance computations (`search` skips entries with empty memory_key).
+    /// Removing ALL matches (not just the first) is required: `upsert` re-inserts
+    /// a node per memory_key, and eviction can hit the same key twice in a row —
+    /// leaving any match behind would let the search fast path return stale
+    /// content or duplicate keys that the SQLite path would not return.
     fn remove(&mut self, memory_key: &str) {
-        if let Some(pos) = self
-            .metadata
-            .iter()
-            .position(|m| m.memory_key == memory_key)
-        {
-            // Zero out the vector (distance will be ~1.0, effectively invisible)
-            self.vectors[pos].fill(0.0);
-            // Clear metadata so the node won't be matched again
-            self.metadata[pos] = HnswNodeMeta {
-                memory_key: String::new(),
-                phase: String::new(),
-                response_text: String::new(),
-                updated_at: 0,
-            };
+        let mut removed_entry_point = false;
+        for (pos, meta) in self.metadata.iter_mut().enumerate() {
+            if meta.memory_key == memory_key {
+                // Zero out the vector (distance will be ~1.0, effectively invisible)
+                self.vectors[pos].fill(0.0);
+                // Clear metadata so the node won't be matched again
+                *meta = HnswNodeMeta {
+                    memory_key: String::new(),
+                    phase: String::new(),
+                    response_text: String::new(),
+                    updated_at: 0,
+                };
+                if self.entry_point == Some(pos) {
+                    removed_entry_point = true;
+                }
+            }
+        }
+        // If the entry point itself was removed, point to the highest-level
+        // remaining live node so search does not start from a dead (zeroed)
+        // node. Searches still filter dead nodes, but starting from a live one
+        // avoids navigating from a vector of zeros.
+        if removed_entry_point {
+            self.repair_entry_point();
+        }
+    }
+
+    /// Re-point `entry_point`/`max_level` to the highest-level live node.
+    ///
+    /// If no live node remains, the index is empty and `entry_point` is cleared
+    /// (search checks `vectors.is_empty()` and the valid set before use).
+    fn repair_entry_point(&mut self) {
+        let mut best: Option<(usize, usize)> = None; // (level, idx)
+        for (idx, meta) in self.metadata.iter().enumerate() {
+            if meta.memory_key.is_empty() {
+                continue;
+            }
+            let level = self.node_levels.get(idx).copied().unwrap_or(0);
+            if best.map_or(true, |(bl, _)| level > bl) {
+                best = Some((level, idx));
+            }
+        }
+        match best {
+            Some((level, idx)) => {
+                self.entry_point = Some(idx);
+                self.max_level = level;
+            }
+            None => {
+                self.entry_point = None;
+                self.max_level = 0;
+            }
         }
     }
 
@@ -687,6 +732,13 @@ impl VectorStore {
                     for key in &evicted_keys {
                         hnsw.remove(key);
                     }
+                    // Upsert semantics: a re-insert of the same memory_key must
+                    // not leave the previous node behind. The SQLite layer
+                    // upserts via ON CONFLICT(memory_key); the HNSW mirror must
+                    // do the same, otherwise the fast path returns the same
+                    // memory_key twice (stale + fresh content) while the
+                    // SQLite path returns one row.
+                    hnsw.remove(&memory_key);
                     hnsw.insert(
                         embedding,
                         HnswNodeMeta {
@@ -1383,7 +1435,7 @@ fn build_memory_key(phase: &str, query_text: &str) -> String {
 
 #[cfg(all(test, not(feature = "backend-postgres")))]
 mod tests {
-    use super::{VectorPrecisionFeedback, VectorStore};
+    use super::{HnswIndex, HnswNodeMeta, VectorPrecisionFeedback, VectorStore};
     use std::sync::Arc;
 
     #[tokio::test]
@@ -1630,6 +1682,135 @@ mod tests {
             .expect("search on empty");
         assert!(hits.is_empty());
         assert_eq!(feedback.hit_count, 0);
+    }
+
+    /// Regression (P2): re-upserting the same (phase, query) must replace the
+    /// previous HNSW node instead of appending a duplicate.
+    ///
+    /// Before the fix, `upsert` inserted into the HNSW index without removing
+    /// a pre-existing node with the same memory_key (only evicted keys were
+    /// removed). Re-upserting a hot key then returned the same memory_key twice
+    /// (stale + fresh content) from the fast path while the SQLite path returned
+    /// one row — and the index accumulated dead nodes unboundedly.
+    #[tokio::test]
+    async fn hnsw_reupsert_replaces_previous_node() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = dir.path().join("hnsw_reupsert.sqlite3");
+        let store = Arc::new(VectorStore::new(&db_path, 64, 200).expect("vector store init"));
+
+        // Seed the store, then force the HNSW index to be built.
+        Arc::clone(&store)
+            .upsert("test", "same query", "old answer")
+            .await
+            .expect("first upsert");
+        assert!(
+            store.ensure_hnsw_index().expect("ensure_hnsw_index"),
+            "HNSW index should be built"
+        );
+
+        // Re-upsert the same query with new content.
+        Arc::clone(&store)
+            .upsert("test", "same query", "fresh answer")
+            .await
+            .expect("re-upsert");
+
+        // The HNSW fast path must return exactly one hit carrying the fresh
+        // content — never the stale one, and never the same key twice.
+        let (hits, _) = Arc::clone(&store)
+            .search("test", "same query", 5, 0.0, 200)
+            .await
+            .expect("search after re-upsert");
+        let fresh: Vec<&str> = hits
+            .iter()
+            .map(|h| h.response_snippet.as_str())
+            .filter(|s| s.contains("fresh"))
+            .collect();
+        let stale: Vec<&str> = hits
+            .iter()
+            .map(|h| h.response_snippet.as_str())
+            .filter(|s| s.contains("old answer"))
+            .collect();
+        assert_eq!(fresh.len(), 1, "exactly one fresh hit, got {fresh:?}");
+        assert!(
+            stale.is_empty(),
+            "stale content must not survive, got {stale:?}"
+        );
+    }
+
+    /// Regression (P2): evicting the HNSW entry-point node must re-point the
+    /// entry point to a live node instead of starting searches from a dead
+    /// (zeroed) node. Tested directly on `HnswIndex` (private) because the
+    /// store-level eviction tie-breaks on same-second `updated_at`, which is
+    /// non-deterministic for churn within one second.
+    #[test]
+    fn hnsw_remove_repairs_entry_point() {
+        let mut hnsw = HnswIndex::new(16, 200, 50);
+        // Insert three nodes; the first (idx 0) becomes the initial entry point.
+        for i in 0..3 {
+            let mut vec = vec![0.0f32; 64];
+            vec[i] = 1.0; // distinct vectors
+            hnsw.insert(
+                vec,
+                HnswNodeMeta {
+                    memory_key: format!("key-{i}"),
+                    phase: "test".to_string(),
+                    response_text: format!("answer {i}"),
+                    updated_at: i as i64,
+                },
+            );
+        }
+        assert_eq!(
+            hnsw.entry_point,
+            Some(0),
+            "first node is the initial entry point"
+        );
+
+        // Remove the entry point; the index must re-point to a live node.
+        hnsw.remove("key-0");
+        let Some(ep) = hnsw.entry_point else {
+            panic!("entry point must be repaired to a live node");
+        };
+        assert!(
+            !hnsw.metadata[ep].memory_key.is_empty(),
+            "repaired entry point must be live, got idx {ep}"
+        );
+
+        // Removing all nodes clears the entry point entirely.
+        hnsw.remove("key-1");
+        hnsw.remove("key-2");
+        assert_eq!(hnsw.entry_point, None, "entry point cleared when empty");
+    }
+
+    /// Regression (P2): `remove` must delete ALL nodes with a matching
+    /// memory_key — leaving a second stale copy would duplicate results on
+    /// the search fast path.
+    #[test]
+    fn hnsw_remove_deletes_all_matching_nodes() {
+        let mut hnsw = HnswIndex::new(16, 200, 50);
+        for i in 0..3 {
+            let mut vec = vec![0.0f32; 64];
+            vec[i] = 1.0;
+            // Two nodes share the same memory_key (simulates the pre-fix
+            // duplicate-node state after a re-upsert).
+            hnsw.insert(
+                vec.clone(),
+                HnswNodeMeta {
+                    memory_key: "dup-key".to_string(),
+                    phase: "test".to_string(),
+                    response_text: format!("answer {i}"),
+                    updated_at: i as i64,
+                },
+            );
+        }
+        hnsw.remove("dup-key");
+        assert!(
+            hnsw.metadata.iter().all(|m| m.memory_key.is_empty()),
+            "all nodes with the matching key must be removed"
+        );
+        assert_eq!(
+            hnsw.entry_point, None,
+            "all nodes removed => no entry point"
+        );
     }
 
     /// Regression (P2): `clear_all` must reset the in-memory HNSW index.

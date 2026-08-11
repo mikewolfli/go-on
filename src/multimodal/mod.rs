@@ -366,8 +366,7 @@ impl MultimodalProcessor {
     /// Process an image input — base64-encodes the raw bytes and stores them
     /// in `images` for downstream vision-model injection.
     async fn process_image(&self, data: &[u8]) -> ProcessedContent {
-        use base64::Engine;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+        let b64 = base64_encode(data);
         ProcessedContent {
             text: String::new(),
             images: vec![b64],
@@ -508,10 +507,7 @@ impl MultimodalProcessor {
                     let images: Vec<String> = full_result
                         .frames
                         .iter()
-                        .map(|f| {
-                            use base64::Engine;
-                            base64::engine::general_purpose::STANDARD.encode(&f.data)
-                        })
+                        .map(|f| base64_encode(&f.data))
                         .collect();
                     return ProcessedContent {
                         text,
@@ -616,6 +612,12 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, base64::DecodeError> {
     base64::engine::general_purpose::STANDARD
         .decode(input)
         .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(input))
+}
+
+/// Base64-encode raw bytes (standard alphabet).
+pub fn base64_encode(data: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(data)
 }
 
 /// Map a MIME type string to a file extension for document processing.

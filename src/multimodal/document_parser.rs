@@ -405,7 +405,7 @@ impl DocumentParser {
                                         })
                                         .unwrap_or(false);
                                     if is_image {
-                                        content.images.push(base64_encode(&stream.content));
+                                        content.images.push(super::base64_encode(&stream.content));
                                     }
                                 }
                             }
@@ -972,20 +972,6 @@ impl DocumentParser {
 
 // ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
-
-/// Base64-encode binary data (used for embedded images).
-#[cfg(any(
-    feature = "document-pdf",
-    feature = "document-docx",
-    feature = "document-html",
-    feature = "document-markdown",
-))]
-fn base64_encode(data: &[u8]) -> String {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(data)
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

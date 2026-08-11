@@ -69,7 +69,11 @@ impl ArtifactLedger {
 
         let latest_path = dir.join(latest_name);
         let stem = latest_name.strip_suffix(".json").unwrap_or(latest_name);
-        let archive_path = dir.join(format!("{}-{}.json", stem, now_ts()));
+        let archive_path = dir.join(format!(
+            "{}-{}.json",
+            stem,
+            crate::shared::timestamps::now_ts()
+        ));
         let encoded = serde_json::to_vec_pretty(value)?;
 
         fs::write(&archive_path, &encoded).with_context(|| {
@@ -106,10 +110,6 @@ impl ArtifactLedger {
 
         Ok(latest_path)
     }
-}
-
-fn now_ts() -> i64 {
-    crate::shared::timestamps::now_ts()
 }
 
 // ── Re-exports ────────────────────────────────────────────────────────────

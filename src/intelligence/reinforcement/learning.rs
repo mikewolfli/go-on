@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use super::health::now_ts;
 use super::ArtifactLedger;
+use crate::shared::timestamps::now_ts;
 
 // ── Learning events ────────────────────────────────────────────────────────
 

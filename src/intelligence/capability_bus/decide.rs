@@ -462,6 +462,20 @@ impl CapabilityBus {
         // shared the LLM response cache and its no-TTL task→agent entries
         // would freeze agent routing; full selection runs every time.)
         let task_type_str = format!("{:?}", task.task_type);
+        // Lock ordering (core.rs): evolution_graph precedes capability_graph.
+        // Snapshot degrading agents first (evolution_graph scope), then acquire
+        // capability_graph — never the reverse, or a future caller following
+        // the documented order would deadlock against this path.
+        let degrading_agents: Vec<String> = self
+            .evolution_graph
+            .lock()
+            .map(|eg| {
+                eg.find_degrading_capabilities()
+                    .into_iter()
+                    .map(|(agent, _, _)| agent)
+                    .collect()
+            })
+            .unwrap_or_default();
         let candidate_agents = self
             .capability_graph
             .lock()
@@ -481,16 +495,6 @@ impl CapabilityBus {
                 }
 
                 // Exclude agents that are degrading according to EvolutionGraph
-                let degrading_agents: Vec<String> = self
-                    .evolution_graph
-                    .lock()
-                    .map(|eg| {
-                        eg.find_degrading_capabilities()
-                            .into_iter()
-                            .map(|(agent, _, _)| agent)
-                            .collect()
-                    })
-                    .unwrap_or_default();
                 candidates.retain(|name| !degrading_agents.contains(name));
 
                 candidates

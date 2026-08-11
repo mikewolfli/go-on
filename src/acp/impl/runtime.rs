@@ -242,7 +242,17 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
 
         let server_for_task = Arc::clone(&server);
         tokio::spawn(async move {
-            if let Err(err) = handle_request(&server_for_task, request, None).await {
+            // Record one global op per stdio request (parity with the HTTP
+            // route-level record in `route_http_post`). The chat pipeline's
+            // `act_phase` does NOT record — that would double-count HTTP chat
+            // requests — so the stdio transport records here at dispatch.
+            let start = std::time::Instant::now();
+            let result = handle_request(&server_for_task, request, None).await;
+            crate::observability::performance::record_global_operation(
+                result.is_ok(),
+                start.elapsed().as_secs_f64() * 1000.0,
+            );
+            if let Err(err) = result {
                 error!("request failed: {err:#}");
             }
         });
