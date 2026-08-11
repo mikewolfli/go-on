@@ -370,6 +370,26 @@ pub async fn new_acp_server(
     server.governance_deps.provenance_ledger = Some(provenance_ledger);
     server.governance_deps.rbac_enforcer = Some(rbac_enforcer);
 
+    // Share the resolved skill registry with the capability bus ToolBus so
+    // agent_tool_match / tool_bus_skills see the same imported/discovered
+    // skills as the execution path (previously ToolBus held a second, empty
+    // registry created in CapabilityBus::new). The server now owns the
+    // capability bus, so the Arc is still unique here.
+    {
+        if let Some(cb) = server.governance_deps.capability_bus.as_mut() {
+            if let Some(cb_mut) = Arc::get_mut(cb) {
+                #[cfg(feature = "sub-bus-tool")]
+                cb_mut
+                    .tool_bus
+                    .set_skill_registry(Arc::clone(&server.orchestration_deps.skill_registry));
+            } else {
+                tracing::warn!(
+                    "capability_bus: Arc already shared before tool_bus skill-registry injection"
+                );
+            }
+        }
+    }
+
     // Register each agent as a monitored node in the fault-tolerance engine so
     // the 30s recovery cycle in start_background_tasks has a real node set to
     // check (previously the engine was created but no node was ever registered
@@ -504,6 +524,27 @@ pub async fn new_acp_server(
         }
     }
 
+    // BLUE57-B01: Inject cache backends into CapabilityBus MemoryBus before
+    // wire_server() shares the Arc via init_intelligence_hub's global
+    // GLOBAL_CAPABILITY_BUS clone — Arc::get_mut only succeeds while this is
+    // the sole owner (the previous placement after wire_server() always hit
+    // the "Arc already shared" warning and never wired the backends).
+    // CapabilityBus does not implement Clone, so Arc::make_mut cannot be used.
+    if let Some(ref mut cb_arc) = server.governance_deps.capability_bus {
+        if let Some(_cb_mut) = Arc::get_mut(cb_arc) {
+            #[cfg(feature = "sub-bus-memory")]
+            _cb_mut.memory_bus.set_backends(
+                Some(server.cache_deps.cache.response_cache.clone()),
+                Some(server.cache_deps.cache.vector_store.clone()),
+                None,
+                Some(Some(Arc::clone(&server.cache_deps.cache.semantic_cache))),
+            );
+            tracing::info!("capability_bus: memory bus backends injected");
+        } else {
+            tracing::warn!("capability_bus: Arc already shared, cannot inject memory backends");
+        }
+    }
+
     // B51-26: Shared wiring extracted to wire_server()
     wire_server(&mut server, &registry).await;
 
@@ -587,30 +628,12 @@ pub async fn new_acp_server(
         );
     }
 
-    // BLUE57-B01: Inject cache backends into CapabilityBus MemoryBus
-    // CapabilityBus does not implement Clone, so Arc::make_mut cannot be used.
-    // Arc::get_mut warns if the Arc is already shared (GAP-B58-C08).
-    if let Some(ref mut cb_arc) = server.governance_deps.capability_bus {
-        if let Some(_cb_mut) = Arc::get_mut(cb_arc) {
-            #[cfg(feature = "sub-bus-memory")]
-            _cb_mut.memory_bus.set_backends(
-                Some(server.cache_deps.cache.response_cache.clone()),
-                Some(server.cache_deps.cache.vector_store.clone()),
-                None,
-                Some(Some(Arc::clone(&server.cache_deps.cache.semantic_cache))),
-            );
-            tracing::info!("capability_bus: memory bus backends injected");
-        } else {
-            tracing::warn!("capability_bus: Arc already shared, cannot inject memory backends");
-        }
-    }
-
     server
 }
 
-/// Shared wiring applied after AcpServer construction in both the primary builder
-/// success path and the fallback path.  Extracted to eliminate ~250 lines of
-/// duplicated code between the two branches (B51-26).
+/// Shared wiring applied after AcpServer construction (single call site in
+/// `new_acp_server`). Extracted to keep the primary builder path's wiring in
+/// one place.
 async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     // Create session manager if user auth is enabled
     if server.runtime_config.user_auth_enabled {

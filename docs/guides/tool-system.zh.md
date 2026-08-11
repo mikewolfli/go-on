@@ -2,7 +2,7 @@
 
 ## 概述
 
-Go-On 提供统一的工具系统，围绕 `ToolRegistry`、`Tool` trait 和 `ToolPipeline` 构建。工具是 AI 智能体与文件系统交互、执行命令、搜索代码和执行其他操作的主要机制。
+Go-On 提供统一的工具系统，围绕 `ToolRegistry`、`Tool` trait 和工具执行器（`execute_tool_call` / `run_fallback_chain_async`）构建。工具是 AI 智能体与文件系统交互、执行命令、搜索代码和执行其他操作的主要机制。
 
 ## 架构
 
@@ -13,7 +13,7 @@ ToolRegistry（全局单例）
   └── 别名（semantic_search → code_index_search）
          │
          ▼
-  ToolPipeline（顺序组合）
+  ToolExecutor（execute_tool_call + 备用链）
          │
          ▼
   SandboxPolicy（治理关卡）
@@ -103,7 +103,7 @@ registry.register_with_profile(
 );
 ```
 
-3. 在 `pipeline.rs` 中添加管道工具到操作映射。
+3. 注册表将工具接入 `execute_tool_call`（备用链由 `run_fallback_chain_async` 处理）。
 
 ## 沙盒集成
 

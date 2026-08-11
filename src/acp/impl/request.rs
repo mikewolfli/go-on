@@ -2428,8 +2428,13 @@ mod tests {
     use crate::vector::VectorStore;
     #[cfg(not(feature = "backend-postgres"))]
     use std::sync::Arc;
+    // Tests that touch the process-global CURRENT_TRANSPORT must be serialized
+    // (the same pattern as chat_tests.rs) so parallel runs cannot race on the
+    // global transport slot.
+    use serial_test::serial;
 
     #[tokio::test]
+    #[serial]
     async fn auto_mode_normalizes_bare_mcp_methods() {
         // Regression: in Auto (adaptive) mode a bare MCP method name such as
         // `ping` previously fell into the dispatch `_ =>` branch and was
@@ -2498,7 +2503,7 @@ mod tests {
         .await
         .expect("handle_request must complete");
         assert!(
-            buffer.lock().await.len() >= 1,
+            !buffer.lock().await.is_empty(),
             "dispatch must have written the notification path output"
         );
 

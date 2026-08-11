@@ -28,6 +28,67 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use anyhow::Result;
+
+/// Validate the security of a secret string.
+///
+/// Single shared implementation — previously duplicated in
+/// `agents/agent.rs` (inspect_secret_pool) and
+/// `core/config/load/env_override.rs` (validate_secret_ref). The empty-value
+/// error message key is caller-specific (`error.agent_empty_field` vs
+/// `error.missing_field`), so it is passed in.
+pub fn validate_secret_security(
+    secret: &str,
+    field_name: &str,
+    empty_error_key: &str,
+) -> Result<()> {
+    if secret.trim().is_empty() {
+        anyhow::bail!(
+            "{}",
+            crate::i18n::runtime::tf(empty_error_key, &[("field", field_name)])
+        );
+    }
+
+    // Detect newline characters (possible multiline secret or injection attempt)
+    if secret.contains('\n') || secret.contains('\r') {
+        tracing::warn!(
+            "{} contains newline characters, which may be a security issue",
+            field_name
+        );
+    }
+
+    // Check minimum secret length
+    if secret.len() < 8 {
+        tracing::warn!(
+            "{} is very short ({} characters), which may be insecure",
+            field_name,
+            secret.len()
+        );
+    }
+
+    // Detect common insecure patterns
+    let insecure_patterns = [
+        ("password", "contains the word 'password'"),
+        ("123456", "contains simple numeric sequence"),
+        ("admin", "contains the word 'admin'"),
+        ("test", "contains the word 'test'"),
+        ("secret", "contains the word 'secret'"),
+    ];
+
+    let secret_lower = secret.to_lowercase();
+    for (pattern, description) in insecure_patterns {
+        if secret_lower.contains(pattern) {
+            tracing::warn!(
+                "{} {} - consider using a stronger secret",
+                field_name,
+                description
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// In-memory secret override map.
 ///
 /// Keys are environment variable names (e.g. `"GITHUB_TOKEN"`).

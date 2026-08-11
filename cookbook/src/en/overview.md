@@ -2,7 +2,7 @@
 
 `go-on` is a three-surface runtime around a Rust backend:
 
-- **Backend**: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 7-feature-gated sub-bus capability architecture with cognitive modules. All 149 JSON-RPC handlers return a unified `DispatchOutput` enum.
+- **Backend**: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 7-feature-gated sub-bus capability architecture with cognitive modules. All 153 JSON-RPC methods (the `ACP_METHODS` whitelist) return a unified `DispatchOutput` enum.
 - **GUI**: the EGUI (Rust native) desktop app manages backend discovery, process lifecycle, integration probes, monitoring, chat, and configuration management.
 - **VS Code addon**: the extension launches or probes the runtime, exposes RPC-backed commands, and can override protocol mode per workspace.
 
@@ -51,7 +51,7 @@ The latest full `cargo test --all-targets` run (default `local` profile) passes 
 
 ## Unified Handler Dispatch Pattern
 
-All 149 JSON-RPC handlers return `Result<DispatchOutput>`. The `dispatch_to_client` function converts each variant to the appropriate transport response:
+All 153 JSON-RPC methods (the `ACP_METHODS` whitelist) return `Result<DispatchOutput>`. The `dispatch_to_client` function converts each variant to the appropriate transport response:
 
 ```
 Handler → Result<DispatchOutput> → dispatch_to_client → transport response

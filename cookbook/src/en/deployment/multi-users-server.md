@@ -119,7 +119,7 @@ min_similarity = 0.7
 Multi-Users Server mode requires:
 - `backend-postgres`: PostgreSQL database support
 - `postgres`: PostgreSQL client library
-- `pgvector`: Vector extension for PostgreSQL
+- `backend-postgres`: PostgreSQL backend (postgres + pgvector)
 
 ### Runtime Config Fields
 
@@ -148,8 +148,8 @@ The following runtime configuration fields are specific to multi-user mode:
 # Build with multi-users-server profile
 cargo build --no-default-features -F multi-users-server
 
-# Or explicitly enable features
-cargo build --features "backend-postgres postgres pgvector"
+# Or explicitly enable the backend feature (still only the one backend):
+cargo build --no-default-features --features backend-postgres
 ```
 
 ### System Requirements

@@ -1917,7 +1917,7 @@ impl Tool for GameModInstallTool {
 
         // Copy mod file or directory
         if source_path.is_dir() {
-            copy_dir_recursive(source_path, &target_path)
+            super::utils::copy_dir_recursive(source_path, target_path.as_path())
                 .context("failed to copy mod directory")?;
         } else {
             std::fs::copy(source_path, &target_path).context("failed to copy mod file")?;
@@ -2053,28 +2053,6 @@ fn list_mods_in_dir(dir: &std::path::Path) -> Vec<serde_json::Value> {
     // Sort by name
     mods.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     mods
-}
-
-/// Recursively copies a directory (behaves like `cp -r`).
-#[cfg(feature = "game-modding")]
-fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
-    std::fs::create_dir_all(dst).context("failed to create destination directory")?;
-    for entry in std::fs::read_dir(src).context("failed to read source directory")? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let src_path = entry.path();
-        let file_name = src_path
-            .file_name()
-            .ok_or_else(|| anyhow!("invalid file name"))?;
-        let dst_path = dst.join(file_name);
-        if file_type.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path)
-                .context("failed to copy file during mod install")?;
-        }
-    }
-    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

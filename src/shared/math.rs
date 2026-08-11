@@ -3,8 +3,9 @@
 // The f32 cosine similarity variant is used by the token cache L2, semantic
 // response cache, SQLite HNSW index, and skill semantic matching. In postgres
 // mode, pgvector handles vector-store similarity natively via SQL.
-// Allow dead_code here to prevent warnings when only backend-postgres is enabled.
-#![cfg_attr(feature = "backend-postgres", allow(dead_code))]
+// The allow(dead_code) is scoped to the macro-generated cosine_similarity_f32
+// (the only item without a postgres caller) so future code in this file still
+// gets dead-code checking.
 
 macro_rules! define_cosine_similarity {
     ($name:ident, $float:ty) => {
@@ -12,6 +13,11 @@ macro_rules! define_cosine_similarity {
         ///
         /// Returns `0.0` if either vector is empty, lengths differ, or either
         /// vector has zero norm.
+        // In postgres mode pgvector handles vector-store similarity natively,
+        // so the f32 helper has no caller there; the allow is scoped to this
+        // generated function only, keeping dead-code checking for the rest of
+        // the file.
+        #[cfg_attr(feature = "backend-postgres", allow(dead_code))]
         pub fn $name(a: &[$float], b: &[$float]) -> $float {
             if a.len() != b.len() || a.is_empty() {
                 return 0.0;

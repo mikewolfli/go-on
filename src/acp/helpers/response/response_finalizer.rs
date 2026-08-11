@@ -156,6 +156,14 @@ async fn collect_agent_outputs(
         .unwrap_or(0);
     let request_succeeded = !response_text.trim().is_empty();
 
+    // NOTE: LivePerformanceFeed is deliberately NOT written here — the
+    // per-attempt write in fallback.rs (record_agent_intelligence_outcome) is
+    // the single production write point. A request-level write here would
+    // double-record the winning fallback agent (once per attempt, once per
+    // request) and pollute the EMA. Autonomy/vote paths still don't feed the
+    // feed; closing that gap requires a per-attempt write on those paths
+    // (design debt, see docs/log/log-20260811-2.md).
+
     // ── CapabilityBus feedback on execution outcome ────────────────────
     // Single feedback point per request (weight 1.0, stable conversation_id,
     // real elapsed/used_tokens). NOTE: the per-request evolve() spawn was

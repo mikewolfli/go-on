@@ -100,6 +100,11 @@ pub struct McpServer {
 
 impl McpServer {
     /// Create a new MCP server instance (no ACP features).
+    ///
+    /// Test convenience constructor; production callers use
+    /// [`Self::new_with_acp`] so the cfg(test) gate does not hide dead code
+    /// in the binary build.
+    #[cfg(test)]
     pub fn new(
         agent_registry: Arc<AgentRegistry>,
         tool_registry: Arc<ToolRegistry>,

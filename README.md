@@ -104,7 +104,7 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **Cross-entry parity** — consistent stop_reason and round count across ACP/CLI/MCP
 
 ### Tool System
-- **60+ built-in tools** — read/write/search/apply_patch/run_tests/inspect_git_diff/shell_exec/http_request/grep/find/git/cargo_check/cargo_test/list_directory/file_move/file_delete/compress/decompress/date_time/dns_lookup/ping/port_scan/skill_list/skill_execute + CAD/3D/GIS/barcode/SVG/office/image processing + document parsers (PDF/DOCX/PPT/HTML/Markdown/Excel)
+- **60+ built-in tools** — read/write/search/apply_patch/run_tests/inspect_git_diff/shell_exec/http_request/grep/search_files/git/cargo_check/cargo_test/list_directory/file_move/file_delete/compress/decompress/date_time/dns_lookup/ping/port_scan/skill_list/skill_execute + CAD/3D/GIS/barcode/SVG/office/image processing + document parsers (PDF/DOCX/PPT/HTML/Markdown/Excel)
 - **Tool pipeline** — serial/parallel/conditional execution with error handling
 - **Dynamic tool recommendation** — pattern + recency + co-occurrence based suggestions
 - **Mode-based tool restrictions** — allowed_tools and max_tool_calls enforced per mode
@@ -126,7 +126,7 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 
 ### Resilience
 - **Fault-tolerance recovery** — 5 real recovery actions (RestartNode, FailoverToBackup, ScaleUp, Rebalance, NotifyOperator) dispatched by `FaultToleranceEngine`
-- **Chaos testing** — 10 fault injection types (timeout, partition, crash, corruption, rate-limit)
+- **Chaos testing** — 14 fault injection types (timeout, partition, crash, corruption, rate-limit, OOM, latency spike, partial write, …)
 - **HyperResilience** — circuit breaker state machine, failover groups, self-healing
 - **Hot failover** — primary-to-fallback model switching with blacklist cooldown
 
@@ -283,11 +283,11 @@ npm run compile
 | Rust backend LOC | ~202K (444 modules) |
 | GUI (EGUI) LOC | ~24K |
 | VS Code addon (TypeScript) LOC | ~17K |
-| SDK (Rust + Python + TypeScript) LOC | ~4K |
+| SDK (Rust + Python + TypeScript) LOC | ~6.9K |
 | Built-in tools | 60+ |
 | AI providers | 37 |
 | Skills in marketplace | 34 |
-| Unit tests | ~1.7K (1,513 lib + 134 integration declarations; see Verification below) |
+| Unit tests | ~1.7K (1,533 lib + 151 integration declarations; see Verification below) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 
 ## Build Profiles

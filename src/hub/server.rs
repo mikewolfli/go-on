@@ -177,6 +177,16 @@ async fn handle_rpc(
         if line.is_empty() {
             break;
         }
+        // Bound header size (aligned with the MCP/ACP arms' 64 KiB limit) so
+        // a hostile client cannot grow memory unboundedly with header lines.
+        if line.len() > 64 * 1024 {
+            return write_json(
+                &mut stream,
+                431,
+                json_rpc_error(None, INVALID_REQUEST, "Request header too large"),
+            )
+            .await;
+        }
         let lower = line.to_lowercase();
         if lower.starts_with("content-length:") {
             content_length = line
@@ -196,6 +206,16 @@ async fn handle_rpc(
     }
 
     // Read body.
+    // Bound the body like the ACP/MCP arms (10 MiB) so an authenticated but
+    // hostile client cannot force a large allocation via Content-Length.
+    if content_length > 10 * 1024 * 1024 {
+        return write_json(
+            &mut stream,
+            413,
+            json_rpc_error(None, INVALID_REQUEST, "Payload too large"),
+        )
+        .await;
+    }
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
         reader.read_exact(&mut body).await?;

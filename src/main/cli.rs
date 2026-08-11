@@ -237,13 +237,61 @@ pub enum SkillCommand {
     },
 }
 
-/// Handle the `skill` CLI subcommand by creating in-process registries
-/// and performing the requested action.
-pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
-    // Create a minimal SkillRegistry for local/imported skills
-    let skill_registry = Arc::new(std::sync::RwLock::new(SkillRegistry::default()));
+/// Handle the `skill` CLI subcommand by operating on the same persisted
+/// skill-import store the server uses (`skills_cache_dir/index.json`), so
+/// CLI imports are visible to the server (and vice versa). Marketplace
+/// listing/enable/disable commands use the remote `SkillMarketRegistry`.
+pub async fn handle_skill_command(
+    cmd: SkillCommand,
+    config_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    // Load the runtime config (best-effort: missing/unparseable config falls
+    // back to the built-in defaults — which are restrictive for imports, i.e.
+    // imports stay disabled until explicitly configured, matching the server).
+    let runtime_config = {
+        let path = config_path.to_path_buf();
+        let loaded =
+            tokio::task::spawn_blocking(move || crate::config::AppConfig::load(&path)).await;
+        match loaded {
+            Ok(Ok(cfg)) => cfg.runtime.clone().unwrap_or_default(),
+            Ok(Err(err)) => {
+                tracing::warn!(
+                    "skill command: config at {} could not be loaded ({err}); using built-in defaults",
+                    config_path.display()
+                );
+                crate::config::RuntimeConfig::default()
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "skill command: config load task failed ({err}); using built-in defaults"
+                );
+                crate::config::RuntimeConfig::default()
+            }
+        }
+    };
 
-    // Create a minimal SkillMarketRegistry for marketplace skills
+    // Shared skill registry: populated from ~/.agents/skills/ so the CLI view
+    // matches the server's bootstrap discovery (Refresh rescans it again).
+    let skill_registry = Arc::new(std::sync::RwLock::new(SkillRegistry::default()));
+    {
+        let mut reg = skill_registry.write().unwrap_or_else(|e| e.into_inner());
+        let _ = reg.discover_and_register_local_skills(None);
+    }
+
+    // Import policy derived from the loaded runtime config. The persisted
+    // import store itself is opened lazily inside the commands that need it so
+    // a corrupt index.json cannot break marketplace-only commands.
+    let import_policy =
+        crate::orchestration::skill_import::SkillImportPolicy::from_runtime(&runtime_config);
+    let open_import_store =
+        || -> anyhow::Result<crate::orchestration::skill_import::SkillImportStore> {
+            crate::orchestration::skill_import::SkillImportStore::load(
+                import_policy.clone(),
+                skill_registry.clone(),
+            )
+        };
+
+    // Remote marketplace registry (separate from the import store).
     let market_registry = SkillMarketRegistry::new(
         "https://marketplace.go-on.dev",
         std::env::temp_dir().join("go-on-skill-market"),
@@ -281,30 +329,80 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
             }
         }
         SkillCommand::Enable { name } => {
+            // Import-store skills first (persisted, shared with the server);
+            // marketplace installs are tracked separately below.
+            if let Ok(mut import_store) = open_import_store() {
+                if let Ok(record) = import_store.set_enabled(&name, true) {
+                    import_store.save()?;
+                    println!("Skill '{}' v{} enabled", record.name, record.version);
+                    return Ok(());
+                }
+            }
             market_registry.refresh().await?;
             market_registry.set_enabled(&name, true).await?;
             println!("Skill '{}' enabled", name);
         }
         SkillCommand::Disable { name } => {
+            if let Ok(mut import_store) = open_import_store() {
+                if let Ok(record) = import_store.set_enabled(&name, false) {
+                    import_store.save()?;
+                    println!("Skill '{}' v{} disabled", record.name, record.version);
+                    return Ok(());
+                }
+            }
             market_registry.refresh().await?;
             market_registry.set_enabled(&name, false).await?;
             println!("Skill '{}' disabled", name);
         }
         SkillCommand::Import { source } => {
             println!("Importing skill from: {}", source);
-            // Refresh the marketplace to populate built-in skills
-            market_registry.refresh().await?;
-            // Attempt to install from the marketplace by name
-            match market_registry.install_skill(&source).await {
-                Ok(installation) => {
-                    println!(
-                        "Skill '{}' v{} imported successfully",
-                        installation.name, installation.version
-                    );
-                    println!("  Installed at: {}", installation.installed_path.display());
+            // Prefer the documented source syntax (github:/url:/local:) into a
+            // structured import. Bare names fall back to the marketplace
+            // install-by-name path (historical behavior).
+            match crate::orchestration::skill_import::parse_cli_import_source(&source) {
+                Ok(parsed) => {
+                    let mut import_store = open_import_store()?;
+                    let request = crate::orchestration::skill_import::SkillImportRequest {
+                        source: parsed,
+                        enabled: false,
+                    };
+                    match import_store.import_skill(request).await {
+                        Ok(record) => {
+                            // import_skill already persists the index; save is a
+                            // no-op guard for policy variations.
+                            let _ = import_store.save();
+                            println!(
+                                "Skill '{}' v{} imported successfully",
+                                record.name, record.version
+                            );
+                            println!("  Source: {}", record.source);
+                            println!("  Manifest: {}", record.manifest_path);
+                            println!(
+                                "  Enabled: {} (run `go-on skill enable {}` to activate for model discovery)",
+                                record.enabled, record.name
+                            );
+                        }
+                        Err(e) => {
+                            anyhow::bail!("Failed to import skill from '{}': {}", source, e);
+                        }
+                    }
                 }
-                Err(e) => {
-                    anyhow::bail!("Failed to import skill '{}': {}", source, e);
+                Err(_) => {
+                    // Not an import-source URL/path — treat it as a marketplace
+                    // skill name (legacy CLI behavior).
+                    market_registry.refresh().await?;
+                    match market_registry.install_skill(&source).await {
+                        Ok(installation) => {
+                            println!(
+                                "Skill '{}' v{} imported successfully",
+                                installation.name, installation.version
+                            );
+                            println!("  Installed at: {}", installation.installed_path.display());
+                        }
+                        Err(e) => {
+                            anyhow::bail!("Failed to import skill '{}': {}", source, e);
+                        }
+                    }
                 }
             }
         }
@@ -341,37 +439,66 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
             }
         }
         SkillCommand::ListImported => {
-            // List skills registered in the local SkillRegistry
-            let descriptors = skill_registry
+            // Imported skills from the persisted store (shared with the server).
+            let import_store = open_import_store()?;
+            let records = import_store.list();
+            println!("Imported skills ({}):", records.len());
+            for rec in &records {
+                println!(
+                    "  {:<20} v{:<8} enabled:{}  source:{}  {}",
+                    rec.name, rec.version, rec.enabled, rec.source, rec.manifest_path,
+                );
+            }
+            // Also list prompt-based skills discovered from ~/.agents/skills/.
+            let registered = skill_registry
                 .read()
                 .unwrap_or_else(|e| e.into_inner())
                 .list(false);
-            println!("Registered skills ({}):", descriptors.len());
-            for desc in &descriptors {
+            let imported_names: std::collections::HashSet<String> =
+                records.iter().map(|r| r.name.clone()).collect();
+            for desc in registered
+                .iter()
+                .filter(|d| !imported_names.contains(&d.name))
+            {
                 println!(
-                    "  {:<20}  score: {:>5.2}  calls: {}  {}",
-                    desc.name, desc.score, desc.total_calls, desc.description,
+                    "  {:<20}            enabled:true  source:local  {}",
+                    desc.name, desc.description,
                 );
             }
-            if descriptors.is_empty() {
-                println!("  (no skills registered)");
+            if records.is_empty() && registered.is_empty() {
+                println!("  (no skills imported or registered)");
             }
         }
         SkillCommand::Info { name } => {
-            let registry = skill_registry.read().unwrap_or_else(|e| e.into_inner());
-            match registry.descriptor(&name) {
-                Some(desc) => {
-                    println!("Skill: {}", desc.name);
-                    println!("  Description: {}", desc.description);
-                    println!("  Score: {:.2}", desc.score);
-                    println!("  Total calls: {}", desc.total_calls);
-                    println!("  Successful calls: {}", desc.success_calls);
-                    println!("  Failed calls: {}", desc.failure_calls);
-                    println!("  Avg latency: {:.1} ms", desc.average_latency_ms);
-                    println!("  Input schema: {}", desc.input_schema);
-                }
-                None => {
-                    anyhow::bail!("skill '{}' not found in registry", name);
+            let import_store = open_import_store()?;
+            if let Some(rec) = import_store.get(&name) {
+                println!("Skill: {}", rec.name);
+                println!("  Version: {}", rec.version);
+                println!("  Description: {}", rec.description);
+                println!("  Source: {}", rec.source);
+                println!("  SHA-256: {}", rec.sha256);
+                println!("  Manifest: {}", rec.manifest_path);
+                println!("  Enabled: {}", rec.enabled);
+                println!("  Imported at: {}", rec.imported_at);
+            } else {
+                let registry = skill_registry.read().unwrap_or_else(|e| e.into_inner());
+                match registry.descriptor(&name) {
+                    Some(desc) => {
+                        println!("Skill: {}", desc.name);
+                        println!("  Description: {}", desc.description);
+                        println!("  Score: {:.2}", desc.score);
+                        println!("  Total calls: {}", desc.total_calls);
+                        println!("  Successful calls: {}", desc.success_calls);
+                        println!("  Failed calls: {}", desc.failure_calls);
+                        println!("  Avg latency: {:.1} ms", desc.average_latency_ms);
+                        println!("  Input schema: {}", desc.input_schema);
+                    }
+                    None => {
+                        anyhow::bail!(
+                            "skill '{}' not found (checked imported store and local registry)",
+                            name
+                        );
+                    }
                 }
             }
         }
@@ -395,20 +522,30 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
             }
         }
         SkillCommand::Remove { name } => {
-            // Remove from the local registry first.
-            let removed = {
+            // Remove from the persisted import store first (shared with the server).
+            let mut import_store = open_import_store()?;
+            let removed_from_store = import_store.remove(&name);
+            if removed_from_store {
+                import_store.save()?;
+                println!("Skill '{}' removed from import store", name);
+            }
+            // Remove from the local registry.
+            let removed_from_registry = {
                 let mut registry = skill_registry.write().unwrap_or_else(|e| e.into_inner());
                 registry.unregister(&name)
             };
-            if removed {
+            if removed_from_registry {
                 println!("Skill '{}' removed from registry", name);
             }
             // Also uninstall from the marketplace if present.
             if market_registry.is_installed(&name).await {
                 market_registry.uninstall_skill(&name).await?;
                 println!("Skill '{}' uninstalled from marketplace", name);
-            } else if !removed {
-                anyhow::bail!("skill '{}' not found in registry or marketplace", name);
+            } else if !removed_from_store && !removed_from_registry {
+                anyhow::bail!(
+                    "skill '{}' not found in import store, registry or marketplace",
+                    name
+                );
             }
         }
     }

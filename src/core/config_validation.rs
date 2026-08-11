@@ -406,6 +406,18 @@ impl ConfigValidator {
             dependencies: DependencyAnalysis::default(),
         };
 
+        // Run the hard-gate validator first so the report never claims
+        // "valid" while `AppConfig::validate` (the fail-fast gate applied
+        // after this report at startup) would reject the same config.
+        if let Err(e) = self.config.validate() {
+            result.errors.push(ValidationError {
+                message: e.to_string(),
+                severity: ErrorSeverity::Critical,
+                section: "config".to_string(),
+                suggestion: Some("Fix the failing hard-gate rule(s) above".to_string()),
+            });
+        }
+
         // Perform all validation checks
         self.validate_structure(&mut result);
         self.validate_agents(&mut result);
@@ -433,14 +445,9 @@ impl ConfigValidator {
             });
         }
 
-        if self.config.phases.is_empty() {
-            result.errors.push(ValidationError {
-                message: "No phases configured".to_string(),
-                severity: ErrorSeverity::Critical,
-                section: "phases".to_string(),
-                suggestion: Some("Add at least one phase configuration".to_string()),
-            });
-        }
+        // Empty phases is reported by the hard gate (AppConfig::validate,
+        // which always fails first when phases are empty) as a single Critical
+        // with section="config" — no duplicate report-side entry needed.
 
         // Check cache configuration — threshold shared with the health
         // engine (`env_override::CACHE_MAX_ENTRIES_LOW`) so both engines
@@ -598,6 +605,22 @@ impl ConfigValidator {
         for (phase_name, phase) in &self.config.phases {
             for agent_name in &phase.agents {
                 if !self.config.agents().contains_key(agent_name) {
+                    // Dedupe against the hard-gate error for the same defect:
+                    // the gate (AppConfig::validate, fail-fast) reports the
+                    // first bad reference. Exact match via the same localized
+                    // template, so substring collisions between names (e.g.
+                    // review vs review2) cannot suppress a real error.
+                    let gate_message = crate::i18n::runtime::tf(
+                        "error.phase_references_undefined_agent",
+                        &[("phase", phase_name), ("agent", agent_name)],
+                    );
+                    let already_reported = result
+                        .errors
+                        .iter()
+                        .any(|e| e.section == "config" && e.message == gate_message);
+                    if already_reported {
+                        continue;
+                    }
                     result.errors.push(ValidationError {
                         message: format!(
                             "Phase '{}' references non-existent agent '{}'",

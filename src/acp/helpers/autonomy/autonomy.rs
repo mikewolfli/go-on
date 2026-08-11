@@ -203,18 +203,9 @@ mod tests {
             response,
         );
 
-        // Same total_rounds within ±1
-        let cli_rounds = cli_contract["total_rounds"].as_u64().unwrap_or(0) as i64;
-        let acp_rounds = acp_contract["total_rounds"].as_u64().unwrap_or(0) as i64;
-        let diff = (cli_rounds - acp_rounds).abs();
-        assert!(
-            diff <= 1,
-            "total_rounds differ by >1: CLI={}, ACP={}",
-            cli_rounds,
-            acp_rounds,
-        );
-
-        // Same tool evidence structure (identical JSON)
+        // Same tool evidence structure (identical JSON; total_rounds is a
+        // derived field inside that JSON, so an exact comparison subsumes any
+        // round-count check)
         assert_eq!(
             cli_contract, acp_contract,
             "contract JSON differs for scenario (tools={}, followup={}, response={:?})",

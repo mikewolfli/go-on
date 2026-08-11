@@ -5,7 +5,7 @@ This book documents the current `1.5.1` architecture and usage model of `go-on`.
 The runtime implements a **sub-bus capability architecture** (7 feature-gated sub-buses per `Cargo.toml`) with **37 AI provider integrations**,
 a passing test suite (zero failures; see `CHANGELOG.md` for the latest counts), and **zero clippy warnings across all build profiles**.
 
-All 148 JSON-RPC handlers return a unified `DispatchOutput` enum, with the dispatch layer
+All 153 JSON-RPC methods (the `ACP_METHODS` whitelist) return a unified `DispatchOutput` enum, with the dispatch layer
 handling serialization for JSON-RPC, SSE streaming, text/plain, and silent responses.
 
 It is organized as a trilingual mdBook:
@@ -16,7 +16,7 @@ It is organized as a trilingual mdBook:
 
 The content is based on the current workspace structure and runtime surfaces:
 
-- Rust backend runtime and CLI (three build profiles: local / simple-server / multi-users-server)
+- Rust backend runtime and CLI (four build profiles: local / simple-server / multi-users-server / full)
 - Sub-bus capability architecture (CapabilityBus scheduling coordinator + HarnessBus + 7 feature-gated sub-buses)
 - Unified `DispatchOutput` handler dispatch pattern (Json / Error / Stream / Text / Checkpoint / Silent)
 - Autonomous agent orchestration, DAG task execution, and cognitive modules

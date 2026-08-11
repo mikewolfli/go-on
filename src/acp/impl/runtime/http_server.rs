@@ -84,7 +84,7 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                     }
                     Err(e) => {
                         tracing::warn!(
-                            "Failed to build mTLS server config: {} — falling back to plain TCP",
+                            "Failed to build mTLS server config: {} — continuing without TLS (plain TCP unless GO_ON_TLS_* is set)",
                             e
                         );
                         None
@@ -118,7 +118,7 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                             Ok(certs) => certs,
                             Err(e) => {
                                 tracing::warn!(
-                                    "Failed to read TLS certs from {}: {} — falling back to plain TCP",
+                                    "Failed to read TLS certs from {}: {} — aborting TLS startup",
                                     cert_path,
                                     e
                                 );
@@ -128,7 +128,7 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                     }
                     Err(e) => {
                         tracing::warn!(
-                            "Failed to open TLS cert file {}: {} — falling back to plain TCP",
+                            "Failed to open TLS cert file {}: {} — aborting TLS startup",
                             cert_path,
                             e
                         );
@@ -143,7 +143,7 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                             Ok(Some(key)) => key,
                             Ok(None) => {
                                 tracing::warn!(
-                                    "No private key found in {} — falling back to plain TCP",
+                                    "No private key found in {} — aborting TLS startup",
                                     key_path
                                 );
                                 return Err(anyhow::anyhow!(
@@ -153,7 +153,7 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                             }
                             Err(e) => {
                                 tracing::warn!(
-                                    "Failed to read TLS key from {}: {} — falling back to plain TCP",
+                                    "Failed to read TLS key from {}: {} — aborting TLS startup",
                                     key_path,
                                     e
                                 );
@@ -163,7 +163,7 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                     }
                     Err(e) => {
                         tracing::warn!(
-                            "Failed to open TLS key file {}: {} — falling back to plain TCP",
+                            "Failed to open TLS key file {}: {} — aborting TLS startup",
                             key_path,
                             e
                         );
@@ -182,10 +182,7 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                         )))
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to build TLS config: {} — falling back to plain TCP",
-                            e
-                        );
+                        tracing::warn!("Failed to build TLS config: {} — aborting TLS startup", e);
                         return Err(anyhow::anyhow!("failed to build TLS config: {}", e));
                     }
                 }

@@ -78,8 +78,8 @@ otel_endpoint = "http://localhost:4317"
 # 使用 simple-server 配置文件構建
 cargo build --no-default-features -F simple-server
 
-# 或顯式啟用特性
-cargo build --features "backend-sqlite sqlite-vec"
+# 或顯式啟用後端特性
+cargo build --features backend-sqlite
 ```
 
 ### 系統要求

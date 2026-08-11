@@ -180,13 +180,21 @@ async fn run() -> Result<()> {
     // logic, so no dead-code allowance is needed on the struct.
     // Parse command-line arguments
     let mut cli = cli::Cli::parse();
+
+    // Determine configuration file path (needed by one-shot skill commands so
+    // they operate on the same persisted skill-import store as the server).
+    let config_path = match cli.config {
+        Some(ref path) => path.clone(),
+        None => default_config_path()?,
+    };
+
     if let Some(command) = cli.command.take() {
         match command {
             cli::CliCommand::Init => cli.setup = true,
             cli::CliCommand::Status => cli.status = true,
             cli::CliCommand::Diagnose => cli.diagnose = true,
             cli::CliCommand::Skill { command } => {
-                return cli::handle_skill_command(command).await;
+                return cli::handle_skill_command(command, &config_path).await;
             }
             #[cfg(feature = "sub-bus-distributed-memory")]
             cli::CliCommand::Hub { port } => {
@@ -197,12 +205,6 @@ async fn run() -> Result<()> {
             }
         }
     }
-
-    // Determine configuration file path
-    let config_path = match cli.config {
-        Some(ref path) => path.clone(),
-        None => default_config_path()?,
-    };
 
     // ── System bootstrap: i18n, observability, provider, skills discovery ──
     // Telemetry is already initialized above, so skip it here.

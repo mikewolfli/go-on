@@ -13,7 +13,7 @@ Follow these rules for all feature work, bug fixes, and refactors.
 ## 2. Code Style And Structure
 
 - Language: Rust 2021.
-- Keep modules focused: ACP protocol in `src/acp.rs`, config in `src/core/config/`, routing in `src/orchestration/flow.rs`, provider logic in `src/agents/*`.
+- Keep modules focused: ACP protocol in `src/acp/`, config in `src/core/config/`, routing in `src/orchestration/flow.rs`, provider logic in `src/agents/*`.
 - Avoid cross-module leakage: provider-specific behavior should stay in provider modules.
 - Prefer explicit names and straightforward control flow over clever abstractions.
 - Keep public APIs and config fields stable unless there is a strong reason to change.
@@ -91,7 +91,7 @@ Follow these rules for all feature work, bug fixes, and refactors.
 
 - Keep these docs in sync with behavior:
   - `README.md`
-  - `config.toml.autopilot-adaptive`
+  - `config/` (the TOML templates under `config/`)
   - this file (`DEVELOPMENT_RULES.md`)
 - Any user-visible behavior change requires README updates in the same change.
 - Do not document features that are not implemented.

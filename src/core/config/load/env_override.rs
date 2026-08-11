@@ -238,60 +238,12 @@ pub(crate) fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
         }
     }
 
-    // Validate secret key security.
-    validate_secret_security(&secret, field_name)?;
-
-    Ok(())
-}
-
-/// Validates the security of a secret string.
-///
-/// # Parameters
-/// * `secret` - The secret value to validate.
-/// * `field_name` - Field name used in error messages.
-///
-/// # Returns
-/// * `Result<()>` - `Ok` if the secret is considered safe; an error otherwise.
-pub(crate) fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
-    if secret.trim().is_empty() {
-        anyhow::bail!("{}", tf("error.missing_field", &[("field", field_name)]));
-    }
-
-    // Check for newlines (possible multi-line secret or injection attempt).
-    if secret.contains('\n') || secret.contains('\r') {
-        warn!(
-            "{} contains newline characters, which may be a security issue",
-            field_name
-        );
-    }
-
-    // Check secret length — very short secrets are likely insecure.
-    if secret.len() < 8 {
-        warn!(
-            "{} is very short ({} characters), which may be insecure",
-            field_name,
-            secret.len()
-        );
-    }
-
-    // Check for common insecure patterns.
-    let insecure_patterns = [
-        ("password", "contains the word 'password'"),
-        ("123456", "contains simple numeric sequence"),
-        ("admin", "contains the word 'admin'"),
-        ("test", "contains the word 'test'"),
-        ("secret", "contains the word 'secret'"),
-    ];
-
-    let secret_lower = secret.to_lowercase();
-    for (pattern, description) in insecure_patterns {
-        if secret_lower.contains(pattern) {
-            warn!(
-                "{} {} - consider using a stronger secret",
-                field_name, description
-            );
-        }
-    }
+    // Validate secret key security (shared implementation).
+    crate::shared::secret_override::validate_secret_security(
+        &secret,
+        field_name,
+        "error.missing_field",
+    )?;
 
     Ok(())
 }

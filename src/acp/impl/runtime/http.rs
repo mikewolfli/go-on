@@ -11,9 +11,7 @@ use anyhow::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info};
 
-use crate::acp::r#impl::cors::{
-    build_cors_headers, build_preflight_response_headers, is_origin_allowed,
-};
+use crate::acp::r#impl::cors::build_cors_headers;
 use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
 use crate::acp::server::AcpServer;
 use crate::acp::transport::{set_current_transport, RpcBufferTransport, SseTransport};
@@ -916,32 +914,27 @@ async fn handle_cors_preflight(
         }
     };
     let origin = super::protocol::extract_header_value(headers, "origin");
-    let allow_origin = origin.as_deref().filter(|o| is_origin_allowed(o, &config));
-
-    if allow_origin.is_none() && !config.allowed_origins.contains(&"*".to_string()) {
-        write_http_json_response(
-            socket,
-            403,
-            serde_json::json!({"error": "Origin not allowed"}),
-            "",
-        )
-        .await?;
-        return Ok(());
+    let request_headers =
+        super::protocol::extract_header_value(headers, "access-control-request-headers");
+    match crate::acp::r#impl::cors::evaluate_cors_preflight(
+        origin.as_deref(),
+        request_headers.as_deref(),
+        &config,
+    ) {
+        crate::acp::r#impl::cors::CorsPreflightDecision::Reject => {
+            write_http_json_response(
+                socket,
+                403,
+                serde_json::json!({"error": "Origin not allowed"}),
+                "",
+            )
+            .await?;
+        }
+        crate::acp::r#impl::cors::CorsPreflightDecision::Allow { extra_headers } => {
+            write_http_json_response(socket, 200, serde_json::json!({"ok": true}), &extra_headers)
+                .await?;
+        }
     }
-
-    let rh = super::protocol::extract_header_value(headers, "access-control-request-headers");
-    let preflight_headers = build_preflight_response_headers(rh.as_deref(), &config);
-    let origin_val = allow_origin.unwrap_or("*").to_string();
-
-    let mut cors_str = format!("Access-Control-Allow-Origin: {}\r\n", origin_val);
-    for (k, v) in &preflight_headers {
-        cors_str.push_str(&format!("{}: {}\r\n", k, v));
-    }
-    cors_str.push_str("Access-Control-Max-Age: ");
-    cors_str.push_str(&config.max_age_seconds.to_string());
-    cors_str.push_str("\r\n");
-
-    write_http_json_response(socket, 200, serde_json::json!({"ok": true}), &cors_str).await?;
     Ok(())
 }
 

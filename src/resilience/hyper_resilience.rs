@@ -473,7 +473,9 @@ impl HyperResilienceEngine {
                 status: HealthStatus::Healthy,
                 success_rate: 1.0,
                 error_rate: 0.0,
-                avg_latency_ms: 100.0,
+                // 0.0 means "no measurement yet" (same convention as
+                // TestMetrics) — a placeholder 100ms would fake a real latency.
+                avg_latency_ms: 0.0,
                 last_check_timestamp: crate::shared::timestamps::now_ts_ms_u64() / 1000,
             });
         }
@@ -547,7 +549,7 @@ impl HyperResilienceEngine {
             let prior_avg = lock_mutex(&self.service_health)
                 .get(name)
                 .map(|h| h.avg_latency_ms)
-                .unwrap_or(100.0);
+                .unwrap_or(0.0);
             let avg_latency_ms = match latency_ms {
                 Some(measured) => {
                     let samples = total.max(1) as f64;
@@ -577,7 +579,8 @@ impl HyperResilienceEngine {
                 status: HealthStatus::Healthy,
                 success_rate: 1.0,
                 error_rate: 0.0,
-                avg_latency_ms: 100.0,
+                // 0.0 = no measurement yet (same convention as TestMetrics).
+                avg_latency_ms: 0.0,
                 last_check_timestamp: crate::shared::timestamps::now_ts_ms_u64() / 1000,
             });
             h.success_rate = success_rate;
@@ -1566,15 +1569,11 @@ impl HyperResilienceEngine {
 
             let now = crate::shared::timestamps::now_ts_ms_u64();
 
-            if !success {
-                // Track failure mode (default to ResourceExhaustion like record_failure).
-                let failure_mode = FailureMode::ResourceExhaustion;
-                cb_ref.last_failure_mode = Some(failure_mode);
-                cb_ref.failure_history.push(failure_mode);
-                if cb_ref.failure_history.len() > 10 {
-                    cb_ref.failure_history.remove(0);
-                }
-            }
+            // No failure mode is recorded on this path: `record_execution`
+            // callers only supply a success boolean, so any specific mode
+            // would be fabricated. Callers with a real cause use
+            // `record_failure_with_mode` (e.g. fallback.rs records
+            // ResourceExhaustion explicitly).
 
             transition_breaker(
                 cb_ref,

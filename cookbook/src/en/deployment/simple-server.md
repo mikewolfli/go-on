@@ -73,7 +73,7 @@ otel_endpoint = "http://localhost:4317"
 ### Feature Flags
 Simple Server mode requires:
 - `backend-sqlite`: SQLite database support
-- `sqlite-vec`: Vector extension (required, no fallback)
+- `backend-sqlite`: SQLite backend (rusqlite + sqlite-vec)
 
 ## Installation
 
@@ -82,8 +82,8 @@ Simple Server mode requires:
 # Build with simple-server profile
 cargo build --no-default-features -F simple-server
 
-# Or explicitly enable features
-cargo build --features "backend-sqlite sqlite-vec"
+# Or explicitly enable the backend feature
+cargo build --features backend-sqlite
 ```
 
 ### System Requirements

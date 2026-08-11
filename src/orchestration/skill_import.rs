@@ -142,6 +142,62 @@ pub enum SkillImportSource {
     },
 }
 
+/// Parse a CLI-style import source string into a structured source.
+///
+/// Accepted forms (matching the `skill import` help text):
+/// - `github:owner/repo` (reference defaults to "main")
+/// - `url:<http(s)://...>` — a bare `http(s)://...` URL also works
+/// - `local:<path>`
+///
+/// Unknown prefixes fail loudly instead of being silently treated as a
+/// marketplace skill name (the historical behavior, which made every
+/// documented `github:/url:/local:` import fail with "not found in
+/// marketplace").
+pub fn parse_cli_import_source(source: &str) -> Result<SkillImportSource> {
+    let trimmed = source.trim();
+    if let Some(repo) = trimmed.strip_prefix("github:") {
+        let repo = repo.trim().trim_start_matches('/');
+        if repo.is_empty() || !repo.contains('/') {
+            anyhow::bail!("invalid github source '{source}': expected 'github:owner/repo'");
+        }
+        return Ok(SkillImportSource::Github {
+            repo: repo.to_string(),
+            reference: "main".to_string(),
+            path: None,
+            sha256: None,
+        });
+    }
+    if let Some(url) = trimmed.strip_prefix("url:") {
+        let url = url.trim();
+        if url.is_empty() {
+            anyhow::bail!("invalid url source '{source}': expected 'url:<http(s)://...>'");
+        }
+        return Ok(SkillImportSource::Url {
+            url: url.to_string(),
+            sha256: None,
+        });
+    }
+    if let Some(path) = trimmed.strip_prefix("local:") {
+        let path = path.trim();
+        if path.is_empty() {
+            anyhow::bail!("invalid local source '{source}': expected 'local:<path>'");
+        }
+        return Ok(SkillImportSource::Local {
+            path: path.to_string(),
+            sha256: None,
+        });
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Ok(SkillImportSource::Url {
+            url: trimmed.to_string(),
+            sha256: None,
+        });
+    }
+    anyhow::bail!(
+        "unsupported import source '{source}': use 'github:owner/repo', 'url:<url>', or 'local:<path>'"
+    )
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct SkillImportIndex {
     skills: Vec<ImportedSkillRecord>,
@@ -939,6 +995,60 @@ impl SkillImportSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_import_source_parses_documented_forms() {
+        // github:owner/repo → structured Github source with default ref.
+        match parse_cli_import_source("github:acme/skill-repo").unwrap() {
+            SkillImportSource::Github {
+                repo,
+                reference,
+                path,
+                sha256,
+            } => {
+                assert_eq!(repo, "acme/skill-repo");
+                assert_eq!(reference, "main");
+                assert!(path.is_none());
+                assert!(sha256.is_none());
+            }
+            other => panic!("expected Github source, got {:?}", other),
+        }
+
+        // url:<...> prefix.
+        match parse_cli_import_source("url:https://example.com/skill.json").unwrap() {
+            SkillImportSource::Url { url, .. } => {
+                assert_eq!(url, "https://example.com/skill.json");
+            }
+            other => panic!("expected Url source, got {:?}", other),
+        }
+
+        // Bare http(s) URL also works.
+        match parse_cli_import_source("https://example.com/skill.md").unwrap() {
+            SkillImportSource::Url { url, .. } => {
+                assert_eq!(url, "https://example.com/skill.md");
+            }
+            other => panic!("expected Url source, got {:?}", other),
+        }
+
+        // local:<path>.
+        match parse_cli_import_source("local:./skills/demo").unwrap() {
+            SkillImportSource::Local { path, .. } => {
+                assert_eq!(path, "./skills/demo");
+            }
+            other => panic!("expected Local source, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cli_import_source_rejects_unknown_and_malformed_forms() {
+        // A bare name is not an import source (the CLI falls back to the
+        // marketplace install path for those).
+        assert!(parse_cli_import_source("echo_skill").is_err());
+        assert!(parse_cli_import_source("github:").is_err());
+        assert!(parse_cli_import_source("github:no-slash").is_err());
+        assert!(parse_cli_import_source("url:").is_err());
+        assert!(parse_cli_import_source("local:").is_err());
+    }
 
     fn test_workspace(name: &str) -> PathBuf {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

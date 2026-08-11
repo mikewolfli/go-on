@@ -145,6 +145,7 @@ local = [
     "sub-bus-optimization",
     "sub-bus-memory",
     "sub-bus-protocol",
+    "sub-bus-multimodal",
 ]
 simple-server = [
     "backend-sqlite",
@@ -155,6 +156,7 @@ simple-server = [
     "sub-bus-memory",
     "sub-bus-distributed-memory",
     "sub-bus-protocol",
+    "sub-bus-multimodal",
 ]
 multi-users-server = [
     "backend-postgres",
@@ -165,6 +167,7 @@ multi-users-server = [
     "sub-bus-protocol",
     "sub-bus-orchestration",
     "sub-bus-distributed-memory",
+    "sub-bus-multimodal",
 ]
 
 # Template engine (optional, feature-gated)

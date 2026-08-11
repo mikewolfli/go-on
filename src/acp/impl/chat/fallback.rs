@@ -466,6 +466,22 @@ pub(crate) async fn execute_fallback_agents(
                         success: false,
                         duration_ms: attempt_started.elapsed().as_millis() as u64,
                     });
+                // Record the failed attempt in the per-agent outcome pipeline
+                // (LivePerformanceFeed / consciousness / self-model / world
+                // model) and the hyper-resilience engine — otherwise hard
+                // failures (timeout/cancel/provider error) never reach the
+                // feed and the success-rate EMA overstates every agent.
+                let agent_key = agent_name.clone();
+                let dur = attempt_started.elapsed().as_millis() as u64;
+                outcome_futures.push(Box::pin(async move {
+                    record_agent_intelligence_outcome(server, &agent_key, false, phase_name, dur)
+                        .await;
+                    let _ = server
+                        .resilience
+                        .hyper_resilience
+                        .record_failure(&agent_key)
+                        .await;
+                }));
                 let agent_label = agent_name.clone();
                 let enriched_err = anyhow::anyhow!(tf(
                     "error.chat.agent_error_prefix",

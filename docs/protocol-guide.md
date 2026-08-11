@@ -92,9 +92,9 @@ go-on 支持以下几种协议模式：
 
 ```json
 {
-  "go-on.mcp.command": "go-on",
-  "go-on.mcp.args": ["--protocol-mode", "mcp_stdio"],
-  "go-on.provider.name": "go-on"
+  "go-on.executablePath": "./target/release/go-on",
+  "go-on.configPath": "./config.toml",
+  "go-on.runtime.protocolMode": "from_config"
 }
 ```
 

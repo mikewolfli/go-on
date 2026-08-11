@@ -140,13 +140,13 @@ go-on 在后端实现了约 **95%** 的全链路国际化覆盖：
 | 简体中文 | `config/languages/zh-CN.json` | 733 |
 | 繁体中文 | `config/languages/zh-TW.json` | 733 |
 
-覆盖层：ACP/MCP HTTP 错误（100%）、Agent 供应商模块（100%，35 家供应商）、配置验证（100%）、CLI 初始化（100%）、API 处理错误（100%）、编排层（100%）、GUI（约 98%）、VS Code 插件（70+ 键值）。
+覆盖层：ACP/MCP HTTP 错误（100%）、Agent 供应商模块（100%，37 家供应商）、配置验证（100%）、CLI 初始化（100%）、API 处理错误（100%）、编排层（100%）、GUI（约 98%）、VS Code 插件（70+ 键值）。
 
 ## 与架构对应的仓库目录
 
 - `src/`：后端运行时、CLI、setup、ACP 与 MCP 实现。
   - `src/acp/`：ACP 服务、请求路由、workflow/task/chat/checkpoint
-  - `src/agents/`：Provider 适配器（OpenAI、Anthropic、DeepSeek、Gemini、xAI Grok、SiliconFlow 等 31 家）
+  - `src/agents/`：Provider 适配器（OpenAI、Anthropic、DeepSeek、Gemini、xAI Grok、SiliconFlow 等 37 家）
   - `src/core/`：配置、初始化、就绪性检查、错误模型
   - `src/governance/`：策略/规则治理、审计、安全治理器、漂移防护
   - `src/intelligence/`：选择器、强化学习、能力总线、发现、共识、演化

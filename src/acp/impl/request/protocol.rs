@@ -115,8 +115,8 @@ pub(super) fn get_protocol_mode(server: &AcpServer) -> RequestDispatchMode {
 /// Standard MCP methods (initialize, tools/list, tools/call, etc.)
 /// may be sent without the "mcp." prefix in MCP-only mode.
 pub(super) fn is_mcp_request(method: &str) -> bool {
+    // "mcp.initialize" is already covered by the starts_with("mcp.") branch.
     method.starts_with("mcp.")
-        || method == "mcp.initialize"
         || method == "initialize"
         || method == "notifications/initialized"
         || method.starts_with("tools/")

@@ -28,7 +28,7 @@ Most operations are driven by flags; a small set of subcommands is also availabl
 
 ### `--config <CONFIG>`
 
-Use an explicit configuration file path. If omitted, the runtime resolves `config.toml` from the executable directory.
+Use an explicit configuration file path. If omitted, the runtime resolves `config.toml` in this order: `./config.toml` (current directory), then `~/.config/go-on/config.toml` (Windows: `%APPDATA%\go-on\config.toml`), then the executable directory as a last resort.
 
 Example:
 

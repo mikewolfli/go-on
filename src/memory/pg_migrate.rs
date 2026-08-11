@@ -46,7 +46,11 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     CREATE INDEX IF NOT EXISTS idx_response_cache_expires_at
         ON response_cache(expires_at);",
     // v2: vector_memory + phase_summary (base tables; HNSW index is added
-    //     dynamically in VectorStore::new() since dimensions are configurable)
+    //     dynamically in VectorStore::new() since dimensions are configurable).
+    //     NOTE: `embedding vector(768)` is a static baseline only —
+    //     VectorStore::new_with_replica re-types the column to the runtime
+    //     embedding-provider dimensions at every startup, so this fixed width
+    //     never blocks a non-768 provider.
     "CREATE TABLE IF NOT EXISTS vector_memory (
         memory_key      TEXT PRIMARY KEY,
         phase           TEXT NOT NULL,

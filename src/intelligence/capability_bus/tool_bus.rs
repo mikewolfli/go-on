@@ -140,6 +140,13 @@ impl ToolBus {
         &self.skill_registry
     }
 
+    /// Replace the inner SkillRegistry with the server's live registry so
+    /// imported/discovered skills are visible to the tool bus. The field is
+    /// intentionally behind an `Arc` so both handles share one registry.
+    pub fn set_skill_registry(&mut self, registry: Arc<RwLock<SkillRegistry>>) {
+        self.skill_registry = registry;
+    }
+
     /// Produce a high-level profile snapshot of the ToolBus.
     pub fn profile(&self) -> ToolBusProfile {
         let total_tools = self.tool_registry.names().len() as u32;

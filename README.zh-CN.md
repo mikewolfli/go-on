@@ -97,7 +97,7 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 - **跨入口一致性** — 同一任务在 ACP/CLI/MCP 下产生一致的 stop_reason 与回合数
 
 ### 工具系统
-- **60+ 内置工具** — 读写文件/代码搜索/补丁应用/测试运行/Git Diff/Shell 执行/HTTP 请求/grep/find/git/cargo_check/cargo_test/目录列表/文件移动/文件删除/压缩解压/日期时间/DNS/Ping/端口扫描 + CAD/3D/GIS/条码/SVG/Office/图像处理 + 文档解析(PDF/DOCX/PPT/HTML/Markdown/Excel)
+- **60+ 内置工具** — 读写文件/代码搜索/补丁应用/测试运行/Git Diff/Shell 执行/HTTP 请求/grep/search_files/git/cargo_check/cargo_test/目录列表/文件移动/文件删除/压缩解压/日期时间/DNS/Ping/端口扫描 + CAD/3D/GIS/条码/SVG/Office/图像处理 + 文档解析(PDF/DOCX/PPT/HTML/Markdown/Excel)
 - **工具流水线** — 串行/并行/条件执行，可配置的错误处理策略
 - **动态工具推荐** — 基于模式+近因+共现的工具推荐引擎
 - **基于模式的工具限制** — 各模式强制执行 allowed_tools 与 max_tool_calls
@@ -119,7 +119,7 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 
 ### 韧性
 - **容错恢复** — 5 个真实恢复动作（RestartNode、FailoverToBackup、ScaleUp、Rebalance、NotifyOperator），由 `FaultToleranceEngine` 分派
-- **混沌测试** — 10 种故障注入（超时、分区、崩溃、数据损坏、限流）
+- **混沌测试** — 14 种故障注入（超时、分区、崩溃、数据损坏、限流、OOM、延迟尖峰、部分写入等）
 - **超弹性** — 熔断器状态机、故障切换组、自愈
 - **热故障切换** — 主备模型切换，含冷却黑名单
 
@@ -271,11 +271,11 @@ npm run compile
 | Rust 后端代码行数 | ~202K（444 个模块）|
 | GUI（EGUI）代码行数 | ~24K |
 | VS Code 插件（TypeScript）代码行数 | ~17K |
-| SDK（Rust + Python + TypeScript）代码行数 | ~4K |
+| SDK（Rust + Python + TypeScript）代码行数 | ~6.9K |
 | 内置工具数量 | 60+ |
 | AI 供应商数量 | 37 |
 | 技能市场数量 | 34 |
-| 单元测试数量 | ~1.7K（1513 lib + 134 集成声明，见下方验证状态）|
+| 单元测试数量 | ~1.7K（1533 lib + 151 集成声明，见下方验证状态）|
 | 三语国际化覆盖 | en / zh-CN / zh-TW（约 95%）|
 
 ## 构建配置

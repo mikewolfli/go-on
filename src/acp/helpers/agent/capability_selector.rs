@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::acp::helpers::autonomy_metrics::record_capability_selection_reason;
-use crate::acp::r#impl::chat::{reorder_agents_with_priority, RiskAssessment};
+use crate::acp::r#impl::chat::RiskAssessment;
 use crate::agent::{Agent, Message};
 use crate::governance::pua::{TaskContext, TaskType};
 use crate::intelligence::capability_bus::core::CapabilityBus;
@@ -76,9 +76,8 @@ pub(crate) async fn apply_capability_bus_selection(
     };
 
     if let Some(ref agent) = decision.selected_agent {
-        // Prune to only the capability-bus-recommended agent.
-        // SAFETY: retain before reorder — if the agent is not in the list
-        // we fall through to the phase-level agents unchanged.
+        // Prune to only the capability-bus-recommended agent. If the agent is
+        // not in the list, fall through to the phase-level agents unchanged.
         if agents.iter().any(|(name, _)| name == agent) {
             agents.retain(|(name, _)| name == agent);
             capability_selection_reason = "capability_bus_selected".to_string();
@@ -89,9 +88,8 @@ pub(crate) async fn apply_capability_bus_selection(
             routing_provenance.push("capability_bus_selected_agent_not_in_candidates".to_string());
             record_capability_selection_reason("capability_bus_no_match");
         }
-        // reorder is now redundant since retain already reduced to one,
-        // but kept for clarity in case retain logic changes in future.
-        let _ = reorder_agents_with_priority(agents, agent);
+        // retain() above already reduced the candidate list to the single
+        // capability-bus-recommended agent, so no reordering is needed.
     } else {
         capability_selection_reason = "capability_bus_none".to_string();
         routing_provenance.push("capability_bus_no_selected_agent".to_string());

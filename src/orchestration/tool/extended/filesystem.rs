@@ -373,7 +373,7 @@ impl Tool for CopyPathTool {
         }
 
         if source_path.is_dir() {
-            copy_dir_recursive(&source_path, &dest_path)?;
+            super::utils::copy_dir_recursive(&source_path, &dest_path)?;
         } else {
             fs::copy(&source_path, &dest_path).context("failed to copy file")?;
         }
@@ -401,23 +401,4 @@ impl Tool for CopyPathTool {
             pua_report: Some(tool_execution_report("copy_path", Some("path_copied"))),
         })
     }
-}
-
-/// Recursively copy a directory from source to destination.
-fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
-    fs::create_dir_all(dst).context("failed to create destination directory")?;
-    for entry in fs::read_dir(src).context("failed to read source directory")? {
-        let entry = entry?;
-        let entry_type = entry.file_type()?;
-        let file_name = entry.file_name();
-        let src_path = entry.path();
-        let dst_path = dst.join(&file_name);
-
-        if entry_type.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            fs::copy(&src_path, &dst_path).context("failed to copy file in directory")?;
-        }
-    }
-    Ok(())
 }

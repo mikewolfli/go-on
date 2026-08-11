@@ -1,5 +1,18 @@
 # 更新日志
 
+## [Unreleased] - 2026-08-11
+
+### 第 44 轮 — 超级深度/广度扫描 XII：统一架构精炼（2026-08-11，docs/log/log-20260811-2.md）
+
+- **PG 向量维度失配修复（P1）**：`VectorStore::new_with_replica` 建表后 `ALTER TABLE ... embedding TYPE vector(N)` 对齐运行时 provider 维度，消除固定 768 与默认环境 upsert 必失败。
+- **skill CLI 双套统一**：`go-on skill` 改走与服务器一致的持久化 `SkillImportStore`；`skill import` 修复 `github:/url:/local:` 语法（新增 `parse_cli_import_source`，未知格式回退市场按名安装）；list-imported/info/refresh 读取真实数据。
+- **autonomy 主路径缓存回填**：semantic_cache + token_cache 填充移到共享后执行路径，autonomy 成功产出同样填充。
+- **CapabilityBus ToolBus 技能注册表统一**：new_acp_server 注入真实 SkillRegistry，导入技能对 agent_tool_match/tool_bus_skills 可见；**MemoryBus 后端注入时序修复**（移到 wire_server 前，注入真实生效）；**fallback 失败路径记账补齐**（Err 分支同样喂 LivePerformanceFeed/hyper_resilience）。
+- **CORS preflight 双实现统一**（共享 evaluate_cors_preflight，修复通配双头缺陷 + 4 单测）；**MCP SSE 配置化 CORS**（原硬编码 `*` 绕过白名单）；**MCP 头部读取统一**委托 read_http_header；**config 验证门禁对齐与去重**（精确模板匹配）。
+- **死代码/冗余清理**：capability_selector 冗余 reorder、`is_mcp_request` 死分支、`McpServer::new` 收敛为 cfg(test)、CLI `estimate_tokens` 包装与 `len()/4` 统一走共享估算器、`shared/math.rs` allow 收窄、`core/mod.rs` 悬空注释、autonomy 死 ±1 容差、hyper_resilience 默认延迟 100→0 与伪造失败模式移除；**重复实现合并**（copy_dir_recursive、validate_secret_security 收敛到共享实现）；**hub 加固**（头部/正文上限）；**TLS 日志如实化**。
+- **文档数字修正**：README lib 1513→1533、SDK LOC ~4K→~6.9K、工具表 find→search_files；CHANGELOG 与 log-20260810-4 §12 集成测试数全部对齐实测（transport 18、e2e 8、pua 3、openai 6、i18n 1）；request.rs 测试 `len() >= 1` → `is_empty()`。
+- 验证：4 profile + clippy 全目标零警告；lib 1533/0/0；集成套件全通过；vscode tsc / GUI / SDK 干净。
+
 ## [Unreleased] - 2026-08-10
 
 ### 第 43 轮 — 超级深度/广度扫描 XI：统一链路与收敛（2026-08-10，docs/log/log-20260810-4.md）
@@ -12,7 +25,7 @@
 - **自进化循环门禁**：`runtime.evolution_enabled`（默认 false），杜绝无门禁 AutoApproval 改写源码。
 - **死代码/假保留清理**：`preferred_agent_from_request`/`review_overrides`/`ADAPTIVE_TEMPLATE`/`find_template`/`adaptive` 死臂/unused re-export（multimodal 29 项等）；远程 skill index 移除 `deny_unknown_fields`（宽容 + schema 校验）。
 - **GUI 重试状态集对齐**（408/429/全 5xx）；**vscode reconnect 测试重写**（真实 backoffDelayMs）；**skills/ 收敛**（删 11 符号链接，目录=34=builtin 数）；**结构性测试迁入 src**；**部署修复**（Dockerfile 数据目录、compose 卷+PG DSN、k8s `/metrics`、ps1 bug）；config 幽灵键清理。
-- 验证：4 profile + clippy 零警告；lib 1513/0；全部集成套件通过；vscode tsc / GUI / SDK 干净。
+- 验证：4 profile + clippy 零警告；lib 1527/0；全部集成套件通过；vscode tsc / GUI / SDK 干净。
 
 ### 第 41 轮 — 超级深度/广度扫描 + 依赖审计（2026-08-10，docs/log/log-20260810-1.md）
 

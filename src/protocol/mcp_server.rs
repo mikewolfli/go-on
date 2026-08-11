@@ -16,7 +16,6 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::{Mutex, Notify};
 use tracing::{debug, info, warn};
 
-use crate::acp::r#impl::cors::{build_preflight_response_headers, is_origin_allowed};
 use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
 use crate::acp::r#impl::runtime::protocol::{parse_http_request, ParsedHttpRequest};
 use crate::acp::r#impl::runtime::sse::write_sse_raw_event;
@@ -586,29 +585,20 @@ fn evaluate_mcp_preflight(
     cfg: &crate::acp::r#impl::cors::CorsConfig,
 ) -> McpPreflightOutcome {
     let origin = crate::acp::r#impl::runtime::protocol::extract_header_value(header_part, "origin");
-    let allow_origin = origin.as_deref().filter(|o| is_origin_allowed(o, cfg));
-
-    if allow_origin.is_none() && !cfg.allowed_origins.iter().any(|o| o == "*") {
-        return McpPreflightOutcome::Reject;
-    }
-
     let request_headers = crate::acp::r#impl::runtime::protocol::extract_header_value(
         header_part,
         "access-control-request-headers",
     );
-    let preflight_headers = build_preflight_response_headers(request_headers.as_deref(), cfg);
-    let origin_val = allow_origin.unwrap_or("*").to_string();
-
-    let mut extra = format!("Access-Control-Allow-Origin: {}\r\n", origin_val);
-    for (k, v) in &preflight_headers {
-        extra.push_str(&format!("{}: {}\r\n", k, v));
-    }
-    extra.push_str(&format!(
-        "Access-Control-Max-Age: {}\r\n",
-        cfg.max_age_seconds
-    ));
-    McpPreflightOutcome::Allow {
-        extra_headers: extra,
+    // Shared decision with the ACP HTTP arm — only the wire response differs.
+    match crate::acp::r#impl::cors::evaluate_cors_preflight(
+        origin.as_deref(),
+        request_headers.as_deref(),
+        cfg,
+    ) {
+        crate::acp::r#impl::cors::CorsPreflightDecision::Reject => McpPreflightOutcome::Reject,
+        crate::acp::r#impl::cors::CorsPreflightDecision::Allow { extra_headers } => {
+            McpPreflightOutcome::Allow { extra_headers }
+        }
     }
 }
 
@@ -633,55 +623,30 @@ async fn handle_http_connection(
     // received. Until then the header must stay `keep-alive` (clients like
     // the MCP SDK rely on it) — only the comment documents the gap.
     //
-    // ── Header buffer: start small, grow dynamically ────────────────────
-    // Allocate only INITIAL_HEADER_BUFFER_SIZE bytes up front, then grow
-    // as needed when reading the HTTP header, up to MAX_HEADER_BUFFER_SIZE.
-    // This avoids wasting 64KB on small requests.
-    const INITIAL_HEADER_BUFFER_SIZE: usize = 4096;
-    const MAX_HEADER_BUFFER_SIZE: usize = 64 * 1024;
-
-    let mut buffer = vec![0u8; INITIAL_HEADER_BUFFER_SIZE];
-    let mut total_bytes_read: usize = 0;
-
-    loop {
-        if total_bytes_read >= buffer.len() {
-            // Grow the buffer (double until max)
-            let new_size = std::cmp::min(buffer.len() * 2, MAX_HEADER_BUFFER_SIZE);
-            if new_size <= buffer.len() {
-                warn!(
-                    "MCP HTTP: request header exceeds {} bytes",
-                    MAX_HEADER_BUFFER_SIZE
-                );
+    // ── Header buffer: shared canonical reader ────────────────────────────
+    // The growth/termination/timeout loop is identical to the ACP HTTP arm,
+    // so both arms delegate to the single `read_http_header` implementation
+    // (only the error text differs, and it is localized here to keep the MCP
+    // surface wording stable).
+    let header_bytes = match crate::acp::r#impl::runtime::http::read_http_header(socket).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            let msg = err.to_string();
+            if msg.contains("exceeds") {
                 anyhow::bail!("{}", t("error.http_header_too_large"));
             }
-            buffer.resize(new_size, 0u8);
-        }
-
-        let bytes_read = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            socket.read(&mut buffer[total_bytes_read..]),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("timeout reading HTTP request"))??;
-
-        if bytes_read == 0 {
-            if total_bytes_read == 0 {
-                return Ok(());
+            if msg.contains("incomplete HTTP request header") {
+                anyhow::bail!("{}", t("error.http_missing_header"));
             }
-            // Partial header with no data left — missing terminator
-            warn!("MCP HTTP: incomplete request header --missing header terminator");
-            anyhow::bail!("{}", t("error.http_missing_header"));
+            return Err(err);
         }
-
-        total_bytes_read += bytes_read;
-
-        let request_text = String::from_utf8_lossy(&buffer[..total_bytes_read]);
-        if request_text.contains("\r\n\r\n") {
-            break;
-        }
+    };
+    if header_bytes.is_empty() {
+        // Clean EOF before any byte — no request; close quietly.
+        return Ok(());
     }
 
-    let request_text = String::from_utf8_lossy(&buffer[..total_bytes_read]);
+    let request_text = String::from_utf8_lossy(&header_bytes);
     // Shared request-line parser: splits at the first `\r\n\r\n` and
     // whitespace-splits the request line into method/path. Semantics are
     // identical to the former inline copy (no path-prefix stripping in either
@@ -726,7 +691,7 @@ async fn handle_http_connection(
     //     MCP SSE Streamable HTTP transport per MCP spec.
     // MCP Streamable HTTP Transport §6.3
     if method == "GET" && (path == "/sse" || path == "/mcp-sse") {
-        return handle_mcp_sse_connection(socket, sse_broadcaster).await;
+        return handle_mcp_sse_connection(socket, sse_broadcaster, &cors_headers).await;
     }
 
     // ── Health endpoint (no auth) ────────────────────────────────────────
@@ -1130,14 +1095,16 @@ async fn handle_http_connection(
 async fn handle_mcp_sse_connection(
     socket: &mut MaybeTlsStream,
     sse_broadcaster: Arc<SseBroadcaster>,
+    cors_headers: &str,
 ) -> Result<()> {
     // ── SSE headers ───────────────────────────────────────────────────
     // Per the MCP Streamable HTTP spec, the SSE endpoint must advertise
-    // the POST endpoint URL and keep the connection alive.
-    let extra_headers = "Access-Control-Allow-Origin: *\r\n";
+    // the POST endpoint URL and keep the connection alive. CORS headers are
+    // the same config-driven ones as every other MCP response (previously a
+    // hardcoded `Access-Control-Allow-Origin: *` bypassed the whitelist).
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n{}\r\n\r\n",
-        extra_headers
+        cors_headers
     );
     tokio::time::timeout(
         std::time::Duration::from_secs(30),
@@ -1229,15 +1196,6 @@ async fn write_http_json_response(
         extra_headers,
     )
     .await
-}
-
-#[cfg(test)]
-fn parse_request_target_for_test(raw_request: &str) -> Option<(String, String)> {
-    let first_line = raw_request.lines().next()?;
-    let mut parts = first_line.split_whitespace();
-    let method = parts.next()?.to_string();
-    let path = parts.next()?.to_string();
-    Some((method, path))
 }
 
 #[cfg(test)]
@@ -1383,9 +1341,12 @@ mod tests {
     #[test]
     fn test_parse_request_target() {
         let request = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
-        let parsed = parse_request_target_for_test(request).expect("request line should parse");
-        assert_eq!(parsed.0, "GET");
-        assert_eq!(parsed.1, "/health");
+        // Exercise the production parser (the one both HTTP arms use), not a
+        // test-only reimplementation.
+        let parsed =
+            crate::acp::r#impl::runtime::protocol::parse_http_request(request).expect("parse");
+        assert_eq!(parsed.method, "GET");
+        assert_eq!(parsed.path, "/health");
     }
 
     #[test]
@@ -1403,9 +1364,10 @@ mod tests {
     #[test]
     fn test_parse_request_target_post() {
         let request = "POST /api/v1/chat HTTP/1.1\r\nHost: localhost\r\n\r\n";
-        let parsed = parse_request_target_for_test(request).expect("request line should parse");
-        assert_eq!(parsed.0, "POST");
-        assert_eq!(parsed.1, "/api/v1/chat");
+        let parsed =
+            crate::acp::r#impl::runtime::protocol::parse_http_request(request).expect("parse");
+        assert_eq!(parsed.method, "POST");
+        assert_eq!(parsed.path, "/api/v1/chat");
     }
 
     #[test]
@@ -1466,9 +1428,18 @@ mod tests {
             "OPTIONS /mcp HTTP/1.1\r\nHost: x\r\nOrigin: https://anything.example\r\n\r\n";
         match evaluate_mcp_preflight(headers, &cfg) {
             McpPreflightOutcome::Allow { extra_headers } => {
+                // Wildcard config allows any origin. Since the decision is
+                // shared with the ACP arm, the concrete origin is echoed
+                // exactly once (never combined with a `*` entry — two
+                // Allow-Origin headers break credentialed cross-origin
+                // requests per the Fetch spec).
                 assert!(
-                    extra_headers.contains("Access-Control-Allow-Origin: *"),
-                    "wildcard config must allow any origin, got: {extra_headers:?}"
+                    extra_headers.contains("Access-Control-Allow-Origin: https://anything.example"),
+                    "concrete origin must be echoed, got: {extra_headers:?}"
+                );
+                assert!(
+                    !extra_headers.contains("Access-Control-Allow-Origin: *"),
+                    "must not combine echo with wildcard, got: {extra_headers:?}"
                 );
             }
             McpPreflightOutcome::Reject => panic!("wildcard config must not reject origins"),

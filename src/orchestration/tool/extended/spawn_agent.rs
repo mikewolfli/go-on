@@ -502,8 +502,11 @@ async fn execute_spawn(
                 let blockers = extract_section(&response, "BLOCKERS");
                 let role_str = role.clone().unwrap_or_default();
 
-                // Estimate actual token usage (~4 chars per token for English text)
-                let actual_tokens = (response.len() / 4).max(1) as u64;
+                // Estimate actual token usage via the shared CJK-aware
+                // estimator so budget enforcement agrees with the rest of the
+                // binary (instead of a naive 4-chars/token heuristic).
+                let actual_tokens =
+                    crate::shared::token_estimator::estimate_tokens(&response).max(1) as u64;
                 let budget_exceeded = token_budget.is_some_and(|b| actual_tokens > b);
 
                 // ── BLUE71 §7: lifecycle Completed ──

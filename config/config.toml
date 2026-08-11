@@ -73,11 +73,12 @@ trace_slow_top_n = 20
 evolution_enabled = false
 
 [startup_context]
-[protocol]
-mode = "adaptive"
 enabled = true
 readme_max_chars = 2000
 recent_commits = 5
+
+[protocol]
+mode = "adaptive"
 
 [agents]
 [agents.deepseek]

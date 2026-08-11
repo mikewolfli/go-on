@@ -215,7 +215,7 @@ sqlite3 acp_cache.sqlite3 ".recover" | sqlite3 acp_cache_fixed.sqlite3
 #### 向量存儲問題
 ```bash
 # 檢查 sqlite-vec 可用性
-cargo build --features "sqlite-vec"
+cargo build --features backend-sqlite
 
 # 回退到 JSON 模式
 [vector]

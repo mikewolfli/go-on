@@ -1,5 +1,42 @@
 # Changelog
 
+## [Unreleased] - 2026-08-11
+
+### Round 44 — Super-Deep/Broad Scan XII: 统一架构精炼 (2026-08-11, docs/log/log-20260811-2.md)
+
+#### 链路级统一与行为修复
+
+- **PG 向量维度失配修复（P1）**：`VectorStore::new_with_replica` 在建表迁移后 `ALTER TABLE vector_memory ALTER COLUMN embedding TYPE vector(N)` 对齐运行时 embedding provider 维度（默认 128/1536），消除 migration 固定 `vector(768)` 与默认环境下 upsert 必失败的维度冲突；pg_migrate 注释同步说明。
+- **skill CLI 双套统一**：`go-on skill` 命令改走与服务器一致的持久化 `SkillImportStore`（`skills_cache_dir/index.json`），CLI 与服务端导入互通；`skill import` 修复文档声明的 `github:/url:/local:` 语法（新增 `parse_cli_import_source`，未知格式回退市场按名安装）；list-imported/info/refresh/remove 读取真实数据。
+- **autonomy 主路径缓存回填**：semantic_cache + token_cache 填充块从 fallback-only 分支移到共享后执行路径，autonomy 成功产出同样填充（修第 11 轮非阻断观察）；注释与代码一致。
+- **CapabilityBus ToolBus 技能注册表统一**：`new_acp_server` 将解析后的真实 `SkillRegistry` 注入 ToolBus（`set_skill_registry`），agent_tool_match / tool_bus_skills 可见导入技能（此前为第二份空注册表）。
+- **MemoryBus 后端注入时序修复**：注入块移到 `wire_server`（内部把 capability_bus 克隆进全局）之前，`Arc::get_mut` 真实成功，response_cache/vector_store/semantic_cache 后端实际注入（此前每次启动必警告且永不注入）。
+- **fallback 失败路径记账补齐**：`execute_fallback_agents` 的 `Err` 分支同样调用 `record_agent_intelligence_outcome`（LivePerformanceFeed/consciousness/self-model）+ hyper_resilience `record_failure`，硬失败（超时/配额/provider 错误）不再对 feed 不可见。
+- **CORS preflight 双实现统一**：新增共享 `evaluate_cors_preflight`（`cors.rs`），ACP(200 JSON) 与 MCP(204) 两臂薄委托；修复通配配置下 Allow-Origin 双头缺陷（新 4 单测）；MCP SSE 端点改用配置化 CORS 头（原硬编码 `*` 绕过白名单）。
+- **MCP HTTP 头部读取统一**：内联循环委托共享 `read_http_header`（40 行关键网络代码去重，保留本地化错误映射）；测试改用生产 `parse_http_request`（删除测试辅助函数）。
+- **config 验证报告与硬门禁对齐**：`ConfigValidator::validate` 首行调 `AppConfig::validate()` 映射 Critical；phases 空与 agent 引用按根因去重（精确模板匹配，杜绝子串误伤）。
+
+#### 死代码/冗余清理
+
+- `capability_selector` 移除 retain 后冗余 reorder 调用；`is_mcp_request` 移除 `mcp.initialize` 死分支；`McpServer::new` 收敛为 `#[cfg(test)]` 测试构造器（生产统一 `new_with_acp`）；`estimate_tokens` CLI 包装删除、统一走 `shared::token_estimator`；`prompt_layers`/`spawn_agent` 的 `len()/4` 改共享 CJK 感知估算器；`shared/math.rs` 文件级 `allow(dead_code)` 收窄为函数级；`core/mod.rs` 悬空迁移注释删除；`autonomy` 测试死 ±1 容差断言删除。
+- **hyper_resilience 诚实化**：默认延迟 100ms 改 0.0（"无数据"约定）；`record_execution` 不再伪造 ResourceExhaustion 失败模式（真实原因走 `record_failure_with_mode`）。
+- **重复实现合并**：`copy_dir_recursive`（filesystem/game 双份）收敛到 `tool/extended/utils.rs` 单一实现；`validate_secret_security`（agents/agent.rs 与 core/config/load/env_override.rs 55 行重复）收敛到 `shared/secret_override.rs`（参数化空值错误 key）。
+- **hub 加固**：`handle_rpc` 头部单行 64KiB 上限 + 认证后 Content-Length 10MiB 上限（对齐 ACP/MCP 臂）。
+- **TLS 日志如实化**：证书/密钥加载失败日志改 "aborting TLS startup"（原声称 fallback 实际中止）；mTLS 措辞修正。
+
+#### 文档/数字对齐
+
+- README/zh-CN：lib 测试数 1513→1533、SDK LOC ~4K→~6.9K、工具表 `find`→`search_files`；CHANGELOG/zh-CN 与 log-20260810-4 §12 集成测试数全部修正为实测（transport_parity 18、e2e 8、pua 3、openai_compat 6、i18n 1）；`request.rs` 测试 `len() >= 1` → `is_empty()`（clippy len_zero）。
+
+#### Verification
+
+```
+cargo check 4 profiles + GUI + workspace → zero errors/warnings
+cargo clippy --all-targets -D warnings → zero warnings
+cargo test --lib → 1533 passed / 0 failed / 0 ignored
+cli 9/9 · protocol_parity 5/5 · transport_parity 18/18 · acp_runtime_rpc 27/27 · openai_compat 6/6 · e2e 8/8 · i18n 1/1 · pua_smoke 3/3 · structural 11/11
+```
+
 ## [Unreleased] - 2026-08-10
 
 ### Round 43 — Super-Deep/Broad Scan XI: 统一链路与收敛 (2026-08-10, docs/log/log-20260810-4.md)
@@ -48,8 +85,8 @@
 ```
 cargo check 4 profiles + workspace + GUI → zero errors/warnings
 cargo clippy --all-targets -D warnings → zero warnings
-cargo test --lib → 1513 passed / 0 failed
-structural 11/11 · acp_runtime_rpc 27/27 · protocol_consistency 26/26 · transport_parity 8/8 · e2e 18/18 · cli 9/9 · config_validation 11/11 · pua_smoke 6/6 · protocol_parity 5/5 · openai_compat 3/3 · i18n 18/18
+cargo test --lib → 1527 passed / 0 failed
+structural 11/11 · acp_runtime_rpc 27/27 · protocol_consistency 26/26 · transport_parity 18/18 · e2e 8/8 · cli 9/9 · config_validation 11/11 · pua_smoke 3/3 · protocol_parity 5/5 · openai_compat 6/6 · i18n 1/1
 vscode tsc --noEmit → zero errors · Rust SDK check → zero warnings
 ```
 

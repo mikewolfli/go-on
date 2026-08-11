@@ -2,7 +2,7 @@
 
 ## Overview
 
-Go-On provides a unified tool system built around `ToolRegistry`, `Tool` trait, and `ToolPipeline`. Tools are the primary mechanism for AI agents to interact with the filesystem, execute commands, search code, and perform other operations.
+Go-On provides a unified tool system built around `ToolRegistry`, the `Tool` trait, and the tool executor (`execute_tool_call` / `run_fallback_chain_async`). Tools are the primary mechanism for AI agents to interact with the filesystem, execute commands, search code, and perform other operations.
 
 ## Architecture
 
@@ -13,7 +13,7 @@ ToolRegistry (global singleton)
   └── Aliases (semantic_search → code_index_search)
          │
          ▼
-  ToolPipeline (sequential composition)
+  ToolExecutor (execute_tool_call + fallback chains)
          │
          ▼
   SandboxPolicy (governance gate)
@@ -109,8 +109,8 @@ registry.register_with_profile(
 );
 ```
 
-3. Add to pipeline tool-to-action mapping in `pipeline.rs`.
+3. The registry wires the tool into `execute_tool_call` (with its capability profile's fallback chain handled by `run_fallback_chain_async`).
 
 ## Sandbox Integration
 
-Each tool is classified by action type (read, search, write, shell, network) and checked against the active `SandboxLevel`. See [Governance](../guides/governance.en.md) for details.
+Each tool is classified by action type (read, search, write, shell, network) and checked against the active `SandboxLevel`. See [Governance](../guides/governance.en.md) for details. (Note: the `governance.en.md` guide does not exist yet; the canonical governance docs live in `docs/SAFEGUARD_MODE.md` and the `src/governance/` module.)

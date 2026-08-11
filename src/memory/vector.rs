@@ -1696,6 +1696,16 @@ impl VectorStore {
         // Run base migrations (v2 creates vector_memory + phase_summary).
         run_migrations(&mut conn, 2)?;
 
+        // Align the embedding column with the runtime dimensions. The base
+        // migration (pg_migrate v2) creates a fixed `vector(768)` column, but
+        // the runtime dimension comes from the embedding provider (128 local /
+        // 1536 openai / 768 ollama). Without this re-type every upsert fails
+        // with a pgvector dimension mismatch. It runs at every startup so both
+        // fresh and already-migrated databases converge to the configured dims.
+        let dims_sql =
+            format!("ALTER TABLE vector_memory ALTER COLUMN embedding TYPE vector({dimensions});");
+        conn.batch_execute(&dims_sql)?;
+
         // Dynamic DDL: HNSW index uses the configured dimensions.
         // The base table was created by the migration; the HNSW index
         // is added here since its dimensions are configurable.

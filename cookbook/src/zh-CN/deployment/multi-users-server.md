@@ -147,8 +147,8 @@ min_similarity = 0.7
 # 使用 multi-users-server 配置文件构建
 cargo build --no-default-features -F multi-users-server
 
-# 或显式启用特性
-cargo build --features "backend-postgres postgres pgvector"
+# 或显式启用后端特性（仍然只启用一个后端）：
+cargo build --no-default-features --features backend-postgres
 ```
 
 ### 系统要求

@@ -160,6 +160,52 @@ pub fn build_preflight_response_headers(
     headers
 }
 
+/// Decision of a CORS preflight (`OPTIONS`) request.
+pub enum CorsPreflightDecision {
+    /// Origin is outside the whitelist — the caller responds 403 with no CORS headers.
+    Reject,
+    /// Origin is allowed — the caller responds with this raw header block.
+    Allow { extra_headers: String },
+}
+
+/// Evaluate a CORS preflight request against `config`.
+///
+/// Shared by the ACP HTTP arm (`handle_cors_preflight` in
+/// `acp/impl/runtime/http.rs`) and the MCP HTTP arm (`evaluate_mcp_preflight`
+/// in `protocol/mcp_server.rs`) so both produce identical decisions; only the
+/// wire response shape (200 JSON vs 204 No Content) differs per protocol.
+/// `Access-Control-Allow-Origin` is emitted exactly once — when a concrete
+/// origin matches, its echo wins over the helper's wildcard entry.
+pub fn evaluate_cors_preflight(
+    origin: Option<&str>,
+    request_headers: Option<&str>,
+    config: &CorsConfig,
+) -> CorsPreflightDecision {
+    let allow_origin = origin.filter(|o| is_origin_allowed(o, config));
+
+    if allow_origin.is_none() && !config.allowed_origins.iter().any(|o| o == "*") {
+        return CorsPreflightDecision::Reject;
+    }
+
+    let preflight_headers = build_preflight_response_headers(request_headers, config);
+    let origin_val = allow_origin.unwrap_or("*").to_string();
+
+    let mut extra = format!("Access-Control-Allow-Origin: {}\r\n", origin_val);
+    for (k, v) in &preflight_headers {
+        if k == "Access-Control-Allow-Origin" {
+            // Always skip the helper's Allow-Origin entry: it only emits a
+            // wildcard when "*" is configured, which would otherwise produce
+            // two Allow-Origin headers (echo + wildcard) on the wire.
+            continue;
+        }
+        extra.push_str(&format!("{}: {}\r\n", k, v));
+    }
+
+    CorsPreflightDecision::Allow {
+        extra_headers: extra,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -351,6 +397,87 @@ mod tests {
                     .expect("allowed headers should be present")
                     .is_empty()
         );
+    }
+
+    // -- evaluate_cors_preflight (shared decision) --------------------------
+
+    /// Count occurrences of a header in a raw header block.
+    fn raw_header_count(block: &str, name: &str) -> usize {
+        block
+            .lines()
+            .filter(|l| {
+                l.to_ascii_lowercase()
+                    .starts_with(&format!("{}:", name.to_ascii_lowercase()))
+            })
+            .count()
+    }
+
+    #[test]
+    fn preflight_wildcard_with_concrete_origin_emits_allow_origin_exactly_once() {
+        // Regression: with "*" configured the helper also emits a wildcard
+        // Allow-Origin entry; the decision must never combine it with the
+        // echoed concrete origin (two Allow-Origin headers break credentialed
+        // cross-origin requests per the Fetch spec).
+        let config = wildcard_config();
+        let decision = evaluate_cors_preflight(Some("https://app.go-on.dev"), None, &config);
+        let CorsPreflightDecision::Allow { extra_headers } = decision else {
+            panic!("wildcard config must allow any origin");
+        };
+        assert_eq!(
+            raw_header_count(&extra_headers, "Access-Control-Allow-Origin"),
+            1,
+            "Allow-Origin must appear exactly once, got: {extra_headers:?}"
+        );
+        assert!(extra_headers.contains("Access-Control-Allow-Origin: https://app.go-on.dev"));
+        assert!(!extra_headers.contains("Access-Control-Allow-Origin: *"));
+    }
+
+    #[test]
+    fn preflight_wildcard_without_origin_emits_star_once() {
+        let config = wildcard_config();
+        let decision = evaluate_cors_preflight(None, None, &config);
+        let CorsPreflightDecision::Allow { extra_headers } = decision else {
+            panic!("wildcard config must allow missing origin");
+        };
+        assert_eq!(
+            raw_header_count(&extra_headers, "Access-Control-Allow-Origin"),
+            1,
+            "Allow-Origin must appear exactly once, got: {extra_headers:?}"
+        );
+        assert!(extra_headers.contains("Access-Control-Allow-Origin: *"));
+    }
+
+    #[test]
+    fn preflight_whitelisted_origin_echoes_concrete_value_once() {
+        let config = CorsConfig {
+            allowed_origins: vec!["https://app.go-on.dev".to_string()],
+            ..CorsConfig::default()
+        };
+        let decision =
+            evaluate_cors_preflight(Some("https://app.go-on.dev"), Some("X-Api-Key"), &config);
+        let CorsPreflightDecision::Allow { extra_headers } = decision else {
+            panic!("whitelisted origin must be allowed");
+        };
+        assert_eq!(
+            raw_header_count(&extra_headers, "Access-Control-Allow-Origin"),
+            1,
+            "Allow-Origin must appear exactly once, got: {extra_headers:?}"
+        );
+        assert!(extra_headers.contains("Access-Control-Allow-Origin: https://app.go-on.dev"));
+        assert!(!extra_headers.contains("Access-Control-Allow-Origin: *"));
+        assert!(extra_headers.contains("Access-Control-Allow-Headers: X-Api-Key"));
+    }
+
+    #[test]
+    fn preflight_disallowed_origin_is_rejected() {
+        let config = CorsConfig {
+            allowed_origins: vec!["https://app.go-on.dev".to_string()],
+            ..CorsConfig::default()
+        };
+        assert!(matches!(
+            evaluate_cors_preflight(Some("https://evil.example"), None, &config),
+            CorsPreflightDecision::Reject
+        ));
     }
 
     // -- Default config construction ---------------------------------------

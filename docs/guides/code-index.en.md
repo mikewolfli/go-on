@@ -71,4 +71,4 @@ Results include a relevance score:
 
 - Skips `target/`, `node_modules/`, `.git/` and other build artifact directories
 - Max 10,000 files per workspace (configurable in source)
-- Index is memory-only (JSON persistence planned for a future release)
+- Index is persisted to `{cache_dir}/code_index.msgpack.zst` (compressed messagepack with a JSON fallback), refreshed on workspace changes

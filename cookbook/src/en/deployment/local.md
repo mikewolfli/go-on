@@ -79,7 +79,7 @@ otel_endpoint = "http://localhost:4317"
 Local mode (`local`) enables the following Cargo features:
 - `backend-sqlite`: SQLite database support
 - `rusqlite`: SQLite bindings with bundled SQLite
-- `sqlite-vec`: Vector extension for SQLite (optional)
+- `backend-sqlite`: SQLite backend (rusqlite + sqlite-vec)
 
 ## Installation
 
@@ -207,7 +207,7 @@ sqlite3 acp_cache.sqlite3 ".recover" | sqlite3 acp_cache_fixed.sqlite3
 #### Vector Store Issues
 ```bash
 # Check sqlite-vec availability
-cargo build --features "sqlite-vec"
+cargo build --features backend-sqlite
 ```
 
 The vector store resolves its mode automatically: in the `local` profile it falls

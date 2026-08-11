@@ -40,8 +40,17 @@ Select SafeGuard mode when you want:
 
 ### API
 ```rust
-// In orchestrator or mode selector:
-let runtime = select_mode_runtime("safeguard");
+// Resolve a mode runtime by name ("ask" | "plan" | "edit" |
+// "full_auto" | "safeguard"). Signature:
+//   resolve_mode_runtime(mode, registry: Option<Arc<AgentRegistry>>,
+//                       agent_name: Option<String>) -> Result<Box<dyn ModeRuntime>, String>
+let runtime = resolve_mode_runtime(
+    "safeguard",
+    Some(registry.clone()),
+    Some("agent-name".to_string()),
+    // Note: `ModeKind::SafeGuard` is also resolvable via
+    // `resolve_mode_runtime_with_posture(..., posture)`.
+)?;
 
 // Check if operation is high-risk:
 if runtime.is_high_risk_operation("delete user table") {
@@ -58,8 +67,8 @@ if runtime.is_high_risk_operation("delete user table") {
 Automation Level Scale (by max tool calls)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Ask        (0)     ▁ Minimal - requires approval for all
-Edit       (5)     ▂ Low - constrained edits only  
-Agent      (20)    ▃ Medium - automatic with selective checks
+Plan       (3)     ▁ Planning only - no execution
+Edit       (20)    ▂ Low - constrained edits only
 SafeGuard  (30)    ▄ High - mostly automatic, approval for dangerous ops ⭐
 FullAuto   (50)    ▅ Maximum - fully automatic, no approvals needed
 ```
@@ -80,34 +89,32 @@ FullAuto   (50)    ▅ Maximum - fully automatic, no approvals needed
 
 ## Mode Comparison
 
-| Feature | Ask | Edit | Agent | FullAuto | SafeGuard |
-|---------|-----|------|-------|----------|-----------|
-| Auto Execution | No | No | Yes | Yes | Yes |
-| User Approval Required | Always | For all | No | No | For high-risk ops only |
-| Max Tool Calls | 0 | 5 | 20 | 50 | 30 |
+| Feature | Ask | Plan | Edit | FullAuto | SafeGuard |
+|---------|-----|------|------|----------|-----------|
+| Auto Execution | No | No | No | Yes | Yes |
+| User Approval Required | Always | Always | For all | No | For high-risk ops only |
+| Max Tool Calls | 0 | 3 | 20 | 50 | 30 |
 | Risk Detection | N/A | N/A | Basic | None | Advanced |
-| Use Case | Quick confirmation | Constrained edits | Hands-off tasks | Full automation | Balanced safety |
+| Use Case | Quick confirmation | Step-by-step planning | Constrained edits | Full automation | Balanced safety |
 
 ## Implementation Details
 
 ### Code Location
-- Mode trait extension: [src/mode.rs](src/mode.rs)
+- Mode trait extension: [src/orchestration/mode.rs](src/orchestration/mode.rs)
   - Added `is_high_risk_operation()` method to ModeRuntime trait
   - All existing modes have default implementation
   - SafeGuard mode provides comprehensive risk detection
   
-- Orchestrator integration: [src/orchestrator.rs](src/orchestrator.rs)
-  - `select_mode_runtime()` updated to recognize "safeguard" mode
+- Orchestrator integration: [src/orchestration/orchestrator.rs](src/orchestration/orchestrator.rs)
+  - `resolve_mode_runtime()` (src/orchestration/mode.rs) recognizes "safeguard"
   - Imports SafeGuardModeRuntime
 
 ### Mode Configuration
-```toml
-# In config.toml
-[[modes]]
-name = "safeguard"
-description = "Automatic with high-risk confirmation"
-default_phase = "coding"
-```
+
+Modes (`Ask` / `Plan` / `Edit` / `SafeGuard` / `FullAuto`) are defined in code
+(`src/orchestration/mode.rs` `ModeKind`); there is no `[[modes]]` config table.
+Select a mode at runtime via `mode = "..."` in the request, the GUI mode
+selector, or Zed's `go-on` agent mode mapping.
 
 ## Future Enhancements
 
@@ -131,6 +138,5 @@ cargo test safeguard
 
 ## See Also
 
-- [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) - Phase 10 tracking
 - [RULES.md](RULES.md) - Code review standards
-- [src/mode.rs](src/mode.rs) - Mode runtime implementations
+- [src/orchestration/mode.rs](src/orchestration/mode.rs) - Mode runtime implementations

@@ -3,7 +3,7 @@
 //! Provides simple utility operations that don't fit into other tool categories.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rand::RngExt;
@@ -12,6 +12,31 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
+
+// ── Shared filesystem helpers ──────────────────────────────────────────────
+
+/// Recursively copy a directory tree (`cp -r` semantics).
+///
+/// Single shared implementation — previously duplicated byte-for-byte in
+/// `filesystem.rs` (CopyPathTool) and `game.rs` (GameModInstallTool, under
+/// `game-modding`).
+pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst).context("failed to create destination directory")?;
+    for entry in fs::read_dir(src).context("failed to read source directory")? {
+        let entry = entry?;
+        let entry_type = entry.file_type()?;
+        let file_name = entry.file_name();
+        let src_path = entry.path();
+        let dst_path = dst.join(&file_name);
+
+        if entry_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path).context("failed to copy file in directory")?;
+        }
+    }
+    Ok(())
+}
 
 // ── UUID Generator ──────────────────────────────────────────────────────────
 

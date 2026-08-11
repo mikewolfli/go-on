@@ -1267,39 +1267,6 @@ pub(crate) async fn act_phase(
             return Err(err);
         }
 
-        // Semantic cache populate
-        if !cache_hit && !response_text.is_empty() && !cache_bypassed_for_execution {
-            // Clone BEFORE acquiring write lock to minimize critical section.
-            let cached_response = Value::String(response_text.clone());
-            server
-                .cache_deps
-                .cache
-                .semantic_cache
-                .write()
-                .unwrap_or_else(|p| p.into_inner())
-                .put(&input_text, cached_response);
-
-            // Token cache populate (multi-level: L1 exact + L2 semantic + L3
-            // durable). Previously only the fallback/secondary paths wrote to
-            // the token cache, so the primary execution path never filled the
-            // cache it reads on the next request.
-            let token_cache = server.cache_deps.cache.token_cache.clone();
-            let model_name = selected_model_name.clone();
-            let agent_for_cache = if selected_agent.is_empty() {
-                None
-            } else {
-                Some(selected_agent.clone())
-            };
-            crate::acp::helpers::cache_strategy::store_async(
-                token_cache,
-                input_text.clone(),
-                response_text.clone(),
-                crate::intelligence::token_cache::estimate_token_count(&response_text),
-                agent_for_cache,
-                model_name,
-            );
-        }
-
         // Post-success cleanup
         if let Some(ref primary) = routing_out.configured_primary_agent {
             if selected_agent == *primary {
@@ -1316,6 +1283,41 @@ pub(crate) async fn act_phase(
                 success: true,
                 duration_ms: started.elapsed().as_millis() as u64,
             });
+    }
+
+    // Semantic + token cache populate — runs for ALL successful execution
+    // paths (autonomy loop and fallback). Previously this block lived inside
+    // the fallback-only branch, so autonomy-produced responses never filled
+    // the caches they read on the next request.
+    if !cache_hit && !response_text.is_empty() && !cache_bypassed_for_execution {
+        // Clone BEFORE acquiring write lock to minimize critical section.
+        let cached_response = Value::String(response_text.clone());
+        server
+            .cache_deps
+            .cache
+            .semantic_cache
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .put(&input_text, cached_response);
+
+        // Token cache populate (multi-level: L1 exact + L2 semantic + L3
+        // durable) so the primary execution path fills the cache it reads
+        // on the next request.
+        let token_cache = server.cache_deps.cache.token_cache.clone();
+        let model_name = selected_model_name.clone();
+        let agent_for_cache = if selected_agent.is_empty() {
+            None
+        } else {
+            Some(selected_agent.clone())
+        };
+        crate::acp::helpers::cache_strategy::store_async(
+            token_cache,
+            input_text.clone(),
+            response_text.clone(),
+            crate::intelligence::token_cache::estimate_token_count(&response_text),
+            agent_for_cache,
+            model_name,
+        );
     }
 
     // Persistence + post-execute verification — run for ALL successful execution

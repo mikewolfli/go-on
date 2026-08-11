@@ -500,7 +500,11 @@ pub(crate) fn inspect_secret_pool(secret_ref: &str, field_name: &str) -> Result<
     }
 
     for candidate in &candidates {
-        validate_secret_security(candidate, field_name)?;
+        crate::shared::secret_override::validate_secret_security(
+            candidate,
+            field_name,
+            "error.agent_empty_field",
+        )?;
     }
 
     Ok(candidates)
@@ -1259,61 +1263,6 @@ pub(crate) fn resolve_secret(secret_ref: &str, field_name: &str) -> Result<Strin
     let candidates = inspect_secret_pool(secret_ref, field_name)?;
     let index = pick_secret_pool_index(field_name, candidates.len());
     Ok(candidates[index].clone())
-}
-
-/// Validate secret safety.
-///
-/// # Arguments
-/// * `secret` - Secret value to validate.
-/// * `field_name` - Field name used in warnings and errors.
-///
-/// # Returns
-/// * `Result<()>` - Ok if checks pass, error on invalid values.
-fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
-    if secret.trim().is_empty() {
-        anyhow::bail!(
-            "{}",
-            tf("error.agent_empty_field", &[("field", field_name)])
-        );
-    }
-
-    // Detect newline characters (possible multiline secret or injection attempt)
-    if secret.contains('\n') || secret.contains('\r') {
-        warn!(
-            "{} contains newline characters, which may be a security issue",
-            field_name
-        );
-    }
-
-    // Check minimum secret length
-    if secret.len() < 8 {
-        warn!(
-            "{} is very short ({} characters), which may be insecure",
-            field_name,
-            secret.len()
-        );
-    }
-
-    // Detect common insecure patterns
-    let insecure_patterns = [
-        ("password", "contains the word 'password'"),
-        ("123456", "contains simple numeric sequence"),
-        ("admin", "contains the word 'admin'"),
-        ("test", "contains the word 'test'"),
-        ("secret", "contains the word 'secret'"),
-    ];
-
-    let secret_lower = secret.to_lowercase();
-    for (pattern, description) in insecure_patterns {
-        if secret_lower.contains(pattern) {
-            warn!(
-                "{} {} - consider using a stronger secret",
-                field_name, description
-            );
-        }
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

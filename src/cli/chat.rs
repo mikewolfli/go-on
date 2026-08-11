@@ -266,12 +266,6 @@ fn classify_token(token: &str) -> TokenKind<'_> {
     TokenKind::Content
 }
 
-/// Estimate token count from text using the canonical CJK/ASCII-weighted
-/// estimator (see [`crate::shared::token_estimator::estimate_tokens`]).
-pub fn estimate_tokens(text: &str) -> usize {
-    crate::shared::token_estimator::estimate_tokens(text)
-}
-
 /// Track cumulative token usage and cost across the session.
 #[derive(Default, Clone, Serialize, Deserialize)]
 struct TokenTracker {
@@ -1129,7 +1123,10 @@ fn display_stats(messages: &[Message], token_tracker: &TokenTracker) {
 
 fn display_context(messages: &[Message]) {
     let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
-    let est_tokens: usize = messages.iter().map(|m| estimate_tokens(&m.content)).sum();
+    let est_tokens: usize = messages
+        .iter()
+        .map(|m| crate::shared::token_estimator::estimate_tokens(&m.content))
+        .sum();
     let system_msgs = messages.iter().filter(|m| m.role == "system").count();
     eprintln!("{}", t("cli.chat.context_header"));
     eprintln!(
@@ -2068,7 +2065,10 @@ async fn run_agent_with_tools(
     mode_runtime: Option<&dyn ModeRuntime>,
 ) -> Result<(String, usize, usize)> {
     // ── Estimate prompt tokens from existing messages using CJK-aware estimator ──
-    let estimated_prompt_tokens: usize = messages.iter().map(|m| estimate_tokens(&m.content)).sum();
+    let estimated_prompt_tokens: usize = messages
+        .iter()
+        .map(|m| crate::shared::token_estimator::estimate_tokens(&m.content))
+        .sum();
 
     // ── Phase 1: Agent streaming with Ctrl+C interrupt + reasoning + markdown ──
     let (mut response, tool_calls) =
@@ -2079,7 +2079,8 @@ async fn run_agent_with_tools(
     let (filtered_calls, early_exit) = safeguard_approval(&filtered_calls, mode_runtime)?;
     if early_exit {
         // Cancelled by SafeGuard: the agent already consumed the prompt tokens.
-        let estimated_completion_tokens = estimate_tokens(&response);
+        let estimated_completion_tokens =
+            crate::shared::token_estimator::estimate_tokens(&response);
         return Ok((
             response,
             estimated_prompt_tokens,
@@ -2126,7 +2127,7 @@ async fn run_agent_with_tools(
         "terminal chat turn completed"
     );
 
-    let estimated_completion_tokens = estimate_tokens(&response);
+    let estimated_completion_tokens = crate::shared::token_estimator::estimate_tokens(&response);
     Ok((
         response,
         estimated_prompt_tokens,

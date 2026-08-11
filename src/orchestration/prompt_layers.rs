@@ -61,7 +61,10 @@ impl PromptAssembler {
             .collect::<Vec<_>>()
             .join("\n\n");
 
-        let token_estimate = assembled.len() / 4;
+        // Delegate to the shared CJK-aware estimator so prompt-layer token
+        // accounting agrees with the rest of the binary (CLI, compression,
+        // cache sizing) instead of a naive chars/4 heuristic.
+        let token_estimate = crate::shared::token_estimator::estimate_tokens(&assembled);
 
         LayeredPrompt {
             segments: sorted,
