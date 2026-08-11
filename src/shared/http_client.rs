@@ -4,6 +4,20 @@
 //! single lazily-initialized `OnceLock` static so all subsystems (alert
 //! manager webhooks, security advisor digests, vault rotator, proxy-detecting
 //! GitHub client, etc.) share a common connection pool and default timeout.
+//!
+//! # Intentional exceptions (do NOT fold into these singletons)
+//!
+//! A handful of call sites deliberately build their own clients because the
+//! shared 30s timeout ceiling / `http1_only()` / redirect policy / proxy
+//! probing would break them — these are config isolation, not drift:
+//!   - `cli/chat.rs` and `main/server.rs`: SSE streams need a long timeout
+//!     (300s / 120s) and `http1_only()` (avoids DeepSeek HTTP/2 stream reset).
+//!   - `tool/extended/http.rs`: `redirect(10)` + no timeout (tool semantics).
+//!   - `runtime_pack.rs`: proxy-probing GitHub client (env-key cached).
+//!   - `skill_market.rs` / `skill_import.rs`: dedicated timeouts/UAs.
+//!   - `crates/go-on-web-search` and the GUI build their own per-crate clients.
+//!
+//! See docs/log/log-20260811-6.md (debt #4 verdict: keep).
 
 use std::sync::OnceLock;
 use std::time::Duration;

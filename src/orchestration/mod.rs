@@ -1,8 +1,6 @@
 pub mod autonomy_runtime;
 pub mod brain_loop; // F-GAP-17 (flat, legacy — kept for backward compatibility; use `r#loop` for new code)
-pub mod bulkhead;
-
-pub mod plan_output; // BLUE68 P1-7: Bulkhead pattern for LLM provider/tool executor
+pub mod bulkhead; // BLUE68 P1-7: Bulkhead pattern for LLM provider/tool executor
 
 pub mod context;
 pub mod core_dag; // DAG-UNIFY: Unified generic DAG

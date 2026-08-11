@@ -413,7 +413,7 @@ pub async fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (
     // Delphi-debate proposal and the rationalization threshold below (they
     // previously maintained two separate keyword sets that disagreed).
     //
-    // RISK-KEYWORD CROSS-REFERENCE (F8): evaluated — there are six overlapping
+    // RISK-KEYWORD CROSS-REFERENCE (F8): evaluated — there are five overlapping
     // keyword sources in the codebase and their semantics are mutually
     // incompatible (ratio / additive / boolean / weighted-max), so they are NOT
     // merged; forcing a merge would change behavior:
@@ -423,12 +423,13 @@ pub async fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (
     //      additive scoring (0.10/0.20/0.30) with word-boundary matching;
     //   3. `TaskRouter::analyze_task().has_safety_concerns`
     //      (src/orchestration/task_router.rs) — single boolean flag;
-    //   4. `extract_plan_from_response` (src/orchestration/plan_output.rs) —
-    //      keyword→weight pairs combined with `max()`;
-    //   5. voters (src/intelligence/voter_impls.rs) — per-voter boolean
+    //   4. (removed 2026-08-11: plan_output module deleted — it was a write-
+    //      only reserve with no consumer; risk scoring for plans is covered
+    //      by the voting/plan keyword tables if re-activated later);
+    //   4. voters (src/intelligence/voter_impls.rs) — per-voter boolean
     //      presence sets (CapabilityBusVoter security/performance,
     //      LocalVoter proposal/risk/positive);
-    //   6. `AdversarialVerifier::verify` Security bias
+    //   5. `AdversarialVerifier::verify` Security bias
     //      (src/intelligence/verification.rs) — per-finding anti-pattern
     //      detectors, not a scoring table.
     // Unified typed classifier is the consolidation direction, but evaluation

@@ -31,6 +31,9 @@ jobs:
           touch config/sqlite3/acp_cache.sqlite3
           touch config/sqlite3/acp_vector.sqlite3
 
+      - name: Validate i18n catalogs (backend / GUI / vscode key sets)
+        run: python3 scripts/validate-i18n.py
+
       - name: Check (all targets, locked)
         run: cargo check --all-targets --locked
       - name: Check (simple-server profile)

@@ -130,13 +130,25 @@ curl http://127.0.0.1:8090/health
 # Build image
 docker build -f deploy/simple-server/Dockerfile -t go-on:simple .
 
-# Run with docker compose
+# Run with docker compose (keys come from the environment / an .env file)
+export GO_ON_ENTRY_API_KEY="generate-a-random-64-char-secret"
+export DEEPSEEK_API_KEY="sk-xxxxx"
 docker compose -f deploy/simple-server/docker-compose.yml up -d
-
-# With API keys
-DEEPSEEK_API_KEY=sk-xxx \
-  docker compose -f deploy/simple-server/docker-compose.yml up -d
 ```
+
+Required environment variables (the compose file fails fast if missing):
+
+| Variable | Required | Purpose |
+|----------|:--------:|---------|
+| `GO_ON_ENTRY_API_KEY` | ✅ | Gateway auth (entry_auth_enabled = true) |
+| `DEEPSEEK_API_KEY` | ✅ | deepseek agent (template reads this env name) |
+| `OPENAI_API_KEY` | optional | copilot agent (gpt-4o) |
+| `ANTHROPIC_API_KEY` | optional | unused by the simple template |
+
+> The simple-server template reads provider keys from environment variables
+> (keyring is not available inside containers). OpenTelemetry is enabled in the
+> template but this compose does not provision a collector — see the NOTE at
+> the bottom of `docker-compose.yml` for how to disable it.
 
 ## 5. Operations
 

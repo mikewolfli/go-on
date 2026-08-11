@@ -118,9 +118,11 @@ api_key_env = "DEEPSEEK_API_KEY"
 model = "deepseek-v4-flash"
 supports_system = true
 
+# Server profile: provider keys come from environment variables (docker-compose
+# passes OPENAI_API_KEY); the keyring URI is for desktop/local profiles.
 [agents.copilot]
 type = "copilot"
-api_key_env = "keyring://go-on/copilot_api_key"
+api_key_env = "OPENAI_API_KEY"
 model = "gpt-4o"
 supports_system = true
 

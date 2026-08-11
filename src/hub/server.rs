@@ -53,7 +53,13 @@ impl HubServer {
         use rand::Rng;
         rand::rng().fill_bytes(&mut seed);
         let hub_id = format!("hub_{}", hex::encode(seed));
-        let api_token = hex::encode(rand::random::<[u8; 32]>());
+        // Prefer the cluster-wide auth token (the same one the distributed
+        // memory bus sends as Bearer via `GOON_MEMORY_AUTH_TOKEN`), so peers
+        // pushing `memory.ingest` to this hub authenticate successfully.
+        // A purely random per-process token would never match the bus's token
+        // and the ingest arm would always reject with 401.
+        let api_token = std::env::var("GOON_MEMORY_AUTH_TOKEN")
+            .unwrap_or_else(|_| hex::encode(rand::random::<[u8; 32]>()));
 
         Ok(Self {
             hub_id,

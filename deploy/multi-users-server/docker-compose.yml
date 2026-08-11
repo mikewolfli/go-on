@@ -9,18 +9,23 @@ services:
     container_name: go-on-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: goon
+      # Defaults must match the DSN in the go-on service below; override both
+      # DB_USER / DB_NAME together in .env if you want a non-`goon` user/db.
+      POSTGRES_USER: ${DB_USER:-goon}
       POSTGRES_PASSWORD: ${DB_PASS:?must be set}
-      POSTGRES_DB: goon
+      POSTGRES_DB: ${DB_NAME:-goon}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U goon"]
+      # Same DB_USER default as POSTGRES_USER above; compose substitutes the
+      # variable (or `goon`) before the shell runs.
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-goon}"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
     deploy:
       resources:
         limits:
@@ -32,8 +37,6 @@ services:
     build:
       context: ../..
       dockerfile: deploy/multi-users-server/Dockerfile
-      args:
-        - BUILDKIT_PROGRESS=plain
     image: go-on:multi
     container_name: go-on-multi
     restart: unless-stopped
@@ -52,7 +55,9 @@ services:
       # → PG_DSN → GO_ON_DATABASE_URL). This activates the PostgreSQL backend
       # that the compose file already provisions. (The legacy DB_HOST/DB_PORT/
       # DB_USER/DB_PASS/DB_NAME variables are NOT read by the binary.)
-      - GO_ON_PG_CONNECTION_STRING=postgres://${DB_USER}:${DB_PASS}@postgres-db:5432/${DB_NAME}?sslmode=disable
+      # Defaults (goon/goon) mirror the postgres-db service above so setting
+      # only DB_PASS in .env yields a working DSN.
+      - GO_ON_PG_CONNECTION_STRING=postgres://${DB_USER:-goon}:${DB_PASS}@postgres-db:5432/${DB_NAME:-goon}?sslmode=disable
       - GO_ON_ENTRY_API_KEY=${GO_ON_ENTRY_API_KEY:?must be set}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:?must be set}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -75,6 +80,13 @@ services:
     container_name: go-on-otel
     restart: unless-stopped
     command: ["--config=/etc/otel-collector-config.yaml"]
+    # NOTE: the go-on service reads `otel_endpoint` from the mounted config
+    # (config/config.multi-users-server.toml → /opt/go-on/config.toml) and the
+    # template points at `http://localhost:4317`, which inside the container
+    # refers to the go-on container itself — telemetry would NOT reach this
+    # collector. When using the observability profile, edit the mounted config
+    # to `otel_endpoint = "http://otel-collector:4317"` (service name on the
+    # compose network). The backend does not read an OTLP endpoint env var.
     volumes:
       - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
     ports:

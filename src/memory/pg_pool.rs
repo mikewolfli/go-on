@@ -82,6 +82,14 @@ pub(crate) struct PgPoolPair {
 /// block on from any thread — runtime worker, blocking pool, or plain sync.
 /// Created once and reused to avoid per-call runtime construction overhead.
 ///
+/// Note on serialization: tokio's `Runtime::block_on` allows concurrent
+/// callers, but the shared single-thread driver (IO/timer) is held by one
+/// `block_on` at a time, so concurrent `pool_get` calls serialize during the
+/// connection-acquire phase (semaphore wait + occasional connect). SQL queries
+/// run outside this block on the returned sync `postgres::Client`, so the
+/// serialized window is bounded to acquisition only. Benchmarks before any
+/// simplification: docs/log/log-20260811-6.md (debt #5 verdict).
+///
 /// This function is **not re-entrant**: while the current thread is blocked on
 /// [`FALLBACK_RT`] it *is* the runtime's worker, and a nested `pool_get` on
 /// that same thread would deadlock the current-thread runtime. `pool_get`

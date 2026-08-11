@@ -272,7 +272,6 @@ mod tests {
             phase: None,
             options: None,
             vector_hits: None,
-            plan_output: None,
             model: None,
             temperature: None,
             max_tokens: None,

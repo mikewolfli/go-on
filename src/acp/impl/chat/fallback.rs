@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::warn;
 
-use crate::acp::helpers::cache_strategy::store_async;
 use crate::acp::helpers::context::request_timeout;
 use crate::acp::server::{AcpServer, OutcomeEvent};
 use crate::agent::Message;
@@ -422,24 +421,12 @@ pub(crate) async fn execute_fallback_agents(
                     selected_model_name = Some(m.clone());
                 }
 
-                // Store in token cache
-                let input_text =
-                    crate::intelligence::token_cache::messages_to_text(&agent_messages);
-                let token_count =
-                    crate::intelligence::token_cache::estimate_token_count(&output_text);
-                let cache = server.cache_deps.cache.token_cache.clone();
-                let model_name = base_agent_options
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                store_async(
-                    cache,
-                    input_text,
-                    output_text.clone(),
-                    token_count,
-                    Some(agent_name.clone()),
-                    model_name,
-                );
+                // NOTE: token-cache population is intentionally NOT done here.
+                // act_phase (chat_phases.rs) populates the token/semantic caches
+                // for ALL successful execution paths (autonomy loop and fallback)
+                // with the final merged output and the `cache_bypassed_for_execution`
+                // gate. Storing again here with the same agent_messages would be a
+                // duplicate L1 write and an un-deduplicated L2 entry per request.
 
                 last_err = None;
                 break; // First success wins

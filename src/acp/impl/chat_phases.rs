@@ -210,6 +210,14 @@ pub(crate) async fn observe_phase(
     //   1. Block (HIGH/CRITICAL across ANY message) — reject the request
     //   2. Sanitize (MEDIUM/LOW) — replace injection spans with inert markers
     //   3. Log only — contaminations are recorded for audit
+    //
+    // This is the pipeline's per-message sanitizing pass, distinct from the
+    // pre-pipeline escalation gate in `evaluate_pre_chat_gates` (chat.rs),
+    // which scans the raw full history for ANY violation to escalate approval.
+    // The inputs differ (pre-trim full history vs this compressed/trimmed
+    // working set) and the severity policies differ (any-violation vs High+
+    // block) — deliberate defense-in-depth, not a duplicate scan
+    // (debt #12 verdict: keep).
     if let Some(ref detector) = server.governance_deps.injection_detector {
         use crate::security::severity::DetectionSeverity as InjectionSeverity;
 

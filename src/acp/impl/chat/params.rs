@@ -10,7 +10,6 @@ use serde_json::Value;
 use crate::acp::r#impl::UserSession;
 use crate::agent::Message;
 use crate::config::PhaseOptions;
-use crate::orchestration::plan_output::PlanOutput;
 
 /// Chat parameters structure
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -32,11 +31,6 @@ pub struct ChatParams {
     pub options: Option<PhaseOptions>,
     /// Optional vector search hits
     pub vector_hits: Option<Vec<Value>>,
-    /// Optional plan output from Plan mode — used to hand off to execution modes.
-    /// When present, the execution mode (Edit/SafeGuard/FullAuto) receives
-    /// the structured plan as context for task execution.
-    #[serde(default)]
-    pub plan_output: Option<PlanOutput>,
     /// Legacy top-level model override (pre-`options.model` payloads).
     /// Mapped into `options.extra` by the HTTP layer so the pipeline honors
     /// it; kept for backward compatibility with older SDK clients.

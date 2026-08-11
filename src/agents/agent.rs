@@ -849,18 +849,12 @@ impl AgentRegistry {
                 self.agents.remove(&oldest);
             }
         }
-        // When enable_token_cache is true and a token cache is configured,
-        // auto-wrap the agent with CachedAgentWrapper so that all chat()
-        // calls go through the multi-level token cache.
-        let agent = if let Ok(guard) = self.token_cache.read() {
-            if let Some(ref cache) = *guard {
-                Arc::new(CachedAgentWrapper::new(agent, Arc::clone(cache))) as Arc<dyn Agent>
-            } else {
-                agent
-            }
-        } else {
-            agent
-        };
+        // NOTE: no CachedAgentWrapper here — wrapping is a `get()`/`all()`
+        // responsibility. The cache-managed call paths (ACP chat phases)
+        // resolve raw agents via `get_unwrapped`/`all_unwrapped` so agent
+        // execution does not trigger a second lookup/store per call; wrapping
+        // at registration time would silently re-introduce that double path
+        // for `get_unwrapped` consumers once a token cache is configured.
         self.agents.insert(name, agent);
     }
 

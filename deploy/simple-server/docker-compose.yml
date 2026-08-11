@@ -6,8 +6,6 @@ services:
     build:
       context: ../..
       dockerfile: deploy/simple-server/Dockerfile
-      args:
-        - BUILDKIT_PROGRESS=plain
     image: go-on:simple
     container_name: go-on-simple
     restart: unless-stopped
@@ -18,8 +16,11 @@ services:
       - ../../config/config.simple-server.toml:/opt/go-on/config.toml:ro
     environment:
       - RUST_LOG=warn
-      - GO_ON_ENTRY_API_KEY=${GO_ON_ENTRY_API_KEY:-change-me}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      # The mounted config.simple-server.toml enables entry auth and reads
+      # provider keys from these env names (keyring is not available inside
+      # containers), so the gateway key and the DeepSeek key are required.
+      - GO_ON_ENTRY_API_KEY=${GO_ON_ENTRY_API_KEY:?must be set}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:?must be set}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     healthcheck:
@@ -34,6 +35,15 @@ services:
           memory: 2G
         reservations:
           memory: 512M
+
+# NOTE on OpenTelemetry: config.simple-server.toml ships with
+# `otel_enabled = true` / `otel_endpoint = "http://localhost:4317"`, but this
+# compose file does not provision a collector — inside the container that
+# endpoint is the go-on container itself, so OTLP export just logs a warning
+# (non-fatal). To silence it, edit the mounted config to
+# `otel_enabled = false`; to enable tracing, add an otel-collector service
+# (see deploy/multi-users-server/docker-compose.yml) and point the config at
+# `http://otel-collector:4317`.
 
 volumes:
   go-on-data:

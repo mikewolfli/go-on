@@ -356,7 +356,6 @@ fn openai_to_chat_params(req: &OpenAiChatRequest) -> ChatParams {
         phase: None,
         options,
         vector_hits: None,
-        plan_output: None,
         model: None,
         temperature: None,
         max_tokens: None,
@@ -1658,7 +1657,6 @@ async fn handle_response_create(
             })
         },
         vector_hits: None,
-        plan_output: None,
         model: None,
         temperature: None,
         max_tokens: None,

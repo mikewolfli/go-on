@@ -328,6 +328,13 @@ pub async fn should_escalate_approval_strategy(
     };
 
     // ── 3. Injection/probe detection ───────────────────────────────
+    // Conservative pre-pipeline gate: ANY violation (including Low) on the
+    // RAW, pre-trimmed message set escalates to approval. This intentionally
+    // runs BEFORE the pipeline's per-message detect_and_sanitize (observe_phase),
+    // which classifies on the trimmed working set (High+ blocks, Medium/Low
+    // sanitize in place). The two passes use different inputs (full history vs
+    // compressed/trimmed messages) and different severity policies — deliberate
+    // defense-in-depth, not a duplicate scan (debt #12 verdict: keep).
     let mut has_injection = false;
     if let Some(ref detector) = server.governance_deps.injection_detector {
         let joined: String = messages
@@ -618,7 +625,6 @@ pub(crate) async fn process_chat_request(
     ctx: Option<ChatRequestContext>,
 ) -> Result<serde_json::Value> {
     use crate::acp::r#impl::chat::pipeline::ChatPipeline;
-    use crate::orchestration::plan_output::extract_plan_from_response;
 
     let outcome =
         ChatPipeline::run(server, params, stream_observer.clone(), trace, span, ctx).await?;
@@ -636,27 +642,7 @@ pub(crate) async fn process_chat_request(
         "chat pipeline completed",
     );
 
-    let mut result = outcome.result;
-
-    // ── Plan output extraction ──────────────────────────────────────
-    // When in Plan mode, extract the structured plan from the chat response
-    // so it can be used for execution handoff (Edit/SafeGuard/FullAuto).
-    let is_plan_mode = params.mode.eq_ignore_ascii_case("plan");
-    if is_plan_mode {
-        let response_text = result
-            .get("response")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if !response_text.is_empty() {
-            let plan_output = extract_plan_from_response(response_text);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert(
-                    "plan_output".to_string(),
-                    serde_json::to_value(&plan_output).unwrap_or_default(),
-                );
-            }
-        }
-    }
+    let result = outcome.result;
 
     // Send final result SSE event so the GUI receives the response.
     // This is necessary because the spawned task only handles errors;
@@ -690,17 +676,11 @@ pub(crate) async fn process_chat_request(
                 status: None,
             });
         } else {
-            let plan_output_val = result.get("plan_output");
-            let mut payload = serde_json::json!({
+            let payload = serde_json::json!({
                 "response": response_text,
                 "agent": agent,
                 "done": true,
             });
-            if let Some(po) = plan_output_val {
-                if let Some(obj) = payload.as_object_mut() {
-                    obj.insert("plan_output".to_string(), po.clone());
-                }
-            }
             observer.send_sse(crate::acp::r#impl::chat::streaming::StreamFrame {
                 event: "result",
                 payload,

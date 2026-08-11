@@ -37,9 +37,6 @@ pub mod shared;
 // ── Shared re-exports (single source of truth, also consumed by main.rs) ──
 include!("_reexports.rs");
 
-// Extra re-export only needed by the library crate (external consumers).
-pub use crate::orchestration::plan_output;
-
 // ── Backend mutual exclusion ──────────────────────────────────────────────
 // Exactly one backend feature must be selected.
 #[cfg(all(feature = "backend-sqlite", feature = "backend-postgres"))]

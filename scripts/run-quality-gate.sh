@@ -13,6 +13,12 @@ echo "=== BLUE15 P3-1 quality gate: prompt validation + regression checks ==="
 echo "=== Validating prompt templates ==="
 "$SCRIPT_DIR/validate-prompts.sh"
 
+# i18n drift guard: backend / GUI / vscode catalogs must stay key-consistent
+# within each end (three-language sets), and vscode MessageKeys must cover the
+# locale keys it mirrors.
+echo "=== Validating i18n key sets ==="
+python3 "$SCRIPT_DIR/validate-i18n.py"
+
 # Regression gate: the generated `requests/quality-benchmark.ndjson` scenario
 # is not part of the repo, so run the lib test suite as the regression gate.
 echo "=== Running lib test suite (regression) ==="

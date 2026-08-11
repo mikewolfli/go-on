@@ -10,6 +10,16 @@
 //! - Cache warm-up on startup
 //!
 //! F-GAP-49: Module now wired into production chat pipeline.
+//!
+//! # Responsibility boundary (do not merge with the vector store)
+//!
+//! This cache answers *near-duplicate questions* by short-circuiting the LLM
+//! and replaying the stored answer (TTL 1h, LRU, in-memory). The vector store
+//! (`memory/vector.rs`) is *persistent RAG memory* that injects retrieved
+//! context into the prompt and still calls the LLM. The two are deliberately
+//! different layers (answer-cache vs context-memory); merging either direction
+//! is a behavior regression, not a performance question — see
+//! docs/log/log-20260811-6.md (debt #1 verdict: keep + document).
 
 use serde::Serialize;
 use serde_json::Value;

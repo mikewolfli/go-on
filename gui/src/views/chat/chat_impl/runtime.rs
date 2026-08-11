@@ -582,10 +582,6 @@ async fn process_stream_events(
                                 .map(String::from);
                             result.actual_mode =
                                 val.get("mode").and_then(|v| v.as_str()).map(String::from);
-                            if val.get("plan_output").is_some() {
-                                #[cfg(debug_assertions)]
-                                eprintln!("[Plan] Captured plan_output");
-                            }
                         }
                         "error" => {
                             if !buffered_token.is_empty() || !buffered_reasoning.is_empty() {

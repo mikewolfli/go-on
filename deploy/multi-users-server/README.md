@@ -158,6 +158,26 @@ docker compose -f deploy/multi-users-server/docker-compose.yml up -d
 docker compose -f deploy/multi-users-server/docker-compose.yml --profile observability up -d
 ```
 
+Required `.env` (in the repo root, or use `--env-file`):
+
+```bash
+# Required: gateway API key and the PostgreSQL password.
+GO_ON_ENTRY_API_KEY=generate-a-random-64-char-secret
+DEEPSEEK_API_KEY=sk-xxxxx
+DB_PASS=strong-password-here
+
+# Optional overrides — defaults are `goon`/`goon` and must be changed TOGETHER
+# (they drive both the postgres-db container and the go-on DSN):
+# DB_USER=goon
+# DB_NAME=goon
+# OPENAI_API_KEY=...
+# ANTHROPIC_API_KEY=...
+```
+
+> The legacy `DB_HOST`/`DB_PORT`/`DB_USER`/`DB_PASS`/`DB_NAME` variables are
+> not read by the binary — the DSN is assembled from `DB_USER`/`DB_PASS`/
+> `DB_NAME` by the compose file itself.
+
 ### 3.8 Verify
 
 ```bash

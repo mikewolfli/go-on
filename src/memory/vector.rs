@@ -3,6 +3,20 @@
 //! Conditionally compiled:
 //! - `backend-sqlite` (local, simple-server): rusqlite-backed, sync API
 //! - `backend-postgres` (multi-users-server): postgres + pgvector-backed sync API
+//!
+//! # Backend-pair contract (debt #13 verdict: keep, do not trait-ify)
+//!
+//! The two backend impls mirror each other method-for-method with aligned
+//! signatures (`upsert`, `search`, `get_phase_summary`, `upsert_phase_summary`,
+//! `memory_entry_count`, `summary_entry_count`, `clear_all`). Semantics are
+//! kept identical: eviction keeps the newest `max_entries` by `updated_at`;
+//! scoring / recency blending / `min_similarity` match. Only SQL dialect
+//! differs (`PARAM_PREFIX`, distance operator, DELETE/LIMIT shapes) and is
+//! already confined via shared helpers (`embed_with_check`, `build_memory_key`,
+//! `scored_to_hits`, `blend_similarity_with_recency`, `spawn_blocking_vec!`).
+//! Trait-ifying adds no value under the mutually-exclusive feature gates
+//! (compile_error! below) — the contract is enforced by convention: NEW
+//! methods must be implemented in BOTH backends with identical semantics.
 
 // Ensure features are mutually exclusive
 #[cfg(all(feature = "backend-sqlite", feature = "backend-postgres"))]
