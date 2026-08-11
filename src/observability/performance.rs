@@ -26,10 +26,6 @@ pub struct PerformanceMetrics {
     pub failed_ops: u64,
     /// Average latency in milliseconds
     pub avg_latency_ms: f64,
-    /// P95 latency in milliseconds
-    pub p95_latency_ms: f64,
-    /// P99 latency in milliseconds
-    pub p99_latency_ms: f64,
     // Memory usage in bytes
     pub memory_usage_bytes: u64,
     /// Cache hit rate (filled by AcpServer::get_status from real
@@ -46,8 +42,6 @@ impl Default for PerformanceMetrics {
             successful_ops: 0,
             failed_ops: 0,
             avg_latency_ms: 0.0,
-            p95_latency_ms: 0.0,
-            p99_latency_ms: 0.0,
             memory_usage_bytes: 0,
             cache_hit_rate: 0.0,
             cpu_usage_percent: 0.0,
@@ -57,9 +51,12 @@ impl Default for PerformanceMetrics {
 
 /// Performance monitor
 pub struct PerformanceMonitor {
-    /// Operation latencies for percentile calculation
+    /// Operation latencies for average-latency calculation (windowed).
+    /// P95/P99 percentiles were removed: nothing consumed them — every
+    /// status/metrics consumer reads the histogram-derived p95
+    /// (`estimate_p95_from_buckets`), so the per-call full sort was wasted work.
     latencies: VecDeque<f64>,
-    /// Maximum latencies to keep for percentile calculation
+    /// Maximum latencies to keep for average calculation
     max_latencies: usize,
     /// Total operations counter
     total_ops: AtomicU64,
@@ -111,25 +108,6 @@ impl PerformanceMonitor {
             0.0
         };
 
-        // Calculate percentiles from a single sort. The latency window is
-        // bounded by `max_latencies`, so a full sort is cheap and the two
-        // index reads are O(1) — the previous implementation ran two
-        // `select_nth_unstable` passes (O(n) each) for the same result.
-        let mut sorted_latencies: Vec<f64> = self.latencies.iter().copied().collect();
-        sorted_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-        let (p95_latency, p99_latency) = if sorted_latencies.is_empty() {
-            (0.0, 0.0)
-        } else {
-            let len = sorted_latencies.len();
-            let p95_index = ((len as f64 * 0.95).floor() as usize).min(len - 1);
-            let p99_index = ((len as f64 * 0.99).floor() as usize).min(len - 1);
-            (sorted_latencies[p95_index], sorted_latencies[p99_index])
-        };
-
-        // Calculate cache hit rate
-        let cache_hit_rate = 0.0; // filled by AcpServer::get_status
-
         // Get memory + CPU usage through a short-TTL cache instead of reading
         // /proc/self/status and /proc/stat on every call.
         let MemCpuSnapshot {
@@ -142,10 +120,8 @@ impl PerformanceMonitor {
             successful_ops,
             failed_ops,
             avg_latency_ms: avg_latency,
-            p95_latency_ms: p95_latency,
-            p99_latency_ms: p99_latency,
             memory_usage_bytes: memory_usage,
-            cache_hit_rate,
+            cache_hit_rate: 0.0, // filled by AcpServer::get_status
             cpu_usage_percent: cpu_usage,
         }
     }

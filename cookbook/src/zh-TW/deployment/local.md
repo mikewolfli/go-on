@@ -163,13 +163,13 @@ curl http://127.0.0.1:8090/health
 ## 存儲管理
 
 ### 緩存位置
-- **默認**：當前目錄下的 `acp_cache.sqlite3`
+- **默認**：`sqlite3/acp_cache.sqlite3`（見 `config/config.toml`）
 - **自定義**：在配置中設置 `cache.path`
-- **大小限制**：默認 5000 條記錄
+- **大小限制**：默認 2000 條記錄（見 `config/config.toml` 的 `max_entries`）
 
 ### 向量存儲
-- **位置**：當前目錄下的 `acp_vector.sqlite3`
-- **維度**：192 維嵌入
+- **位置**：`sqlite3/acp_vector.sqlite3`（見 `config/config.toml`）
+- **維度**：128 維嵌入（見 `config/config.toml` 的 `dimensions`）
 - **自動模式**：自動使用可用的向量擴展
 
 ### 維護
@@ -292,6 +292,5 @@ cp acp_vector.sqlite3 acp_vector.sqlite3.backup
 
 設置本地模式後，您可以：
 1. 探索 [API 文檔](../api/overview.md)
-2. 瞭解 [簡單服務器模式](./simple-server.md)
-3. 查看 [故障排除指南](../troubleshooting.md)
-4. 加入 [社區討論](https://github.com/your-org/go-on/discussions)
+2. 了解[簡單服務器模式](./simple-server.md)
+3. 加入[社區討論](https://github.com/mikewolfli/go-on/discussions)

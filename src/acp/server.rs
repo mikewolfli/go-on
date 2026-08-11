@@ -32,7 +32,6 @@ use crate::memory::semantic_cache::SemanticResponseCache;
 use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::observability::alert_manager::AlertManager;
 use crate::observability::telemetry_enhanced::TelemetryRuntime;
-use crate::orchestration::prompt_layers::PromptAssembler;
 use crate::orchestration::skill::SkillRegistry;
 use crate::orchestration::task_schema::SchemaRegistry;
 use crate::orchestration::tool::ToolRegistry;
@@ -441,9 +440,6 @@ pub struct AcpServer {
     pub registries: RegistryContext,
     /// Persistence data stores
     pub persistence: PersistenceContext,
-    /// PromptAssembler — layered prompt assembly (ARCH-03; L1 system prompt +
-    /// L2 role identity — see prompt_layers.rs)
-    pub prompt_assembler: crate::orchestration::prompt_layers::PromptAssembler,
     /// Prompt manager for prompt template management
     pub prompt_manager: PromptManager,
     /// Verbose logging flag
@@ -1371,7 +1367,6 @@ impl ServerBuilder {
                 memory_store,
                 artifact_ledger,
             },
-            prompt_assembler: PromptAssembler,
             prompt_manager,
             verbose: self.verbose,
             shutdown_notify: Arc::new(Notify::new()),

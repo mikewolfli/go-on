@@ -1,4 +1,4 @@
-// Auto-generated from i18n.rs - Traditional Chinese strings
+// Traditional Chinese UI strings — source of truth is gui/src/i18n/mod.rs
 
 pub fn all() -> &'static [(&'static str, &'static str)] {
     &[
@@ -499,8 +499,7 @@ pub fn all() -> &'static [(&'static str, &'static str)] {
         ("settings.enterprise.secretSource", "密鑰來源"),
         ("settings.enterprise.exportPath", "導出路徑"),
         ("settings.enterprise.importPath", "導入路徑"),
-        ("settings.enterprise.exportMasked", "導出脫敏配置"),
-        ("settings.enterprise.exportFull", "導出完整配置"),
+        ("settings.enterprise.exportConfig", "導出配置"),
         ("settings.enterprise.importConfig", "導入配置"),
         ("settings.enterprise.syncCurrent", "同步當前地址"),
         ("setup.title", "AI 供應商配置"),

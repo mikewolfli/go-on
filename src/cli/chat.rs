@@ -278,7 +278,9 @@ impl TokenTracker {
     fn record_usage(&mut self, prompt_tokens: usize, completion_tokens: usize) {
         self.total_prompt_tokens += prompt_tokens;
         self.total_completion_tokens += completion_tokens;
-        // Use default pricing fallback when provider cost info is unavailable.
+        // GPT-4o reference pricing: the CLI has no per-provider cost table
+        // (token counts arrive without model info), so a fixed reference rate
+        // is used for the displayed estimate.
         self.total_cost_usd += (prompt_tokens as f64 * GPT4O_INPUT_COST_PER_TOKEN)
             + (completion_tokens as f64 * GPT4O_OUTPUT_COST_PER_TOKEN);
     }
@@ -2135,6 +2137,103 @@ async fn run_agent_with_tools(
     ))
 }
 
+/// How reasoning content is rendered in the shared streaming loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReasoningRenderStyle {
+    /// Primary phase: every reasoning token gets a `💭` prefix.
+    PerTokenThinking,
+    /// Follow-up phase: ANSI color is toggled on at ReasoningStart and off at
+    /// ReasoningEnd (no per-token prefix).
+    ColorToggle,
+}
+
+/// Shared streaming-token rendering loop used by both the primary agent
+/// phase and the follow-up phase: classifies each token (tool calls, reasoning
+/// markers, thinking, telemetry), renders content through the markdown
+/// renderer, and honours Ctrl+C. When `fwd_tx` is set, every raw token is also
+/// forwarded to the shared response collector. Returns `true` when the stream
+/// ended normally (receiver closed), `false` when interrupted by Ctrl+C — the
+/// caller aborts its own agent task and prints the interrupt message.
+async fn render_streaming_tokens(
+    rx: &mut mpsc::UnboundedReceiver<String>,
+    renderer: &mut StreamMarkdownRenderer,
+    fwd_tx: Option<&mpsc::UnboundedSender<String>>,
+    style: ReasoningRenderStyle,
+) -> bool {
+    let mut in_reasoning = false;
+    loop {
+        // Re-arm Ctrl+C each iteration: signal::ctrl_c() is a one-shot future.
+        // Without this, the second Ctrl+C would be ignored.
+        let ctrl_c = signal::ctrl_c();
+        tokio::pin!(ctrl_c);
+        tokio::select! {
+            token = rx.recv() => {
+                match token {
+                    Some(token) => {
+                        // Forward ALL tokens to the shared collector when wired.
+                        if let Some(tx) = fwd_tx {
+                            let _ = tx.send(token.clone());
+                        }
+
+                        match classify_token(&token) {
+                            // Tool call notification
+                            TokenKind::ToolCall(tool_name) => {
+                                eprintln!(
+                                    "{}🔧 [Tool call: {tool_name}]{}",
+                                    ansi!("33"),
+                                    ansi!("0")
+                                );
+                                continue;
+                            }
+                            // Reasoning content markers
+                            TokenKind::ReasoningStart => {
+                                in_reasoning = true;
+                                if style == ReasoningRenderStyle::ColorToggle {
+                                    eprint!("{}", ansi!("90"));
+                                }
+                                continue;
+                            }
+                            TokenKind::ReasoningEnd => {
+                                in_reasoning = false;
+                                if style == ReasoningRenderStyle::ColorToggle {
+                                    eprint!("{}", ansi!("0"));
+                                    eprintln!();
+                                }
+                                continue;
+                            }
+                            // __thinking__ prefixed tokens
+                            TokenKind::Thinking(think) => {
+                                eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
+                                continue;
+                            }
+                            // Skip finish_reason and usage telemetry tokens
+                            TokenKind::Telemetry => continue,
+                            TokenKind::Content => {}
+                        }
+
+                        if in_reasoning {
+                            if style == ReasoningRenderStyle::PerTokenThinking {
+                                eprint!("{}💭 {}{}", ansi!("90"), token, ansi!("0"));
+                            } else {
+                                eprint!("{}{}{}", ansi!("90"), token, ansi!("0"));
+                            }
+                        } else {
+                            renderer.feed(&token);
+                            let (formatted, _) = renderer.flush();
+                            if !formatted.is_empty() {
+                                eprint!("{}", formatted);
+                            }
+                        }
+                        std::io::Write::flush(&mut std::io::stdout()).ok();
+                    }
+                    None => return true,
+                }
+            }
+            _ = &mut ctrl_c => return false,
+        }
+    }
+}
+
 /// Phase 1: Stream the agent response with progressive markdown rendering,
 /// reasoning markers, tool call notifications, and Ctrl+C interrupt handling.
 /// Returns the collected response text and any tool calls emitted by the agent.
@@ -2162,74 +2261,27 @@ async fn run_agent_streaming_phase(
     let (fwd_tx, fwd_rx) = mpsc::unbounded_channel::<String>();
 
     let mut renderer = StreamMarkdownRenderer::new();
-    let mut in_reasoning = false;
 
     // ── Progressive streaming display with interrupt support ──
-    loop {
-        // Re-arm Ctrl+C each iteration: signal::ctrl_c() is a one-shot future.
-        // Without this, the second Ctrl+C would be ignored.
-        let ctrl_c = signal::ctrl_c();
-        tokio::pin!(ctrl_c);
-        tokio::select! {
-            token = rx.recv() => {
-                match token {
-                    Some(token) => {
-                        // Forward ALL tokens to the shared collector
-                        let _ = fwd_tx.send(token.clone());
-
-                        match classify_token(&token) {
-                            // Tool call notification
-                            TokenKind::ToolCall(tool_name) => {
-                                eprintln!(
-                                    "{}🔧 [Tool call: {tool_name}]{}",
-                                    ansi!("33"),
-                                    ansi!("0")
-                                );
-                                continue;
-                            }
-                            // Reasoning content markers
-                            TokenKind::ReasoningStart => {
-                                in_reasoning = true;
-                                continue;
-                            }
-                            TokenKind::ReasoningEnd => {
-                                in_reasoning = false;
-                                continue;
-                            }
-                            // __thinking__ prefixed tokens
-                            TokenKind::Thinking(think) => {
-                                eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
-                                continue;
-                            }
-                            // Skip finish_reason and usage telemetry tokens
-                            TokenKind::Telemetry => continue,
-                            TokenKind::Content => {}
-                        }
-
-                        if in_reasoning {
-                            eprint!("{}💭 {}{}", ansi!("90"), token, ansi!("0"));
-                        } else {
-                            renderer.feed(&token);
-                            let (formatted, _) = renderer.flush();
-                            if !formatted.is_empty() {
-                                eprint!("{}", formatted);
-                            }
-                        }
-                        std::io::Write::flush(&mut std::io::stdout()).ok();
-                    }
-                    None => break,
-                }
+    let completed = render_streaming_tokens(
+        &mut rx,
+        &mut renderer,
+        Some(&fwd_tx),
+        ReasoningRenderStyle::PerTokenThinking,
+    )
+    .await;
+    if !completed {
+        eprintln!(
+            "\n{}Interrupted agent response. Use /clear to reset.{} ({})",
+            ansi!("33"),
+            ansi!("0"),
+            if chat_task.is_finished() {
+                "done"
+            } else {
+                "aborting"
             }
-            _ = &mut ctrl_c => {
-                eprintln!(
-                    "\n{}Interrupted agent response. Use /clear to reset.{} ({})",
-                    ansi!("33"), ansi!("0"),
-                    if chat_task.is_finished() { "done" } else { "aborting" }
-                );
-                chat_task.abort();
-                break;
-            }
-        }
+        );
+        chat_task.abort();
     }
 
     // Drop the forwarding sender so the collector's receiver closes cleanly
@@ -2599,64 +2651,20 @@ async fn run_followup_phase(
     let timeout_duration = Duration::from_secs(DEFAULT_FOLLOWUP_TIMEOUT_SECS);
     let collect = async {
         let mut followup_renderer = StreamMarkdownRenderer::new();
-        let mut in_reasoning2 = false;
-        loop {
-            tokio::select! {
-                token = rx2.recv() => {
-                    match token {
-                        Some(token) => {
-                            match classify_token(&token) {
-                                TokenKind::ReasoningStart => {
-                                    in_reasoning2 = true;
-                                    eprint!("{}", ansi!("90"));
-                                    continue;
-                                }
-                                TokenKind::ReasoningEnd => {
-                                    in_reasoning2 = false;
-                                    eprint!("{}", ansi!("0"));
-                                    eprintln!();
-                                    continue;
-                                }
-                                // Tool call notification (same as primary phase)
-                                TokenKind::ToolCall(tool_name) => {
-                                    eprintln!(
-                                        "{}🔧 [Tool call: {tool_name}]{}",
-                                        ansi!("33"),
-                                        ansi!("0")
-                                    );
-                                    continue;
-                                }
-                                TokenKind::Thinking(think) => {
-                                    eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
-                                    continue;
-                                }
-                                // Skip finish_reason and usage telemetry tokens
-                                TokenKind::Telemetry => continue,
-                                TokenKind::Content => {}
-                            }
-                            if in_reasoning2 {
-                                eprint!("{}{}{}", ansi!("90"), token, ansi!("0"));
-                            } else {
-                                followup_renderer.feed(&token);
-                                let (formatted, _) = followup_renderer.flush();
-                                if !formatted.is_empty() {
-                                    eprint!("{}", formatted);
-                                }
-                            }
-                            std::io::Write::flush(&mut std::io::stdout()).ok();
-                        }
-                        None => break,
-                    }
-                }
-                _ = signal::ctrl_c() => {
-                    eprintln!(
-                        "\n{}Interrupted follow-up response.{}  [P3]",
-                        ansi!("33"), ansi!("0")
-                    );
-                    followup_task.abort();
-                    break;
-                }
-            }
+        let completed = render_streaming_tokens(
+            &mut rx2,
+            &mut followup_renderer,
+            None,
+            ReasoningRenderStyle::ColorToggle,
+        )
+        .await;
+        if !completed {
+            eprintln!(
+                "\n{}Interrupted follow-up response.{}  [P3]",
+                ansi!("33"),
+                ansi!("0")
+            );
+            followup_task.abort();
         }
 
         if let Err(e) = followup_task.await {

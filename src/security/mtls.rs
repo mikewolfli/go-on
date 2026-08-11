@@ -249,8 +249,8 @@ impl MtlsAcceptor {
     }
 
     /// Builder-pattern: enable or disable client certificate verification.
-    /// Called from `run_acp_http_server` under `#[cfg(feature = "multi-users-server")]`.
-    #[cfg(feature = "multi-users-server")]
+    /// Consumed by both the ACP HTTP and MCP HTTP arms (mTLS config paths
+    /// compile in every profile), so it is not profile-gated.
     pub fn with_client_cert(mut self, enabled: bool) -> Self {
         self.require_client_cert = enabled;
         self

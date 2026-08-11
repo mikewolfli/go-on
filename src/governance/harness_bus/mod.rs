@@ -356,10 +356,14 @@ impl HarnessBus {
         let verdict = self.evaluator.check_tool_call(tool, args);
 
         // Feed real latency telemetry into the drift engine (Performance drift).
-        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        // Units: SECONDS (not ms). The deviation denominator clamps to 0.01,
+        // so sub-10ms latency changes stay inside the dead zone and only a
+        // genuine slowdown (>5ms movement) triggers a warning — sub-millisecond
+        // harness validation jitter (0.1ms vs 0.3ms) is not drift.
+        let elapsed_s = start.elapsed().as_secs_f64();
         let _ = self.drift_engine.record_metric(
-            "harness.validate_action.latency_ms",
-            elapsed_ms,
+            "harness.validate_action.latency_s",
+            elapsed_s,
             0.0,
             DriftType::Performance,
         );
@@ -406,10 +410,12 @@ impl HarnessBus {
         let verdict = self.evaluator.verify_output(output, stage);
 
         // Feed real latency telemetry into the drift engine (Performance drift).
-        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        // Units: SECONDS (not ms) — see validate_action for why (the 0.01
+        // deviation denominator is a sub-10ms dead zone).
+        let elapsed_s = start.elapsed().as_secs_f64();
         let _ = self.drift_engine.record_metric(
-            "harness.verify_output.latency_ms",
-            elapsed_ms,
+            "harness.verify_output.latency_s",
+            elapsed_s,
             0.0,
             DriftType::Performance,
         );

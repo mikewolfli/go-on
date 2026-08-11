@@ -2,6 +2,53 @@
 
 ## [Unreleased] - 2026-08-11
 
+### Round 45 — Super-Deep/Broad Scan XIII: Full-Architecture Unification (2026-08-11, docs/log/log-20260811-3.md)
+
+#### P1 correctness
+
+- **Semantic cache multi-turn mis-hit fixed**: exact matching compares the full request text (the truncated hash is only a bucket key); the caller now keys on the LAST user message instead of the full conversation history (which made every turn after the first hash-collide with turn 1). Regression test added.
+- **WorldModel entity update fixed**: `evolve_world_model` now get-or-creates via the id returned by `register_entity` (with `find_entity_id` fallback) — entity properties (state/reward) are actually written instead of silently failing every cycle.
+
+#### Protocol / transport
+
+- **MCP notification sentinel unified**: `notifications/initialized` (`id=Some(Null)`) now yields 202 no-body on HTTP single requests and is filtered in HTTP batches, matching stdio (previously leaked as a 200 response body).
+- **mTLS config wired (P2)**: `mtls_require_client_cert` had zero consumers — both ACP/MCP arms now read it (a configured CA path still implies client-cert verification by default); `with_client_cert` no longer profile-gated.
+- **MCP HTTP drain wired**: the accept-loop stop condition changed from `|| false` to the drain guard (parity with the ACP arm); drain is no longer just a fixed sleep.
+- **PG upsert COUNT gate + HNSW no full-clone**: postgres upsert evicts only over cap (SQLite parity); `hnsw_search` reads candidate metadata under the guard instead of deep-cloning the whole metadata vec per search.
+
+#### Orchestration / governance / resilience
+
+- **DAG observation made truthful**: `complete_step`/`fail_step` un-gated from cfg(test); `workflow.execute` pushes real subtask outcomes into the bridge, so progress/stalled reflect reality instead of the initial state.
+- **Council quorum upper bound fixed**: `<= active_members` → `<= total_members` (auto-ejected members no longer invalidate a proposal that already met quorum).
+- **Governance review gate builds verdict directly**: removed the i18n-string round-trip (translator changes can no longer silently flip the gate); dead `resolve_review_policy`/`review_verdict` removed.
+- **Drift monitor false-positive fix (P2)**: auto-baseline uses a rolling mean; harness latencies are fed in seconds (the 0.01 deviation denominator is now a sub-10ms dead zone) — sub-ms jitter no longer triggers breaches. Regression test added.
+- **CLI streaming dedup**: primary + follow-up token classification/rendering loops extracted into a shared `render_streaming_tokens` (behavior identical per branch).
+- **`Planner::plan` de-async'd**: pointless async contagion removed (all call sites updated).
+- **Tool description single source**: MCP `tools/list` prefers the shared `tool_descriptors` table (same one the LLM function-calling sees); per-tool `description()` is only a fallback.
+
+#### Dead code / redundancy cleanup
+
+- `prompt_assembler` dead field; `McpHttpServer.tls_acceptor` always-None field; `request_id_key` duplicate of `value_to_id`; pg_migrate v3 dead migration (`session_store` had no consumers); unused `filter_tools_by_exposure` param; test-only `PromptLayer::all/name`; `loop_executor` renamed `file_walk`; `PerformanceMetrics.p95/p99` had no consumers (removed the per-call full sort); `events.remove(0)` O(n) → `VecDeque`; `config_gen` redundant timeout calc.
+
+#### Three-ends (GUI / vscode-addon / i18n)
+
+- GUI: `api_key` serde-skip docs made truthful; Export Masked/Full merged (both serialized identical output).
+- vscode-addon: `go-on.language` now actually wired; `pythonPath`/`execution.timeout`/`execution.allowedShellPaths` declared in package.json; statusMonitor comment key fixed.
+- i18n default unified to `en-US`.
+
+#### Deploy / docs
+
+- multi-users deploy now uses `GO_ON_PG_CONNECTION_STRING` (the DB_* variables were never read by the code); k8s secret keys aligned with envFrom; CI `cargo deny` install step added; stale `.github/workflows` copies inside `config/languages` (shipped with releases) and `.DS_Store` files removed.
+- Docs updated to match code: README/CHANGELOG numbers (lib 1537), cookbook build commands (profile semantics), zed.md mode-inference behavior, workflow-config ghost `[skills]` → `[runtime]` keys, SAFEGUARD_MODE posture table, storage/path/log-name facts.
+
+#### Verification
+
+```
+cargo test --lib → 1537 passed / 0 failed / 0 ignored
+cargo clippy --all-targets -D warnings → zero warnings
+4 profiles + GUI + vscode tsc + SDK → zero errors; 16 integration suites all pass
+```
+
 ### Round 44 — Super-Deep/Broad Scan XII: 统一架构精炼 (2026-08-11, docs/log/log-20260811-2.md)
 
 #### 链路级统一与行为修复
@@ -145,6 +192,25 @@ Rust SDK 21/21
 - **Profile recommendation names real**: setup output names the actual profiles (`local` / `simple-server` / `multi-users-server` / `full`) instead of the non-existent minimal/balanced/full.
 - **keyring async wrapper**: blocking keyring I/O (D-Bus / Keychain) moved behind `set_keyring_async` / `get_keyring_cached_async` so it never runs on a tokio worker.
 - **Four profiles compile green** (local / simple-server / multi-users-server / full).
+
+## [1.5.2] - 2026-08-11
+
+### Round 45 — Super-Deep/Broad Scan XIII: Full-Architecture Unification (2026-08-11, docs/log/log-20260811-3.md)
+
+- **Version bump to 1.5.2** (workspace, GUI, VS Code addon, rust/python/typescript SDKs, crates, cookbook, README badges).
+- **P1 semantic cache multi-turn mis-hit fixed** (exact match on full request + last-user-message key) and **WorldModel entity get-or-create fixed** (properties now actually persist).
+- **Protocol/transport**: MCP notification sentinel unified across stdio/HTTP; `mtls_require_client_cert` wired in both arms; MCP HTTP drain wired to the drain guard; PG upsert COUNT gate + HNSW no full-clone.
+- **Orchestration/governance/resilience**: DAG observation made truthful (real execution outcomes); council quorum upper bound fixed; governance review gate builds verdict directly (no i18n string round-trip); drift monitor rolling baseline + seconds units (sub-ms jitter no longer breaches); CLI streaming dedup; `Planner::plan` de-async'd; tool description single-source table.
+- **Dead code/redundancy cleanup**: `prompt_assembler` field, `tls_acceptor` always-None field, pg_migrate v3 dead migration, `PerformanceMetrics.p95/p99` (no consumers), `request_id_key` duplicate, `loop_executor` renamed `file_walk`, and more.
+- **Three-ends**: GUI api_key docs truthful + Export Masked/Full merged; vscode `go-on.language` wired + execution keys declared; i18n default unified to `en-US`.
+- **Deploy/docs**: multi-users deploy uses `GO_ON_PG_CONNECTION_STRING`; k8s secret keys aligned; CI cargo-deny install step; docs/README/CHANGELOG/cookbook aligned to code.
+
+## [1.5.2] - 2026-08-11
+
+### Version bump + Round 45 (2026-08-11, docs/log/log-20260811-3.md)
+
+- All product versions aligned to **1.5.2** (workspace, GUI, VS Code addon, rust/python/typescript SDKs, crates, cookbook, README badges).
+- Round 45 full-architecture unification: see the `[Unreleased]` section above for the complete changelog (P1 semantic-cache/world-model fixes, protocol/mTLS/drain, DAG/council/governance/drift, dead-code cleanup, three-ends, deploy/docs).
 
 ## [1.5.1] - 2026-08-07
 

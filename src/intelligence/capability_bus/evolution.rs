@@ -83,23 +83,70 @@ impl CapabilityBus {
     }
 
     /// Update WorldModel with entity state.
+    ///
+    /// Get-or-create semantics: `register_entity` returns the assigned id on
+    /// first call (`ent_{n}`); on subsequent calls the same name+type pair is
+    /// a duplicate, so we fall back to `find_entity_id`. The update always
+    /// targets the entity's real id — previously the caller reused the
+    /// `action_{action}` name as the id, which `update_entity` never matched
+    /// (ids are `ent_{n}`), so properties (state/reward) were never written.
     pub(crate) fn evolve_world_model(&self, action: &str, state: &(String, String), reward: f64) {
-        if let Err(e) = self
-            .world_model
-            .register_entity(&format!("action_{}", action), EntityType::System)
-        {
-            warn!("evolve: world_model.register_entity failed: {}", e);
-        } else {
-            let mut props = std::collections::HashMap::new();
-            props.insert("state_0".to_string(), state.0.clone());
-            props.insert("state_1".to_string(), state.1.clone());
-            props.insert("reward".to_string(), reward.to_string());
-            if let Err(e) = self
-                .world_model
-                .update_entity(&format!("action_{}", action), props)
-            {
-                warn!("evolve: world_model.update_entity failed: {}", e);
-            }
+        let name = format!("action_{}", action);
+        let id = match self.world_model.register_entity(&name, EntityType::System) {
+            Ok(id) => id,
+            Err(_) => match self.world_model.find_entity_id(&name, EntityType::System) {
+                Some(id) => id,
+                None => {
+                    warn!("evolve: world_model.find_entity_id failed for {name}");
+                    return;
+                }
+            },
+        };
+        let mut props = std::collections::HashMap::new();
+        props.insert("state_0".to_string(), state.0.clone());
+        props.insert("state_1".to_string(), state.1.clone());
+        props.insert("reward".to_string(), reward.to_string());
+        if let Err(e) = self.world_model.update_entity(&id, props) {
+            warn!("evolve: world_model.update_entity failed: {}", e);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CapabilityBus;
+    use crate::governance::harness_bus::default_harness_bus;
+    use std::sync::Arc;
+
+    /// Regression (P1): `evolve_world_model` must get-or-create entities so
+    /// repeated evolve cycles do not duplicate the entity or log duplicate-
+    /// registration warnings. The previous implementation used the
+    /// `action_{name}` string as the entity id, which never matched the real
+    /// `ent_{n}` id assigned by `register_entity`.
+    #[tokio::test]
+    async fn evolve_world_model_get_or_creates_single_entity() {
+        let bus = CapabilityBus::new_default(Arc::new(default_harness_bus()), None);
+        let state = ("ready".to_string(), "working".to_string());
+
+        // Two evolve cycles for the same action: second must reuse, not
+        // duplicate (duplication would also emit a warn per cycle).
+        bus.evolve_world_model("analyze", &state, 0.75);
+        bus.evolve_world_model("analyze", &state, 0.9);
+
+        let id = bus
+            .world_model
+            .find_entity_id(
+                "action_analyze",
+                crate::intelligence::world_model::EntityType::System,
+            )
+            .expect("entity should exist after evolve_world_model");
+        assert!(
+            id.starts_with("ent_"),
+            "get-or-create must return the real entity id, got {id}"
+        );
+        // Two cycles → one entity; the second call found the existing id
+        // instead of failing registration.
+        let profile = bus.world_model.profile();
+        assert_eq!(profile.entities, 1, "one entity, not duplicates");
     }
 }

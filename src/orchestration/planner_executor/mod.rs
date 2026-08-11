@@ -8,8 +8,10 @@
 //! execution policies.
 //!
 //! Note: The `ExecutionPlan` and `PlanStep` types are canonical and used
-//! by `brain_loop::plan_construction::Planner`.  The `Executor` has been
-//! fully replaced by `brain_loop::BrainLoop`.
+//! by `brain_loop::plan_construction::Planner`.  The `Executor` was replaced
+//! by `plan_construction` (the `BrainLoop` struct itself was removed in the
+//! round-23 cleanup; the live planning surface lives in
+//! `brain_loop::plan_construction`).
 
 use crate::orchestration::brain_loop::plan_construction::DagMetrics;
 use crate::orchestration::mode::ModeKind;
@@ -30,8 +32,7 @@ pub struct PlanStep {
 
 /// An execution plan produced by the Planner
 ///
-/// Note: Will eventually be unified with the `brain_loop` plan type.
-/// For now, this is the canonical plan type returned by `Planner::plan()`.
+/// This is the canonical plan type returned by `Planner::plan()`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionPlan {
     pub plan_id: String,
@@ -71,7 +72,7 @@ mod tests {
             evidence: None,
             input: serde_json::json!({}),
         };
-        let simple_plan = Planner::plan(&simple_task).await;
+        let simple_plan = Planner::plan(&simple_task);
         assert_eq!(
             simple_plan.steps.len(),
             2,
@@ -95,7 +96,7 @@ mod tests {
             evidence: None,
             input: serde_json::json!({}),
         };
-        let medium_plan = Planner::plan(&medium_task).await;
+        let medium_plan = Planner::plan(&medium_task);
         assert_eq!(
             medium_plan.steps.len(),
             3,
@@ -112,7 +113,7 @@ mod tests {
             evidence: None,
             input: serde_json::json!({}),
         };
-        let complex_plan = Planner::plan(&complex_task).await;
+        let complex_plan = Planner::plan(&complex_task);
         assert!(
             complex_plan.steps.len() >= 3,
             "Complex task should produce >= 3 steps"
@@ -155,7 +156,7 @@ mod tests {
     #[tokio::test]
     async fn test_dag_metrics_expose_width_and_depth() {
         let task = make_task();
-        let plan = Planner::plan(&task).await;
+        let plan = Planner::plan(&task);
         let metrics = plan.dag_metrics.unwrap();
         assert!(metrics.width >= 1);
         assert!(metrics.depth >= 1);
@@ -178,7 +179,7 @@ mod tests {
             evidence: None,
             input: serde_json::json!({"priority": "high", "team_size": 5}),
         };
-        let plan = Planner::plan(&task).await;
+        let plan = Planner::plan(&task);
         let metrics = plan
             .dag_metrics
             .expect("DAG metrics must be present when a plan is created");
@@ -237,7 +238,7 @@ mod tests {
     #[tokio::test]
     async fn test_plan_creates_three_steps_legacy_compat() {
         let task = make_task();
-        let plan = Planner::plan(&task).await;
+        let plan = Planner::plan(&task);
         assert!(!plan.plan_id.is_empty());
         assert!(plan.steps.len() >= 2);
     }
@@ -254,7 +255,7 @@ mod tests {
             evidence: None,
             input: serde_json::json!({}),
         };
-        let plan = Planner::plan(&task).await;
+        let plan = Planner::plan(&task);
         assert_eq!(plan.steps.len(), 2, "Simple task should produce 2 steps");
         // exec-1 has no deps (no plan phase for simple)
         assert!(plan.steps[0].depends_on.is_empty());

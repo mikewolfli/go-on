@@ -177,7 +177,9 @@ mod default_functions {
         10
     }
     pub fn default_runtime_i18n_default_language() -> String {
-        "en".to_string()
+        // Matches the delivered config.toml / language packs (en-US), so the
+        // default and the shipped examples resolve to the same locale.
+        "en-US".to_string()
     }
     pub fn default_runtime_tenant_default_daily_api_calls() -> usize {
         10_000

@@ -1,4 +1,5 @@
-// Auto-generated from i18n.rs - English strings
+// English UI strings — source of truth is gui/src/i18n/mod.rs (per-language
+// files are kept in sync with it manually).
 
 pub fn all() -> &'static [(&'static str, &'static str)] {
     &[
@@ -499,8 +500,7 @@ pub fn all() -> &'static [(&'static str, &'static str)] {
         ("settings.enterprise.secretSource", "Secret Source"),
         ("settings.enterprise.exportPath", "Export Path"),
         ("settings.enterprise.importPath", "Import Path"),
-        ("settings.enterprise.exportMasked", "Export Masked"),
-        ("settings.enterprise.exportFull", "Export Full"),
+        ("settings.enterprise.exportConfig", "Export Config"),
         ("settings.enterprise.importConfig", "Import Config"),
         ("settings.enterprise.syncCurrent", "Sync Current URL"),
         ("setup.title", "AI Provider Setup"),

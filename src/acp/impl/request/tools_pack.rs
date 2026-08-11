@@ -335,24 +335,32 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
     let mut builtins = registry.names();
     builtins.sort_unstable();
     tools.extend(builtins.into_iter().map(|name| {
-        // Prefer the actual Tool trait's description/input_schema over the
-        // shared tool_descriptors.rs match arms. This ensures feature-gated
-        // tools (docx, pdf, excel, cad, image, etc.) also get their proper
-        // schema exposed in tools/list, not just a generic fallback.
+        // Use the shared tool_descriptors.rs table as the single source of
+        // truth for description + input_schema (the same table
+        // `agent_options.rs` exposes to LLM function-calling, so MCP and LLM
+        // always see identical tool descriptions). The table covers every
+        // registered tool including feature-gated ones; the per-tool
+        // `description()` override is kept only as a fallback for tools the
+        // table does not list.
         if let Some(tool) = registry.get(name) {
-            // Prefer the Tool trait's description, but fall back to the shared
-            // tool_descriptors table when the trait returns an empty string
-            // (several core built-in tools do not override description()).
+            // Prefer the shared table; fall back to the Tool trait's own
+            // description only when the table has no entry for this tool.
             let description: String = {
-                let own = tool.description();
-                if own.is_empty() {
-                    crate::shared::tool_descriptors::tool_descriptor_value(name)
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("Registered MCP tool")
-                        .to_string()
-                } else {
-                    own.to_string()
+                let from_table = crate::shared::tool_descriptors::tool_descriptor_value(name)
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .filter(|s| !s.is_empty());
+                match from_table {
+                    Some(text) => text,
+                    None => {
+                        let own = tool.description();
+                        if own.is_empty() {
+                            "Registered MCP tool".to_string()
+                        } else {
+                            own.to_string()
+                        }
+                    }
                 }
             };
             json!({

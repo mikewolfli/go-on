@@ -19,10 +19,12 @@ pub enum PromptLayer {
 }
 
 impl PromptLayer {
+    #[cfg(test)]
     pub fn all() -> Vec<PromptLayer> {
         vec![PromptLayer::L1SystemPrompt, PromptLayer::L2RoleIdentity]
     }
 
+    #[cfg(test)]
     pub fn name(&self) -> &'static str {
         match self {
             PromptLayer::L1SystemPrompt => "system_prompt",

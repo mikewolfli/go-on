@@ -8,9 +8,9 @@
 
 ## Version
 
-- Core runtime: **1.5.1**
-- GUI desktop: **1.5.1**
-- VS Code addon: **1.5.1**
+- Core runtime: **1.5.2**
+- GUI desktop: **1.5.2**
+- VS Code addon: **1.5.2**
 
 ## GUI Desktop App
 
@@ -22,7 +22,7 @@ cargo run --manifest-path gui/Cargo.toml
 
 Key features:
 - **Monitor**: Backend health, AI provider status, real-time metrics
-- **Chat**: Multi-session conversations with phase (coding/review/debug/test/deploy) and mode (Ask/Plan/Edit/Safeguard/Full Auto) selectors, file attachments, dynamic send button based on AI status. Action bar (copy/edit/delete) at bottom of each message bubble.
+- **Chat**: Multi-session conversations with phase (from backend config, default `think/act/check/done`) and mode (Ask/Plan/Edit/Safeguard/Full Auto) selectors, file attachments, dynamic send button based on AI status. Action bar (copy/edit/delete) at bottom of each message bubble.
 - **Skills**: Create and import AI skills; built-in `skill-creator` lets AI define new skills autonomously
 - **Settings**: Feature toggles, language switching (en/zh-CN/zh-TW), 6 visual themes
 - **Backend Connection**: ACP+HTTP JSON-RPC with automatic health polling
@@ -42,7 +42,7 @@ Four build profiles support different deployment scenarios:
 
 | Profile | `cargo clippy -D warnings` | Tests |
 |:--------|:--------------------------:|:-----:|
-| **local** | ✅ **Zero warnings** | **all pass (~1.8K)** |
+| **local** | ✅ **Zero warnings** | **all pass (~1.7K)** |
 | **simple-server** | ✅ **Zero warnings** | **all pass** |
 | **full** | ✅ **Zero warnings** | **all pass** |
 | **multi-users-server** | ✅ **Zero warnings** | **all pass** |

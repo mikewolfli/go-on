@@ -174,18 +174,21 @@ impl Default for FeatureToggles {
 ///
 /// Strategy:
 ///   - System keyring is tried FIRST (no macOS prompt issue on modern keyring crate).
-///   - api_key is ALSO stored in config as fallback (so key is never lost on any platform).
-///   - At backend startup, keyring is checked first; if empty, config's api_key is used.
+///   - api_key / secret_key are NEVER serialized to the config JSON (see the
+///     `#[serde(skip)]` attributes below) — they live only in the system
+///     keyring, so the config file contains no plaintext keys.
+///   - At backend startup, keyring is checked first; if empty, the agent's
+///     secret env var (or no key) is used.
 ///
-/// Multiple entries with the same `name` are allowed when they have different `label` values.
-/// The agent is identified as `{name}_{label}` in the backend config, allowing the same
-/// provider (e.g. "openai") to serve multiple models through distinct agent entries.
+/// Note: `#[serde(skip)]` skips BOTH serialization and deserialization, so an
+/// old config JSON that stored a plaintext key is not migrated by serde — the
+/// keyring is the only storage for keys in this schema version.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub name: String,
-    /// API key — stored securely in system keyring, never serialized to config JSON.
-    /// When deserializing from old configs, this field is loaded for migration
-    /// to keyring but is cleared before saving.
+    /// API key — stored securely in system keyring; never serialized to or
+    /// deserialized from the config JSON (`#[serde(skip)]` covers both
+    /// directions).
     #[serde(skip)]
     pub api_key: String,
     /// Secret key — same as api_key; only stored in keyring, never in config JSON.

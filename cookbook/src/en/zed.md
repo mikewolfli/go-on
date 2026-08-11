@@ -151,25 +151,29 @@ agent server, the mode is passed as part of the request parameters.
 
 ### How it works
 
-ACP `chat.request` has a `mode` field in its params. If Zed does not send a mode
-(the typical case), the backend automatically defaults to **"ask"** (the safest
-general-purpose mode, equivalent to a Q&A assistant).
+ACP `chat` request has a `mode` field in its params. When Zed does not send a
+mode (or sends an empty one), the backend **infers** the mode from the message
+content (`infer_optimal_mode` — e.g. a question → `ask`, a code change request →
+`edit`) rather than hardcoding one value. Unrecognized explicit modes are
+forced to `edit`.
 
 ### Mode behavior
 
-| Mode | Description | Tool Access | Approval Required |
+Approval postures below are the defaults (`mode.rs::default_posture_for`):
+
+| Mode | Description | Tool Access | Approval Posture |
 |------|-------------|-------------|-------------------|
-| `ask` | Q&A assistant — general questions | Limited | No |
-| `plan` | Planning mode — structured task breakdown | Full | No |
-| `edit` | Edit/review mode — code changes | Full | No |
-| `safeguard` | Safety-first — escalation on high-risk operations | Limited | Yes |
-| `full_auto` | Fully autonomous — agent runs without user confirmation | Full | No (escalation only) |
+| `ask` | Q&A assistant — general questions | Limited | Auto |
+| `plan` | Planning mode — structured task breakdown | Read-only (no execution) | Never |
+| `edit` | Edit/review mode — code changes | Full | Suggest (approval required) |
+| `safeguard` | Safety-first — escalation on high-risk operations | Limited | Suggest |
+| `full_auto` | Fully autonomous — agent runs without user confirmation | Full | Auto |
 
 ### Passing mode from Zed
 
 Most Zed versions send ACP requests without a `mode` parameter. The backend
-handles this transparently by defaulting to `"ask"`. If you want to explicitly
-control the mode, you can:
+handles this transparently by inferring the mode from the request content (see
+above). If you want to explicitly control the mode, you can:
 
 1. **Multiple agent entries** — Define several ACP agents in Zed settings,
 one per mode, each hardcoding the mode via backend routing:
@@ -191,11 +195,12 @@ one per mode, each hardcoding the mode via backend routing:
 }
 ```
 
-2. **Single agent, default mode** — Use one agent. The backend defaults to
-`"ask"`. Mode-switching is done via the Go-On GUI (separate from Zed).
+2. **Single agent, inferred mode** — Use one agent. The backend infers the
+mode from the request content. Mode-switching is done via the Go-On GUI
+(separate from Zed).
 
 3. **OpenAI-compatible `/v1` endpoint** — If using `openai_compatible` in Zed,
-the mode is not passed either; the backend again defaults to `"ask"`.
+the mode is not passed either; the backend again infers it from content.
 
 ### Display in Zed
 
@@ -206,16 +211,17 @@ of the ACP protocol. To see which mode is currently active, check:
 go-on --status
 ```
 
-The backend logs the effective mode on each request:
+The backend logs the effective mode on each request, e.g.:
 ```
-INFO: mode not specified by client, defaulting to 'ask'
+INFO: mode not specified by client, auto-selected mode='ask'
 ```
 
 ### Backend default mode fallback
 
 As of the latest build, the `ChatParams.mode` field uses `#[serde(default)]`
-(empty string when absent), and the backend auto-defaults to `"ask"`.
-This ensures compatibility with any ACP client that does not send a mode.
+(empty string when absent), and the backend auto-infers a mode from the
+request content. This ensures compatibility with any ACP client that does not
+send a mode.
 
 ## Operational checks
 

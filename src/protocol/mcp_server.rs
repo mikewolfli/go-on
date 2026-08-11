@@ -310,10 +310,6 @@ pub struct McpHttpServer {
     bind_addr: String,
     shutdown_notify: Arc<Notify>,
     acp_server: Option<Arc<AcpServer>>,
-    /// Optional TLS acceptor. When `Some`, all accepted TCP streams are
-    /// wrapped with TLS before handling HTTP requests. Defaults to `None`
-    /// for local development / plaintext operation.
-    tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
     /// Optional CA certificate path for mTLS. When set, a `TlsAcceptor` is built
     /// with client CA certificate verification during `run()`.
     mtls_ca_cert_path: Option<String>,
@@ -321,6 +317,9 @@ pub struct McpHttpServer {
     mtls_server_cert_path: Option<String>,
     /// Optional server key path for mTLS.
     mtls_server_key_path: Option<String>,
+    /// Whether client certificates are required in the mTLS handshake
+    /// (consumed from `RuntimeConfig.mtls_require_client_cert`).
+    mtls_require_client_cert: bool,
     /// Optional rate limit middleware. When set, `check()` is called before
     /// processing each request in `handle_http_connection`.
     rate_limiter: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
@@ -376,10 +375,10 @@ impl McpHttpServer {
             bind_addr,
             shutdown_notify: Arc::new(Notify::new()),
             acp_server,
-            tls_acceptor: None,
             mtls_ca_cert_path: None,
             mtls_server_cert_path: None,
             mtls_server_key_path: None,
+            mtls_require_client_cert: false,
             rate_limiter: None,
             sse_broadcaster,
         }
@@ -387,26 +386,31 @@ impl McpHttpServer {
 
     /// Run the HTTP server
     pub async fn run(&self) -> Result<()> {
-        // Lazy initialise the TLS acceptor from mTLS config when the
-        // `tls_acceptor` has not been explicitly set but `tls_config` is
-        // provided. This wires client CA certificate verification through
-        // the MtlsAcceptor's build_server_config.
-        let effective_acceptor: Option<tokio_rustls::TlsAcceptor> = if self.tls_acceptor.is_some() {
-            self.tls_acceptor.clone()
-        } else if let (Some(ca), Some(cert), Some(key)) = (
-            self.mtls_ca_cert_path.as_ref(),
-            self.mtls_server_cert_path.as_ref(),
-            self.mtls_server_key_path.as_ref(),
-        ) {
-            let mtls_acceptor = MtlsAcceptor::new(ca.as_str(), cert.as_str(), key.as_str());
-            let server_config = mtls_acceptor
-                .build_server_config()
-                .map_err(|e| anyhow::anyhow!("failed to build mTLS server config: {e}"))?;
-            info!("MCP HTTP: TLS acceptor configured from mTLS config");
-            Some(tokio_rustls::TlsAcceptor::from(server_config))
-        } else {
-            None
-        };
+        // Lazy initialise the TLS acceptor from mTLS config. This wires
+        // client CA certificate verification through the MtlsAcceptor's
+        // build_server_config. (The former `tls_acceptor` field had no
+        // setter and was always `None`, so the `is_some()` branch was
+        // unreachable; the mTLS config paths are the only way to get TLS.)
+        let effective_acceptor: Option<tokio_rustls::TlsAcceptor> =
+            if let (Some(ca), Some(cert), Some(key)) = (
+                self.mtls_ca_cert_path.as_ref(),
+                self.mtls_server_cert_path.as_ref(),
+                self.mtls_server_key_path.as_ref(),
+            ) {
+                let mtls_acceptor = MtlsAcceptor::new(ca.as_str(), cert.as_str(), key.as_str());
+                // Consume `mtls_require_client_cert` (previously the MCP arm never
+                // read the switch, so client-cert verification was always off while
+                // the ACP arm hardcoded it on). The field defaults to `false`;
+                // deployments that want mTLS must set it to `true`.
+                let mtls_acceptor = mtls_acceptor.with_client_cert(self.mtls_require_client_cert);
+                let server_config = mtls_acceptor
+                    .build_server_config()
+                    .map_err(|e| anyhow::anyhow!("failed to build mTLS server config: {e}"))?;
+                info!("MCP HTTP: TLS acceptor configured from mTLS config");
+                Some(tokio_rustls::TlsAcceptor::from(server_config))
+            } else {
+                None
+            };
 
         info!(
             "{}",
@@ -448,11 +452,21 @@ impl McpHttpServer {
         let tls_acceptor = effective_acceptor.clone();
         let rate_limiter = self.rate_limiter.clone();
         let sse_broadcaster = Arc::clone(&self.sse_broadcaster);
+        // Stop accepting new connections once the server enters drain mode
+        // (mirrors the ACP HTTP arm; previously this arm passed `|| false` so
+        // drain never stopped the accept loop and the post-loop drain sleep
+        // was the only shutdown delay).
+        let drain_acp_server = acp_server.clone();
         crate::shared::tcp_accept_loop::run_http_accept_loop(
             listener,
             shutdown_notify,
             256,
-            || false,
+            move || {
+                drain_acp_server
+                    .as_ref()
+                    .map(|s| s.drain_guard.is_draining())
+                    .unwrap_or(false)
+            },
             std::sync::Arc::new(
                 move |socket: tokio::net::TcpStream, peer_addr: std::net::SocketAddr| {
                     let mcp_server = Arc::clone(&mcp_server);
@@ -540,19 +554,21 @@ impl McpHttpServer {
     /// `effective_acceptor` logic in `run()` was unreachable dead code.
     /// ACP HTTP reads the same RuntimeConfig fields directly; this builder
     /// gives MCP HTTP parity. When all three paths are non-empty the
-    /// acceptor is built lazily in `run()` (client CA verification is active
-    /// whenever `mtls_ca_cert_path` is set).
+    /// acceptor is built lazily in `run()` (client CA verification follows
+    /// `mtls_require_client_cert`).
     pub fn with_mtls_config(
         mut self,
         mtls_enabled: bool,
         mtls_ca_cert_path: &str,
         mtls_server_cert_path: &str,
         mtls_server_key_path: &str,
+        mtls_require_client_cert: bool,
     ) -> Self {
         if mtls_enabled && !mtls_server_cert_path.is_empty() && !mtls_server_key_path.is_empty() {
             self.mtls_ca_cert_path = Some(mtls_ca_cert_path.to_string());
             self.mtls_server_cert_path = Some(mtls_server_cert_path.to_string());
             self.mtls_server_key_path = Some(mtls_server_key_path.to_string());
+            self.mtls_require_client_cert = mtls_require_client_cert;
         }
         self
     }
@@ -986,8 +1002,10 @@ async fn handle_http_connection(
         .await
         .into_iter()
         // Per JSON-RPC 2.0, notifications (id=null) in a batch do not
-        // produce a response entry.
-        .filter(|resp| resp.id.is_some())
+        // produce a response entry. The `Some(Value::Null)` sentinel used by
+        // notifications/initialized must also be filtered here, matching the
+        // stdio transport (id is None OR the null sentinel).
+        .filter(|resp| resp.id.is_some() && resp.id != Some(serde_json::Value::Null))
         .collect::<Vec<_>>();
 
         debug!(
@@ -1071,8 +1089,10 @@ async fn handle_http_connection(
     debug!("MCP HTTP: dispatched {} {} -> ok", method, path);
 
     // MCP notifications (JSON-RPC with id=null) must not produce
-    // any response per JSON-RPC 2.0 spec (§notifications).
-    if response.id.is_none() {
+    // any response per JSON-RPC 2.0 spec (§notifications). The
+    // `Some(Value::Null)` sentinel used by notifications/initialized must
+    // be treated the same way as id=None, matching the stdio transport.
+    if response.id.is_none() || response.id == Some(serde_json::Value::Null) {
         // Must still send some HTTP response to satisfy the TCP layer,
         // but it should be a 202 Accepted with no body.
         let empty_body = serde_json::Value::Null;

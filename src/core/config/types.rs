@@ -484,7 +484,7 @@ pub struct RuntimeConfig {
     /// Default concurrent tasks limit per tenant.
     #[serde(default = "super::defaults::default_runtime_tenant_default_concurrent_tasks")]
     pub tenant_default_concurrent_tasks: usize,
-    /// Default language for i18n (e.g. "en", "zh-CN").
+    /// Default language for i18n (e.g. "en-US", "zh-CN").
     #[serde(default = "super::defaults::default_runtime_i18n_default_language")]
     pub i18n_default_language: String,
     /// Default daily API call limit per tenant.

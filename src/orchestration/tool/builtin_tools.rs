@@ -429,7 +429,7 @@ impl Tool for SearchFilesTool {
         let root = sanitize_path(input, directory)?;
         let matcher = Pattern::new(pattern)?;
         let mut files = Vec::new();
-        crate::orchestration::tool::loop_executor::collect_matching_files(
+        crate::orchestration::tool::file_walk::collect_matching_files(
             &root, &root, &matcher, &mut files,
         )?;
 
@@ -462,7 +462,7 @@ impl Tool for SearchFilesTool {
             let root = sanitize_path(&input, directory)?;
             let matcher = glob::Pattern::new(pattern)?;
 
-            let files = crate::orchestration::tool::loop_executor::collect_matching_files_async(
+            let files = crate::orchestration::tool::file_walk::collect_matching_files_async(
                 root.clone(),
                 matcher,
             )

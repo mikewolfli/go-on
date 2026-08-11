@@ -14,7 +14,6 @@
 //! `workflow_registry`. Keeping only the consumed surface eliminates dead code
 //! (principle §11).
 
-#[cfg(test)]
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -171,9 +170,9 @@ impl ExecutionGraph {
 
     /// Set a node's state.
     ///
-    /// Test-only: used by `PlannerExecutionBridge::fail_step` (cfg(test)) to
-    /// simulate failure propagation in DAG readiness tests.
-    #[cfg(test)]
+    /// Used by `PlannerExecutionBridge::fail_step` to propagate execution
+    /// failure into the DAG so the observable progress snapshot reflects real
+    /// outcomes.
     pub fn set_node_state(&mut self, id: &str, state: ExNodeState) -> Result<()> {
         let node = self
             .nodes
@@ -185,8 +184,8 @@ impl ExecutionGraph {
 
     /// Mark a task as completed.
     ///
-    /// Test-only: used by `PlannerExecutionBridge::complete_step` (cfg(test)).
-    #[cfg(test)]
+    /// Used by `PlannerExecutionBridge::complete_step` so the observable
+    /// progress snapshot reflects real execution outcomes.
     pub fn complete_task(&mut self, task_id: &str, output: serde_json::Value) -> Result<()> {
         let node = self
             .nodes

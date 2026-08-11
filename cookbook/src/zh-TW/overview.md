@@ -8,9 +8,9 @@
 
 ## 版本
 
-- 後端 Runtime：**1.5.1**
-- GUI 桌面端：**1.5.1**
-- VS Code 插件：**1.5.1**
+- 後端 Runtime：**1.5.2**
+- GUI 桌面端：**1.5.2**
+- VS Code 插件：**1.5.2**
 
 ## GUI 桌面應用
 
@@ -22,9 +22,9 @@ cargo run --manifest-path gui/Cargo.toml
 
 主要功能：
 - **監控面板**：後端健康狀態、AI 供應商狀態、實時指標
-- **對話界面**：多會話管理、階段選擇（coding/review/debug/test/deploy）、模式切換（Ask/Plan/Edit/Safeguard/Full Auto）、文件附件、動態發送按鈕（依據 AI 狀態變化）
+- **對話界面**：多會話管理、階段選擇（來自後端配置，默認 think/act/check/done）、模式切換（Ask/Plan/Edit/Safeguard/Full Auto）、文件附件、動態發送按鈕（依據 AI 狀態變化）
 - **技能管理**：創建和導入 AI 技能；內置 `skill-creator` 讓 AI 自主定義新技能
-- **設置**：功能開關、語言切換（en/zh-CN/zh-TW）、5 種視覺主題
+- **設置**：功能開關、語言切換（en/zh-CN/zh-TW）、6 種視覺主題
 - **後端連接**：ACP+HTTP JSON-RPC，自動健康輪詢
 
 ## 構建配置文件
@@ -42,7 +42,7 @@ cargo run --manifest-path gui/Cargo.toml
 
 | 配置文件 | `cargo clippy -D warnings` | 測試數 |
 |:--------|:--------------------------:|:------:|
-| **local** | ✅ **零警告** | **全部通過（~1.8K）** |
+| **local** | ✅ **零警告** | **全部通過（~1.7K）** |
 | **simple-server** | ✅ **零警告** | **通過** |
 | **full** | ✅ **零警告** | **通過** |
 | **multi-users-server** | ✅ **零警告** | **通過** |

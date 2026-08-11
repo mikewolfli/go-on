@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.5.1
+  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.5.2
 </p>
 
 <p align="center">
@@ -16,14 +16,14 @@
 
 ---
 
-[![Rust](https://img.shields.io/badge/rust-1.5.1-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.80+-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![CI](https://github.com/mikewolfli/go-on/actions/workflows/build.yml/badge.svg)](https://github.com/mikewolfli/go-on/actions/workflows/build.yml)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
 [![Providers](https://img.shields.io/badge/providers-37-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
-[![LOC](https://img.shields.io/badge/code-248K-blue)]()
+[![LOC](https://img.shields.io/badge/code-252K-blue)]()
 
 ## What is go-on?
 
@@ -92,13 +92,13 @@ Default health endpoint: `http://127.0.0.1:8090/health`
 - **Multi-model voter** — Concurrent agent voting for high-stakes decisions (majority/weighted/unanimous/fusion)
 
 ### AI Provider Support (37)
-OpenAI · Anthropic · DeepSeek · Gemini · xAI Grok · Groq · Mistral · Qwen · Llama · Copilot · SiliconFlow · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · Zhipu GLM · Baidu Qianfan · ByteDance Doubao · Tencent Hunyuan · StepFun · Skywork · Yi · Kimi · NIM · Aleph Alpha · DeepQuest · FaceWall · LoopAI · Langboat · Titan · Wenxin · Xihu
+OpenAI · Anthropic · DeepSeek · Gemini · xAI Grok · Groq · Mistral · Qwen · Llama · Copilot · SiliconFlow · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · Zhipu GLM · Baidu Qianfan · ByteDance Doubao · Tencent Hunyuan · StepFun · Skywork · Yi · Kimi · NIM · Aleph Alpha · DeepQuest · FaceWall · LoopAI · Langboat · Titan · Wenxin · Xihu · OpenAI-Compatible
 
 Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Groq, and xAI Grok.
 
 ### Protocols & Transport
 - **ACP** (Agent Client Protocol) — stdio + HTTP, JSON-RPC 2.0
-- **MCP** (Model Context Protocol) — stdio + HTTP, tool list/call, streaming, cancellation, timeout
+- **MCP** (Model Context Protocol) — stdio + HTTP, tool list/call, cancellation, timeout, SSE notifications (Streamable HTTP)
 - **5 transport modes**: `adaptive` (dual-stack), `acp_stdio`, `acp_http`, `mcp_stdio`, `mcp_http`
 - **SSE streaming protocol** — chunk, done, telemetry, error, state_sync, sub_agent, command + Responses API events
 - **Cross-entry parity** — consistent stop_reason and round count across ACP/CLI/MCP
@@ -287,7 +287,7 @@ npm run compile
 | Built-in tools | 60+ |
 | AI providers | 37 |
 | Skills in marketplace | 34 |
-| Unit tests | ~1.7K (1,533 lib + 151 integration declarations; see Verification below) |
+| Unit tests | ~1.7K (1,537 lib + 151 integration declarations; see Verification below) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 
 ## Build Profiles

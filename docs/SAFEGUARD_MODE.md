@@ -89,10 +89,14 @@ FullAuto   (50)    ▅ Maximum - fully automatic, no approvals needed
 
 ## Mode Comparison
 
+Approval postures below are the defaults from `mode.rs::default_posture_for`
+(`suggest` = interactive approval, `auto` = auto-approve low-risk,
+`never` = read-only, no execution):
+
 | Feature | Ask | Plan | Edit | FullAuto | SafeGuard |
 |---------|-----|------|------|----------|-----------|
-| Auto Execution | No | No | No | Yes | Yes |
-| User Approval Required | Always | Always | For all | No | For high-risk ops only |
+| Auto Execution | No | No (read-only) | No | Yes | Yes |
+| Approval Posture | auto | never (read-only) | suggest | auto | suggest |
 | Max Tool Calls | 0 | 3 | 20 | 50 | 30 |
 | Risk Detection | N/A | N/A | Basic | None | Advanced |
 | Use Case | Quick confirmation | Step-by-step planning | Constrained edits | Full automation | Balanced safety |

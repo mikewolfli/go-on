@@ -18,6 +18,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import * as vscode from "vscode";
 import { Logger } from "./logger";
 
 const log = Logger.forModule("i18n");
@@ -447,33 +448,50 @@ class I18nManager {
   }
 
   /**
-   * Detect language from VS Code environment
+   * Detect language from VS Code environment, honoring the explicit
+   * `go-on.language` setting (declared in package.json) when the user has
+   * chosen one, otherwise falling back to VS Code locale / env vars.
    */
   private detectLanguage(): void {
-    const env = process.env;
-    let lang: string;
-    if (env.VSCODE_NLS_CONFIG) {
-      try {
-        const parsed = JSON.parse(env.VSCODE_NLS_CONFIG);
-        lang = parsed.locale || "en";
-      } catch (err) {
-        log.warn("detectLanguage parse failed:", err);
+    // Explicit user setting takes precedence (settingsView `_setLanguage`
+    // writes `go-on.language`).
+    let lang: string | undefined;
+    try {
+      lang = vscode.workspace
+        .getConfiguration("go-on")
+        .get<string>("language");
+    } catch {
+      // Configuration API unavailable (early activation) — fall through.
+    }
+    if (!lang) {
+      const env = process.env;
+      if (env.VSCODE_NLS_CONFIG) {
+        try {
+          const parsed = JSON.parse(env.VSCODE_NLS_CONFIG);
+          lang = parsed.locale || "en";
+        } catch (err) {
+          log.warn("detectLanguage parse failed:", err);
+          lang = env.LANG || env.LANGUAGE || "en";
+        }
+      } else {
         lang = env.LANG || env.LANGUAGE || "en";
       }
-    } else {
-      lang = env.LANG || env.LANGUAGE || "en";
     }
 
+    // `lang` is guaranteed non-empty here (the fallback chain above always
+    // assigns a string when the setting was empty).
+    const resolved = lang || "en";
+
     if (
-      lang.includes("zh_CN") ||
-      lang.includes("zh-CN") ||
-      lang.includes("chinese-PRC")
+      resolved.includes("zh_CN") ||
+      resolved.includes("zh-CN") ||
+      resolved.includes("chinese-PRC")
     ) {
       this.currentLanguage = "zh_CN";
     } else if (
-      lang.includes("zh_TW") ||
-      lang.includes("zh-TW") ||
-      lang.includes("chinese-Taiwan")
+      resolved.includes("zh_TW") ||
+      resolved.includes("zh-TW") ||
+      resolved.includes("chinese-Taiwan")
     ) {
       this.currentLanguage = "zh_TW";
     } else {

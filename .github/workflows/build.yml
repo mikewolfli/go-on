@@ -43,6 +43,10 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test (all targets, locked)
         run: cargo test --all-targets --locked
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
       - name: Cargo deny (advisories / licenses / bans)
         run: cargo deny check
 

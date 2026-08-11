@@ -353,20 +353,16 @@ impl SettingsView {
 
                         ui.horizontal(|ui| {
                             if ui
-                                .button(i18n.t("settings.enterprise.exportMasked"))
+                                .button(i18n.t("settings.enterprise.exportConfig"))
                                 .clicked()
                             {
-                                // Config no longer stores api_key in plaintext
-                                // (keys are in system keyring). Direct export is safe.
+                                // Keys live in the system keyring, never in the
+                                // config JSON (api_key/secret_key are
+                                // #[serde(skip)]), so a plain export is always
+                                // safe. The former split "Export Masked" /
+                                // "Export Full" buttons serialized the same
+                                // content (both omit keys) — merged into one.
                                 if let Ok(content) = serde_json::to_string_pretty(&config) {
-                                    let _ = std::fs::write(&config.enterprise.export_path, content);
-                                }
-                            }
-                            if ui
-                                .button(i18n.t("settings.enterprise.exportFull"))
-                                .clicked()
-                            {
-                                if let Ok(content) = serde_json::to_string_pretty(config) {
                                     let _ = std::fs::write(&config.enterprise.export_path, content);
                                 }
                             }

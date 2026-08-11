@@ -17,7 +17,7 @@ use crate::governance::harness_bus::types::{
 use crate::governance::pua::{PuaRuleEngine, TaskContext};
 use crate::governance::rationalization::{RationalizationAnnotation, SelfRationalizationGuard};
 use crate::governance::rbac::{AccessDecision, Permission, Principal, RbacEnforcer};
-use crate::governance::review_controls::{review_verdict, verdict_as_str, verdict_is_approved};
+use crate::governance::review_controls::{verdict_as_str, verdict_is_approved};
 use crate::governance::runtime_controls::OnlineControllerState;
 use crate::governance::security_governor::{
     AuditEntry as SgAuditEntry, ConditionOperator, PolicyAction, PolicyComposition,
@@ -232,13 +232,22 @@ impl PolicyEvaluator {
                 ctx.task_type,
                 crate::governance::pua::TaskType::SecurityPatch
             );
-        let requires_review = requires_manual_review;
-        let review_response = if requires_review {
+        // Build the verdict DIRECTLY instead of round-tripping an i18n string
+        // through `review_verdict`: the parser only recognizes the literal
+        // English "APPROVE"/"REJECT" prefixes in en-US.json, so a translator
+        // changing the wording (e.g. to "PASS:") would silently flip the
+        // review gate. The verdict is a policy decision here, not a free-text
+        // review response.
+        let verdict = if requires_manual_review {
+            QualityVerdict::Reject
+        } else {
+            QualityVerdict::Approve
+        };
+        let review_response = if requires_manual_review {
             tf("status.harness_bus.review_rejected", &[])
         } else {
             tf("status.harness_bus.review_approved", &[])
         };
-        let verdict = Self::resolve_review_policy(&review_response, 8);
         let outcome = ReviewGateOutcome {
             passed: matches!(verdict, QualityVerdict::Approve),
             comments: vec![
@@ -763,10 +772,5 @@ impl PolicyEvaluator {
     pub fn drain_rationalization_blocked(&self) -> bool {
         self.rationalization_block_occurred
             .swap(false, Ordering::AcqRel)
-    }
-
-    /// Resolve a raw response string into a governance-level review verdict.
-    fn resolve_review_policy(response: &str, min_response_chars: usize) -> QualityVerdict {
-        review_verdict(response, min_response_chars)
     }
 }

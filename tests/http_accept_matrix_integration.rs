@@ -1,9 +1,10 @@
 //! HTTP accept-loop matrix —专项验证 ACP/MCP raw-TCP 服务器的 accept 循环
-//! 骨架行为（并发连接、优雅关闭、TLS 握手、请求头边界、错误一致性）。
+//! 骨架行为（并发连接、优雅关闭、请求头边界、错误一致性）。
 //!
 //! 目的：为「ACP/MCP accept 循环骨架合并」提供回归保障。这些测试聚焦
-//! 连接层（accept/并发/关闭/TLS），而非协议路由（后者由
-//! transport_parity_integration.rs 覆盖）。
+//! 连接层（accept/并发/关闭），而非协议路由（后者由
+//! transport_parity_integration.rs 覆盖）。TLS 握手由 security/mtls 的
+//! 单测与 transport_parity 覆盖。
 //!
 //! 架构：
 //!   - 通过 `cargo test` 编译的 go-on 二进制启动 ACP/MCP HTTP 服务器

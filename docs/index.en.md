@@ -71,4 +71,3 @@ Go-On is an ACP runtime proxy with integrated multi-agent orchestration, capable
 ## Logs
 
 - [Scan Logs](log/) — Multi-round deep scan records
-- [Reports](reports/) — Optimization and analysis reports

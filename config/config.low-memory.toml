@@ -2,7 +2,6 @@
 # go-on Low-Memory Configuration (for memory-constrained systems)
 #   Use when: system has < 4 GB RAM or you see SIGKILL/OOM errors
 #   Usage:    go-on --low-memory --config config.low-memory.toml
-#   Or:       cargo run-local-lowmem  (uses release build + low mem)
 # ============================================================
 #
 # This config aggressively reduces all memory-hungry settings:

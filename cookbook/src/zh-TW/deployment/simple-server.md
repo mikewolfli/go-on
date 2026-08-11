@@ -67,19 +67,15 @@ otel_endpoint = "http://localhost:4317"
 ```
 
 ### 特性標誌
-簡單服務器模式需要：
-- `backend-sqlite`：SQLite 數據庫支持
-- `sqlite-vec`：向量擴展（必需，無回退）
+簡單服務器模式是一個 **profile**（`simple-server`），已包含 SQLite 後端；
+單獨啟用 `backend-sqlite` 特性不會選擇任何 profile。具體組成見 `Cargo.toml`。
 
 ## 安裝
 
 ### 為服務器部署構建
 ```bash
-# 使用 simple-server 配置文件構建
+# 使用 simple-server profile 構建（包含 SQLite + sqlite-vec）
 cargo build --no-default-features -F simple-server
-
-# 或顯式啟用後端特性
-cargo build --features backend-sqlite
 ```
 
 ### 系統要求

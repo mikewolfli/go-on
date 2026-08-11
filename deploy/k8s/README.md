@@ -6,10 +6,14 @@ production-grade multi-agent orchestration service.
 ## Quick Start
 
 ```bash
-# 1. Create a secret with your API keys
+# 1. Create a secret with your API keys. The secret KEY NAMES become the
+#    environment variable names injected via `envFrom` in deployment.yaml, so
+#    they must match what the config expects: GO_ON_DEEPSEEK_API_KEY (agent
+#    `api_key_env`) and GO_ON_ENTRY_API_KEY (entry auth, default env name).
 kubectl create secret generic go-on-secrets \
-  --from-literal=deepseek-api-key=sk-xxxxx \
-  --from-literal=server-api-key=change-me
+  --from-literal=GO_ON_DEEPSEEK_API_KEY=sk-xxxxx \
+  --from-literal=GO_ON_ENTRY_API_KEY=change-me
+```
 
 # 2. Deploy
 kubectl apply -f deploy/k8s/
@@ -42,7 +46,8 @@ kubectl logs -l app=go-on
 - `service.yaml` – ClusterIP Service for internal routing
 - `ingress.yaml` – Ingress with TLS termination via cert-manager (nginx ingress class)
 - `configmap.yaml` – go-on configuration (non-sensitive settings)
-- `secret.yaml` – Template for sensitive credentials (API keys)
+- Secret – created manually via `kubectl create secret generic go-on-secrets`
+  (see Quick Start); no `secret.yaml` manifest is shipped
 - `kustomization.yaml` – Kustomize overlay that includes all resources above
 
 ## Ingress Configuration

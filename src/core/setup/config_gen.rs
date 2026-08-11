@@ -124,9 +124,6 @@ fn aggregate_provider_recommendations(providers: &[String]) -> ProviderRecommend
         if rec.default_phase.is_none() {
             rec.default_phase = spec.recommended_default_phase.clone();
         }
-        if let Some(timeout) = spec.recommended_request_timeout_seconds {
-            rec.coding_request_timeout_seconds = rec.coding_request_timeout_seconds.max(timeout);
-        }
         if let Some(timeout) = spec.recommended_review_timeout_seconds {
             rec.coding_review_timeout_seconds = rec.coding_review_timeout_seconds.max(timeout);
         }

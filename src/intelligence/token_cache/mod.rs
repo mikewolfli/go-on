@@ -519,9 +519,11 @@ impl L1ExactCache {
 /// Embed text for the in-memory L2 semantic cache.
 ///
 /// Thin adapter over the single canonical embedding implementation
-/// (`crate::memory::embedding_provider::local_hash_embed`), which is also used
-/// by the vector store, memory summarization, and the semantic response cache
-/// — so vectors are interchangeable across every similarity consumer.
+/// (`crate::memory::embedding_provider::local_hash_embed`). Note that the
+/// dimensionality differs per consumer: L2 uses 256 dims here, the semantic
+/// response cache uses 128 (`semantic_cache::request_embedding`), and the
+/// vector store uses the provider's configured dims — so vectors are only
+/// interchangeable across consumers that share the SAME dimensionality.
 pub fn simple_embedding(text: &str) -> Vec<f32> {
     crate::memory::embedding_provider::local_hash_embed(text, 256)
 }

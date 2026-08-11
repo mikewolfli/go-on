@@ -62,9 +62,12 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                     server_cert_path.as_str(),
                     server_key_path.as_str(),
                 );
-                if !server.runtime_config.mtls_ca_cert_path.is_empty() {
-                    acceptor = acceptor.with_client_cert(true);
-                }
+                // Consume `mtls_require_client_cert` (previously the switch was
+                // never read — client-cert verification was hardcoded on). The
+                // field defaults to `false`; deployments that want mTLS must set
+                // it to `true` (plus a CA path).
+                let require_client_cert = server.runtime_config.mtls_require_client_cert;
+                acceptor = acceptor.with_client_cert(require_client_cert);
                 if !server.runtime_config.mtls_allowed_cns.is_empty() {
                     let allowed: Vec<String> = server
                         .runtime_config

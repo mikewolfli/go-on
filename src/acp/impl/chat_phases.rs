@@ -910,6 +910,20 @@ pub(crate) async fn act_phase(
     let estimated_tokens = estimate_messages_token_count(&routing_out.agent_messages);
     let context_class = ContextLengthClass::from_token_count(estimated_tokens);
 
+    // Semantic-cache key: the LAST user message (the current intent), not the
+    // full conversation history. History grows append-only, so two consecutive
+    // turns share a long prefix; keying on history would make every turn after
+    // the first hash-collide with the first (the bucket hash truncates to
+    // max_request_hash_len) and both the exact and similarity branches would
+    // return turn-1's answer for turn-N's question.
+    let semantic_key = routing_out
+        .agent_messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.as_str())
+        .unwrap_or(&input_text);
+
     // Duplicate-user detection must run BEFORE the canonical lookup: if the
     // last user message repeats an earlier one, serving the cached answer would
     // silently return a stale response (previously the CachedAgentWrapper's
@@ -1001,7 +1015,7 @@ pub(crate) async fn act_phase(
         // ── Semantic cache lookup ─────────────────────────────────────
         async {
             if !cache_bypassed_for_execution && !is_duplicate_user {
-                if let Some(text) = try_semantic_cache(server, &input_text) {
+                if let Some(text) = try_semantic_cache(server, semantic_key) {
                     let agent = resolve_out
                         .resolved
                         .agents
@@ -1298,7 +1312,7 @@ pub(crate) async fn act_phase(
             .semantic_cache
             .write()
             .unwrap_or_else(|p| p.into_inner())
-            .put(&input_text, cached_response);
+            .put(semantic_key, cached_response);
 
         // Token cache populate (multi-level: L1 exact + L2 semantic + L3
         // durable) so the primary execution path fills the cache it reads

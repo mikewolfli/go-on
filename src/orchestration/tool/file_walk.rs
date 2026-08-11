@@ -1,9 +1,11 @@
-//! Loop executor — file-walk helpers used by `SearchFilesTool`.
+//! File-walk helpers used by `SearchFilesTool`.
 //!
 //! The former `execute_loop` / `execute_loop_async` tool orchestration loop and
 //! its `ToolRecommender` dependency had zero production callers (the production
 //! tool execution stack is `tool::executor::execute_tools_concurrent`) and were
-//! removed along with `tool/pipeline.rs` and `tool/recommender.rs`.
+//! removed along with `tool/pipeline.rs` and `tool/recommender.rs`. This module
+//! is named for what it actually contains (directory walking), not the deleted
+//! loop machinery.
 
 use glob::Pattern;
 use std::path::{Path, PathBuf};

@@ -25,7 +25,9 @@ Local Mode Storage:
 ## Configuration
 
 ### Default Configuration
-The local mode uses `config/config.toml` as the default configuration:
+Local mode uses `config/config.toml` as the default configuration; the block
+below mirrors its current contents (paths use the `sqlite3/` subdirectory and
+the protocol mode is `adaptive`):
 
 ```toml
 # config/config.toml (local default)
@@ -34,18 +36,18 @@ default_phase = "think"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "acp_http"
+mode = "adaptive"
 
 [cache]
 enabled = true
-path = "acp_cache.sqlite3"
+path = "sqlite3/acp_cache.sqlite3"
 default_ttl_seconds = 1800
 max_entries = 2000
 
 [vector]
 enabled = true
 auto_mode = true
-path = "acp_vector.sqlite3"
+path = "sqlite3/acp_vector.sqlite3"
 dimensions = 128
 min_query_chars = 120
 top_k = 2
@@ -76,10 +78,10 @@ otel_endpoint = "http://localhost:4317"
 ```
 
 ### Feature Flags
-Local mode (`local`) enables the following Cargo features:
-- `backend-sqlite`: SQLite database support
-- `rusqlite`: SQLite bindings with bundled SQLite
-- `backend-sqlite`: SQLite backend (rusqlite + sqlite-vec)
+Local mode (`local`) is a **profile** in `Cargo.toml`; it enables the SQLite
+backend plus the core sub-buses (tool / orchestration / observability /
+optimization / memory / protocol / multimodal). Build with `cargo build`
+(default) or `cargo build --no-default-features -F local`.
 
 ## Installation
 
@@ -94,8 +96,8 @@ cargo build --no-default-features -F local
 
 ### Binary Distribution
 ```bash
-# Download pre-built binary
-curl -L https://github.com/your-org/go-on/releases/latest/download/go-on-x86_64-unknown-linux-gnu.tar.gz | tar xz
+# Download pre-built binary (replace with the actual release URL)
+curl -L https://github.com/mikewolfli/go-on/releases/latest/download/go-on-x86_64-unknown-linux-gnu.tar.gz | tar xz
 
 # Make executable
 chmod +x go-on
@@ -161,13 +163,13 @@ curl http://127.0.0.1:8090/health
 ## Storage Management
 
 ### Cache Location
-- **Default**: `acp_cache.sqlite3` in current directory
+- **Default**: `sqlite3/acp_cache.sqlite3` (see `config/config.toml`)
 - **Custom**: Set `cache.path` in configuration
-- **Size limit**: 5000 entries by default
+- **Size limit**: 2000 entries by default (see `config/config.toml` `max_entries`)
 
 ### Vector Store
-- **Location**: `acp_vector.sqlite3` in current directory
-- **Dimensions**: 192-dimensional embeddings
+- **Location**: `sqlite3/acp_vector.sqlite3` (see `config/config.toml`)
+- **Dimensions**: 128-dimensional embeddings (see `config/config.toml` `dimensions`)
 - **Auto-mode**: Automatically uses available vector extensions
 
 ### Maintenance
@@ -286,5 +288,4 @@ Consider upgrading to:
 After setting up local mode, you can:
 1. Explore [API Documentation](../api/overview.md)
 2. Learn about [Simple Server Mode](./simple-server.md)
-3. Check [Troubleshooting Guide](../troubleshooting.md)
-4. Join the [Community Discussions](https://github.com/your-org/go-on/discussions)
+3. Join the [Community Discussions](https://github.com/mikewolfli/go-on/discussions)

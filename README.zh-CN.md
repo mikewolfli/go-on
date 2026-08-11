@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — 用 Rust 编写的 AI 智能体编排运行时，提供桌面 GUI、VS Code 插件、SSE 流式传输、MCP/ACP 协议、自治工作流与内置治理。v1.5.1
+  <strong>go-on</strong> — 用 Rust 编写的 AI 智能体编排运行时，提供桌面 GUI、VS Code 插件、SSE 流式传输、MCP/ACP 协议、自治工作流与内置治理。v1.5.2
 </p>
 
 <p align="center">
@@ -12,13 +12,13 @@
 
 ---
 
-[![Rust](https://img.shields.io/badge/rust-1.5.1-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.80+-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
 [![Providers](https://img.shields.io/badge/providers-37-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
-[![LOC](https://img.shields.io/badge/code-248K-blue)]()
+[![LOC](https://img.shields.io/badge/code-252K-blue)]()
 
 ## go-on 是什么？
 
@@ -275,7 +275,7 @@ npm run compile
 | 内置工具数量 | 60+ |
 | AI 供应商数量 | 37 |
 | 技能市场数量 | 34 |
-| 单元测试数量 | ~1.7K（1533 lib + 151 集成声明，见下方验证状态）|
+| 单元测试数量 | ~1.7K（1537 lib + 151 集成声明，见下方验证状态）|
 | 三语国际化覆盖 | en / zh-CN / zh-TW（约 95%）|
 
 ## 构建配置

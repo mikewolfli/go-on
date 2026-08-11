@@ -1,6 +1,6 @@
 [project]
 name = "go-on-sdk"
-version = "1.5.1"
+version = "1.5.2"
 description = "Python SDK for go-on (ACP/MCP agent orchestration runtime) — 7 feature-gated sub-bus architecture"
 license = "MIT"
 authors = [{ name = "go-on contributors" }]

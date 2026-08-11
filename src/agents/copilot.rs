@@ -385,13 +385,6 @@ impl CopilotAgent {
     }
 }
 
-/// Exponential backoff delay (seconds) for retry attempt `attempt`.
-/// Yields 1s, 2s, 4s for attempts 0, 1, 2. Shared canonical schedule:
-/// `crate::agents::agent::retry_backoff_secs`.
-fn backoff_secs(attempt: u64) -> u64 {
-    retry_backoff_secs(attempt as u32)
-}
-
 #[async_trait]
 impl Agent for CopilotAgent {
     async fn chat_once(
@@ -557,7 +550,7 @@ impl Agent for CopilotAgent {
                                 // still try next model after exhausting retries
                                 if attempt < 2 {
                                     last_error = Some(err);
-                                    sleep(Duration::from_secs(backoff_secs(attempt))).await;
+                                    sleep(Duration::from_secs(retry_backoff_secs(attempt as u32))).await;
                                     continue;
                                 }
                                 continue 'models;
@@ -565,7 +558,7 @@ impl Agent for CopilotAgent {
                             // Non-auto: retry with backoff
                             if attempt < 2 {
                                 last_error = Some(err);
-                                sleep(Duration::from_secs(backoff_secs(attempt))).await;
+                                sleep(Duration::from_secs(retry_backoff_secs(attempt as u32))).await;
                             } else {
                                 last_error = Some(err);
                             }
@@ -574,7 +567,7 @@ impl Agent for CopilotAgent {
                         // Transient error → retry
                         if attempt < 2 {
                             last_error = Some(err);
-                            sleep(Duration::from_secs(backoff_secs(attempt))).await;
+                            sleep(Duration::from_secs(retry_backoff_secs(attempt as u32))).await;
                         } else {
                             last_error = Some(err);
                         }

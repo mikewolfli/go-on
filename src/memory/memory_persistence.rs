@@ -397,7 +397,11 @@ impl ColdStorage {
         // Determine current active shard for this month.
         let shard_index = self.next_shard_index(year, month);
         let shard = if shard_index == 0 {
-            // No shard exists yet; start with index 0.
+            // No shard exists yet; start with index 0. This is also a NEW
+            // shard file, so bump the cached count (previously only the
+            // rollover path called note_shard_created, leaving the count one
+            // behind after the cache was primed by a scan).
+            self.note_shard_created();
             format!("{:04}-{:02}-000", year, month)
         } else {
             // Check if the latest shard has room.

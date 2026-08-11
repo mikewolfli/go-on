@@ -27,7 +27,7 @@ GUI 拉起後端進程時會以工作目錄作為當前目錄，因此要求 `co
 ### 對話界面 (Chat)
 - 多會話管理：創建、切換、刪除會話
 - 多模型支持：每個會話可選擇不同 AI 模型
-- 階段選擇：coding / review / debug / test / deploy
+- 階段選擇：來自後端配置（默認 think/act/check/done）
 - 模式切換：Ask / Plan / Edit / Safeguard / Full Auto
 - 文件附件：支持上傳文件作為對話上下文
 - 動態發送按鈕：依據 AI 狀態變化（loading / ready / error）
@@ -61,7 +61,7 @@ cargo run --manifest-path gui/Cargo.toml
 
 ## 綁定後端
 
-GUI 可以自動發現後端可執行文件。自動綁定成功後，會把可執行文件所在目錄作為工作目錄，並把日誌落到該目錄下的 `go-on.log`。
+GUI 可以自動發現後端可執行文件。自動綁定成功後，會把可執行文件所在目錄作為工作目錄，並把日誌落到該目錄下的 `backend.log`。
 
 如果自動發現失敗，就手工配置：
 
@@ -80,9 +80,9 @@ API Key 無需寫入 `.env.goon`，全部通過 GUI 的 Provider 管理界面動
 
 ## 運行時進程行爲
 
-GUI 啓動後端時，會從當前配置的工作目錄拉起該可執行文件，並把 stdout 與 stderr 都寫到 `go-on.log`。
+GUI 啓動後端時，會從當前配置的工作目錄拉起該可執行文件，並把 stdout 與 stderr 都寫到 `backend.log`。
 
-**自動重啓**：如果後端崩潰，GUI 會在 3 秒冷卻後自動重啓後端進程。
+**自動重啓**：如果後端崩潰，GUI 會在 300ms 冷卻後自動重啓後端進程。
 
 因此最常見的操作錯誤是：二進制路徑正確，但工作目錄錯誤，導致配置文件找不到或加載了錯誤配置。
 

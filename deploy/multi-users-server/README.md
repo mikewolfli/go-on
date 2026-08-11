@@ -103,14 +103,16 @@ cp target/release/go-on /opt/go-on/backend/
 Create `/opt/go-on/backend/environment` (chmod 600):
 
 ```bash
-DB_HOST=localhost
-DB_PORT=5432
-DB_USER=goon
-DB_PASS=your-strong-password
-DB_NAME=goon
+GO_ON_PG_CONNECTION_STRING=postgres://goon:your-strong-password@localhost:5432/goon?sslmode=require
 GO_ON_ENTRY_API_KEY=generate-a-random-64-char-secret
 DEEPSEEK_API_KEY=sk-xxxxx
 ```
+
+> **Important**: the binary resolves its PostgreSQL DSN from
+> `GO_ON_PG_CONNECTION_STRING` (fallbacks: `DATABASE_URL`, `PG_DSN`,
+> `GO_ON_DATABASE_URL`). The legacy `DB_HOST`/`DB_PORT`/`DB_USER`/`DB_PASS`/
+> `DB_NAME` variables are **not** read by the code — set the DSN directly as
+> shown above.
 
 ### 3.4 Deploy configuration
 
@@ -180,11 +182,14 @@ Configured via environment variables (never write credentials to config.toml):
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DB_HOST` | Database host | `localhost` |
-| `DB_PORT` | Database port | `5432` |
-| `DB_USER` | Database user | — |
-| `DB_PASS` | Database password | — |
-| `DB_NAME` | Database name | — |
+| `GO_ON_PG_CONNECTION_STRING` | PostgreSQL DSN (`postgres://user:pass@host:5432/db?sslmode=require`) | — |
+| `DATABASE_URL` | Fallback DSN if the above is unset | — |
+| `PG_DSN` | Fallback DSN | — |
+| `GO_ON_DATABASE_URL` | Fallback DSN | — |
+
+> The legacy `DB_HOST`/`DB_PORT`/`DB_USER`/`DB_PASS`/`DB_NAME` variables are
+> not read by the binary — the DSN must be provided via one of the variables
+> above.
 
 ### Migration
 

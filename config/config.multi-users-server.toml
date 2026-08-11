@@ -3,7 +3,8 @@
 #   Build:   cargo build --no-default-features -F multi-users-server
 #   Backend: PostgreSQL + pgvector, multi-user production
 #   Full multi-user features: CORS, JWT-like auth, RBAC, tenant quotas
-#   NOTE:    Set DB_USER, DB_PASS, DB_HOST env vars before startup.
+#   NOTE:    Set GO_ON_PG_CONNECTION_STRING (or DATABASE_URL / PG_DSN /
+#            GO_ON_DATABASE_URL) to a PostgreSQL DSN before startup.
 #            Set GO_ON_ENTRY_API_KEY for gateway auth.
 #            Set GO_ON_USER_AUTH_TOKEN_SECRET for user token signing.
 #            Set GO_ON_CORS_ALLOWED_ORIGINS for allowed origins (comma-separated).

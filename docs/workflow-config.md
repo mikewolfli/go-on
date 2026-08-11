@@ -152,7 +152,7 @@ Each `[phases.<name>.options]` block supports:
 | `review_min_response_chars` | usize | 12 | Min chars for review to accept |
 | `cache_enabled` | bool | true | Enable response cache |
 | `vector_enabled` | bool | true | Enable vector memory |
-| `summary_enabled` | bool | false | Enable phase summary |
+| `summary_enabled` | bool | true | Enable phase summary |
 | `phase_max_inflight` | usize | 24 | Max concurrent tasks in this phase (adaptive coding template) |
 | `global_max_inflight` | usize | 128 | Max concurrent tasks globally |
 | `extra` | table | `{}` | Additional key-value options |
@@ -353,11 +353,28 @@ their own configuration, phases, and agent preferences.
 
 ### Skill Discovery and Execution Flow
 
-1. **Registration** — Skills are registered in `config.toml` under the `[skills]` section
-2. **Discovery** — The SkillBus scans registered skills at startup
+1. **Discovery** — Skills are discovered from `~/.agents/skills/` (user
+   skills), the built-in registry, and the import store / marketplace
+2. **Registration** — The server registers discovered skills into a unified
+   `SkillRegistry` at startup
 3. **Invocation** — Skills can be invoked explicitly by name or automatically matched based on context
 4. **Execution** — Each skill runs in its own phase context with dedicated agents
 5. **Result** — Skill output can be fed back into the main workflow or returned directly
+
+### Skill Configuration
+
+Skills are configured in `config.toml` under `[runtime]` keys — there is no
+`[skills]` TOML section (the SkillBus described in earlier docs was removed):
+
+```toml
+[runtime]
+skills_enabled = true            # master switch for user skill discovery
+skills_import_enabled = false    # allow importing skills from GitHub/URL/local
+skills_allowed_sources = []      # e.g. ["github", "url", "local"]
+skills_require_sha256 = false    # require pinned SHA-256 for imports
+skills_allow_floating_ref = true # allow non-pinned refs (branches/tags)
+skills_cache_dir = "~/.go-on/skills-cache"
+```
 
 ### Skill Dedup Protection
 
@@ -366,21 +383,6 @@ The system automatically deduplicates skills by name and version:
 - If two skills have the same name, the one with the higher version wins
 - If versions are equal, the last registered skill is kept
 - Built-in skills cannot be overridden by custom skills with the same name
-
-### Creating Skills
-
-Skills are defined in the `[skills]` section of `config.toml`:
-
-```toml
-[skills.code-review]
-enabled = true
-description = "Perform automated code review"
-
-[skills.code-review.phases.coding]
-description = "Analyze code changes"
-agents = ["reviewer-agent"]
-fallback = true
-```
 
 ## 11. Feature Profiles
 
@@ -397,7 +399,8 @@ go-on has four build profiles that enable different feature sets:
 | MemoryBus | ✅ | ✅ | ✅ | ✅ |
 | ProtocolBus | ✅ | ✅ | ✅ | ✅ |
 | DistributedMemoryBus | ❌ | ✅ | ✅ | ✅ |
-| Multimodal / CAD / image / barcode tools | ❌ | ❌ | ❌ | ✅ |
+| Multimodal docs (PDF/DOCX/HTML/MD/Excel/PPT) | ✅ | ✅ | ✅ | ✅ |
+| CAD / image / barcode / data-export / game tools | ❌ | ❌ | ❌ | ✅ |
 
 To build with a specific profile:
 

@@ -3,7 +3,6 @@
 //! CapabilityBus is NOT a "big monolithic bus" — it is a **scheduling coordinator**
 //! that mediates data flow between 13 independent sub-buses and drives the
 //! reinforcement-learning feedback loop.
-//! CapabilityBus — Unified scheduling coordinator (BLUE38 ARCH-13)
 //!
 //! # Architecture
 //!

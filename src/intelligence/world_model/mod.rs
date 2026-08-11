@@ -21,7 +21,7 @@ pub use types::*;
 use crate::i18n::runtime::tf;
 
 use anyhow::{bail, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex};
 struct Inner {
     config: WorldModelConfig,
     entities: Vec<WorldEntity>,
-    events: Vec<WorldEvent>,
+    events: VecDeque<WorldEvent>,
     last_update_ms: u64,
     next_entity_id: u64,
     next_event_id: u64,
@@ -57,7 +57,7 @@ impl WorldModel {
             inner: Arc::new(Mutex::new(Inner {
                 config,
                 entities: Vec::new(),
-                events: Vec::new(),
+                events: VecDeque::new(),
                 last_update_ms: crate::shared::timestamps::now_ts_ms() as u64,
                 next_entity_id: 1,
                 next_event_id: 1,
@@ -125,6 +125,20 @@ impl WorldModel {
         Ok(id)
     }
 
+    /// Find the entity ID for an existing `name` + `entity_type` pair.
+    ///
+    /// Returns `None` when no such entity exists. Used for get-or-create
+    /// semantics: callers can `register_entity` first and fall back to this
+    /// lookup when registration reports a duplicate.
+    pub fn find_entity_id(&self, name: &str, entity_type: EntityType) -> Option<String> {
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
+        inner
+            .entities
+            .iter()
+            .find(|e| e.name == name && e.entity_type == entity_type)
+            .map(|e| e.id.clone())
+    }
+
     /// Update properties of an existing entity.
     ///
     /// Merges the provided `properties` into the entity's existing properties.
@@ -173,11 +187,11 @@ impl WorldModel {
             timestamp_ms: now,
         };
 
-        inner.events.push(event);
+        inner.events.push_back(event);
 
-        // Enforce max events limit by trimming oldest.
+        // Enforce max events limit by trimming oldest (O(1) front pop).
         while inner.events.len() > inner.config.max_events {
-            inner.events.remove(0);
+            inner.events.pop_front();
         }
 
         inner.last_update_ms = now;
@@ -288,5 +302,31 @@ mod tests {
 
         assert!(!event_id.is_empty());
         assert!(event_id.starts_with("evt_"));
+    }
+
+    #[test]
+    fn test_find_entity_id_returns_registered_id() {
+        // Regression (P1): `evolve_world_model` registers with a name and must
+        // fall back to `find_entity_id` for subsequent get-or-create calls; if
+        // the lookup returned the wrong id, entity properties would never be
+        // written.
+        let wm = WorldModel::new(test_config());
+        let id = wm
+            .register_entity("action_analyze", EntityType::System)
+            .unwrap();
+
+        // Lookup by the same name + type must return the SAME id.
+        assert_eq!(
+            wm.find_entity_id("action_analyze", EntityType::System)
+                .as_deref(),
+            Some(id.as_str())
+        );
+        // Unknown name / different type → None.
+        assert!(wm
+            .find_entity_id("action_analyze", EntityType::Agent)
+            .is_none());
+        assert!(wm
+            .find_entity_id("no_such_entity", EntityType::System)
+            .is_none());
     }
 }

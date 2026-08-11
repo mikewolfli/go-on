@@ -31,9 +31,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN groupadd -r go-on && useradd -r -g go-on -d /opt/go-on -s /sbin/nologin go-on
 
-# Data directory for cache/vector/memory SQLite stores (config paths use
-# /var/lib/go-on). Created here so the non-root runtime user can write to it.
-RUN mkdir -p /var/lib/go-on && chown go-on:go-on /var/lib/go-on
+# Data directory for SQLite fallback stores. The multi-users config template
+# uses relative paths (sqlite3/...) under WORKDIR /opt/go-on; in production
+# the PostgreSQL backend is activated via GO_ON_PG_CONNECTION_STRING and the
+# SQLite paths are unused. Created here so the non-root runtime user can write
+# to it if the SQLite fallback is ever used.
+RUN mkdir -p /opt/go-on/sqlite3 /var/lib/go-on && chown go-on:go-on /opt/go-on /var/lib/go-on
 
 COPY --from=builder --chown=go-on:go-on /go-on /usr/local/bin/go-on
 

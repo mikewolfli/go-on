@@ -9,9 +9,9 @@ pub mod builtin_tools;
 pub mod exec_common;
 pub mod executor;
 pub mod extended;
+pub mod file_walk;
 pub mod governance_gate;
 pub mod lock;
-pub mod loop_executor;
 // pub mod native; — removed: NativeToolBridge was superseded by shared::tool_descriptors
 // and all tests were already covered by autonomy_runtime tests.
 // pub mod registry_macro; — removed: the builtin_tools! macro had no production callers.
@@ -20,8 +20,8 @@ pub mod loop_executor;
 pub mod types;
 use crate::i18n::runtime::tf;
 use anyhow::Result;
+pub use file_walk::*;
 pub use governance_gate::{governance_cache, is_low_risk_tool, ShardedGovernanceCache};
-pub use loop_executor::*;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 pub use types::*;

@@ -55,7 +55,7 @@ Create `config/config.multi-users-server.toml`:
 
 ```toml
 # config/config.multi-users-server.toml
-default_phase = "coding"
+default_phase = "think"
 model_selection_mode = "adaptive"
 
 [protocol]
@@ -91,7 +91,7 @@ otel_enabled = true
 otel_exporter = "otlp"
 otel_endpoint = "http://localhost:4317"
 
-otel_sample_ratio = 0.1
+otel_sample_ratio = 0.5
 
 [cache]
 enabled = true
@@ -116,10 +116,10 @@ min_similarity = 0.7
 > at `GET /metrics` on the ACP HTTP port (8090).
 
 ### Feature Flags
-Multi-Users Server mode requires:
-- `backend-postgres`: PostgreSQL database support
-- `postgres`: PostgreSQL client library
-- `backend-postgres`: PostgreSQL backend (postgres + pgvector)
+Multi-Users Server mode is a **profile** (`multi-users-server`) that already
+includes the PostgreSQL backend; enabling the raw `backend-postgres` feature
+alone does not select any profile and fails the compile-time gate. See
+`Cargo.toml` for the exact profile composition.
 
 ### Runtime Config Fields
 
@@ -145,11 +145,8 @@ The following runtime configuration fields are specific to multi-user mode:
 
 ### Building for Enterprise Deployment
 ```bash
-# Build with multi-users-server profile
+# Build with multi-users-server profile (includes PostgreSQL + pgvector)
 cargo build --no-default-features -F multi-users-server
-
-# Or explicitly enable the backend feature (still only the one backend):
-cargo build --no-default-features --features backend-postgres
 ```
 
 ### System Requirements
@@ -186,7 +183,7 @@ services:
   go-on:
     build:
       context: .
-      dockerfile: Dockerfile.multi-users
+      dockerfile: Dockerfile
     environment:
       GO_ON_ENTRY_API_KEY: ${ENTRY_API_KEY}
       RUST_LOG: info
@@ -356,7 +353,7 @@ spec:
           valueFrom:
             secretKeyRef:
               name: go-on-secrets
-              key: entry-api-key
+              key: GO_ON_ENTRY_API_KEY
         resources:
           requests:
             memory: "2Gi"

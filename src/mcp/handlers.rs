@@ -10,7 +10,6 @@ use crate::acp::r#impl::request::{
     inject_platform_profiles_if_absent, record_tool_call_audit_with_protocol,
     tools_pack::build_mcp_tool_descriptors,
 };
-use crate::acp::server::AcpServer;
 
 use super::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
@@ -141,10 +140,7 @@ pub struct CreateMessageResult {
 }
 
 fn request_id_key(id: &Value) -> String {
-    match id {
-        Value::String(s) => s.clone(),
-        _ => id.to_string(),
-    }
+    crate::protocol::rpc_protocol::value_to_id(id)
 }
 
 pub(crate) fn error_code_for(err: &anyhow::Error) -> i32 {
@@ -249,7 +245,7 @@ impl McpServer {
             return acp.runtime_config.i18n_default_language.clone();
         }
 
-        "en".to_string()
+        "en-US".to_string()
     }
 
     pub async fn handle_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
@@ -615,7 +611,7 @@ impl McpServer {
         if let Some(acp_server) = self.acp_server.as_ref() {
             let mut tools = build_mcp_tool_descriptors(Some(acp_server.as_ref()));
             // Filter to Direct-exposure tools only (deferred/hidden excluded).
-            filter_tools_by_exposure(&mut tools, acp_server.as_ref());
+            filter_tools_by_exposure(&mut tools);
             let count = tools.len();
             info!("MCP: Listing {} tools/skills", count);
             let mut result =
@@ -1020,8 +1016,6 @@ impl McpServer {
     /// - system prompts derived from agent configurations
     /// - phase-specific task prompts
     ///
-    /// Handler for `prompts/list`.
-    ///
     /// This is a lightweight implementation that surfaces the agent system prompts
     /// as discoverable prompt templates.  Full template parameterisation is a
     /// future enhancement.
@@ -1089,7 +1083,7 @@ impl McpServer {
 /// but discoverable via the `tool_search` / `skill-finder` tools.
 ///
 /// Infrastructure tools (goon_*, acp_*, prompts_*, skill-*) are always kept.
-fn filter_tools_by_exposure(tools: &mut Vec<Value>, _server: &AcpServer) {
+fn filter_tools_by_exposure(tools: &mut Vec<Value>) {
     // Deferred tool name prefixes — niche domains not needed in everyday use.
     const DEFERRED_PREFIXES: &[&str] = &[
         "stl_", "obj_", "dxf_", "step_", "ply_", "iges_", "gltf_", "gcode_", "gpx_", "geo_",

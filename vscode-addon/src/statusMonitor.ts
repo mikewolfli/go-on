@@ -8,7 +8,7 @@ import { RuntimeManagerLike } from "./managerTypes";
 
 /** Health polling interval in seconds.
  *  Reduced from 300s to 30s for faster backend crash detection.
- *  Can be overridden by VS Code setting `go-on.healthCheckInterval`. */
+ *  Can be overridden by VS Code setting `go-on.health.interval`. */
 const DEFAULT_HEALTH_INTERVAL_SECONDS = 30;
 
 interface ProbeReport {

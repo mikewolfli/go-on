@@ -26,8 +26,10 @@ use tokio_util::sync::CancellationToken;
 struct CacheEntry {
     /// Response content
     response: Value,
-    /// Request hash for exact matching
-    request_hash: u64,
+    /// Full request text — exact matching compares the full request, not just
+    /// the (possibly truncated) bucket hash, so multi-turn conversations whose
+    /// first 1024 chars are identical never hit an earlier turn's entry.
+    request: String,
     /// When this entry was created
     created_at: Instant,
     /// Time-to-live
@@ -118,13 +120,15 @@ impl SemanticResponseCache {
             let guard = self.entries.read().expect("SemanticCache entries poisoned");
             guard.get(&hash).and_then(|bucket| {
                 // Find matching entry index — try exact match first, then
-                // similarity. Expired entry removal is handled by the
-                // background cleanup task.
+                // similarity. Exact match requires the full request text to
+                // be equal (the bucket hash alone is not enough: it is
+                // truncated to max_request_hash_len, so distinct requests
+                // sharing a long prefix would collide). Expired entry removal
+                // is handled by the background cleanup task.
                 bucket
                     .iter()
                     .position(|entry| {
-                        entry.request_hash == hash
-                            && now.duration_since(entry.created_at) < entry.ttl
+                        entry.request == request && now.duration_since(entry.created_at) < entry.ttl
                     })
                     .or_else(|| {
                         // Similarity lookup must respect TTL. Uses the same
@@ -151,19 +155,32 @@ impl SemanticResponseCache {
         match match_idx {
             Some(idx) => {
                 self.total_hits.fetch_add(1, Ordering::Relaxed);
-                // Best-effort LRU touch: refresh `last_accessed` so eviction
-                // prefers entries that have actually been served (previously
-                // `last_accessed` was only set at insert — eviction was by
-                // insertion order, not recency).
+                // Best-effort LRU touch + read under a single write lock so the
+                // returned entry matches the one found above (a read-after-
+                // read could otherwise read a shifted bucket index if a
+                // concurrent put evicted an earlier entry in the same bucket).
                 if let Ok(mut guard) = self.entries.try_write() {
-                    if let Some(bucket) = guard.get_mut(&hash) {
-                        if let Some(entry) = bucket.get_mut(idx) {
+                    let hit = guard.get_mut(&hash).and_then(|bucket| {
+                        bucket.get_mut(idx).map(|entry| {
                             entry.last_accessed = Instant::now();
-                        }
-                    }
+                            entry.response.clone()
+                        })
+                    });
+                    hit
+                } else {
+                    // Write lock contended — fall back to a fresh read that
+                    // re-verifies by request text (not index).
+                    let guard = self.entries.read().expect("SemanticCache entries poisoned");
+                    guard.get(&hash).and_then(|bucket| {
+                        bucket
+                            .iter()
+                            .find(|entry| {
+                                entry.request == request
+                                    && now.duration_since(entry.created_at) < entry.ttl
+                            })
+                            .map(|e| e.response.clone())
+                    })
                 }
-                let guard = self.entries.read().expect("SemanticCache entries poisoned");
-                guard.get(&hash)?.get(idx).map(|e| e.response.clone())
             }
             None => {
                 self.total_misses.fetch_add(1, Ordering::Relaxed);
@@ -213,7 +230,7 @@ impl SemanticResponseCache {
 
         let entry = CacheEntry {
             response,
-            request_hash: hash,
+            request: request.to_string(),
             created_at: now,
             ttl: Duration::from_secs(ttl_seconds),
             last_accessed: now,
@@ -377,6 +394,42 @@ mod tests {
     fn test_cache_miss() {
         let cache = SemanticResponseCache::new(SemanticCacheConfig::default());
         assert!(cache.get("never cached").is_none());
+    }
+
+    #[test]
+    fn test_truncated_hash_collision_does_not_exact_match() {
+        // Regression (P1): the bucket hash truncates to max_request_hash_len,
+        // so two requests sharing a long prefix land in the same bucket.
+        // Exact matching must compare the full request text, not just the
+        // bucket hash — otherwise a later turn of a conversation would receive
+        // an earlier turn's cached answer. The two requests below share their
+        // entire first 1024 chars but ask different questions, so the exact
+        // branch must NOT return turn 1's answer.
+        let cache = SemanticResponseCache::new(SemanticCacheConfig {
+            max_request_hash_len: 1024,
+            // Cosine similarity is bounded by 1.0; a threshold of 2.0 makes
+            // the similarity branch unreachable so the test exercises ONLY the
+            // exact-match branch.
+            similarity_threshold: 2.0,
+            ..Default::default()
+        });
+        let mut turn1 = "system: you are a coding assistant\nuser: explain closures".to_string();
+        while turn1.len() < 2048 {
+            turn1.push_str("\nuser: more context padding");
+        }
+        let turn2 = format!(
+            "{}\nassistant: here is a long explanation of closures.\nuser: now explain traits instead",
+            turn1
+        );
+
+        cache.put(&turn1, json!("turn-1 answer"));
+        // Exact match on the identical request still hits.
+        assert_eq!(cache.get(&turn1).unwrap(), "turn-1 answer");
+        // A later turn with the same prefix must NOT hit turn 1's entry.
+        assert!(
+            cache.get(&turn2).is_none(),
+            "prefix collision must not exact-match"
+        );
     }
 
     #[test]

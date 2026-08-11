@@ -240,9 +240,7 @@ fn measure_planner_dag_reality() -> DimensionScore {
         input: serde_json::json!({}),
     };
 
-    let plan = tokio::runtime::Runtime::new()
-        .expect("create runtime")
-        .block_on(Planner::plan(&envelope));
+    let plan = Planner::plan(&envelope);
     let steps_ok = !plan.steps.is_empty();
     let plan_id_ok = !plan.plan_id.is_empty();
 

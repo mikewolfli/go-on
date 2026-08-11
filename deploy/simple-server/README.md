@@ -38,9 +38,7 @@ gui/target/release/go-on-gui-egui             # Desktop GUI (optional)
 │   ├── go-on                        # Backend binary
 │   ├── go-on-gui-egui              # GUI (optional)
 │   ├── config.toml                 # Main config
-│   ├── backend.log                 # Runtime log (auto-created)
-│   ├── acp_cache.sqlite3           # Cache DB (auto-created)
-│   └── acp_vector.sqlite3          # Vector DB (auto-created)
+│   └── backend.log                 # Runtime log (auto-created)
 ├── deploy/
 │   └── simple-server/
 │       ├── deploy.sh               # One-click deploy script
@@ -49,6 +47,10 @@ gui/target/release/go-on-gui-egui             # Desktop GUI (optional)
 └── config/
     └── config.simple-server.toml   # Template config
 ```
+
+The cache and vector databases live at `/var/lib/go-on/cache.sqlite3` and
+`/var/lib/go-on/vector.sqlite3` (see `cache.path` / `vector.path` in
+`config.simple-server.toml`).
 
 ## 3. Deployment Steps
 
@@ -164,8 +166,8 @@ sudo systemctl restart go-on
 ### Data backup
 
 ```bash
-cp /opt/go-on/backend/acp_cache.sqlite3 /backup/go-on/cache-$(date +%Y%m%d).sqlite3
-cp /opt/go-on/backend/acp_vector.sqlite3 /backup/go-on/vector-$(date +%Y%m%d).sqlite3
+cp /var/lib/go-on/cache.sqlite3 /backup/go-on/cache-$(date +%Y%m%d).sqlite3
+cp /var/lib/go-on/vector.sqlite3 /backup/go-on/vector-$(date +%Y%m%d).sqlite3
 ```
 
 ### Terminal chat mode

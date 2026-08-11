@@ -13,6 +13,27 @@
 - **文档数字修正**：README lib 1513→1533、SDK LOC ~4K→~6.9K、工具表 find→search_files；CHANGELOG 与 log-20260810-4 §12 集成测试数全部对齐实测（transport 18、e2e 8、pua 3、openai 6、i18n 1）；request.rs 测试 `len() >= 1` → `is_empty()`。
 - 验证：4 profile + clippy 全目标零警告；lib 1533/0/0；集成套件全通过；vscode tsc / GUI / SDK 干净。
 
+### 第 45 轮 — 超级深度/广度扫描 XIII：全功能架构统一（2026-08-11，docs/log/log-20260811-3.md）
+
+- **语义缓存多轮误命中修复（P1）**：精确匹配改比较完整请求原文（截断 hash 仅作桶键）；调用方用最后用户消息作 key（原完整对话历史使第 2 轮起恒命中第 1 轮缓存）；新增回归测试。
+- **WorldModel 实体更新修复（P1）**：`evolve_world_model` get-or-create（register 返回 id / find_entity_id 回退），实体属性（state/reward）真实写入（原用名称当 id 永不匹配）。
+- **MCP 通知哨兵统一**：`notifications/initialized` 的 `id=Some(Null)` 在 HTTP 单请求（202 空体）与 batch（过滤）路径与 stdio 一致，不再泄漏为 200 响应体。
+- **mTLS 配置接线（P2）**：`mtls_require_client_cert` 此前零消费点——ACP/MCP 两臂统一读取（CA 路径存在时默认要求，可显式关闭），`with_client_cert` 门控放开。
+- **DAG 观测真实化（P2）**：`complete_step`/`fail_step` 从 cfg(test) 放开，`workflow.execute` 执行后按真实 subtask 结果推进 DAG，progress/stalled 不再恒初始值。
+- **MCP HTTP drain 接线**：accept 循环停止条件由恒 false 改为 drain_guard（与 ACP 臂一致），排空不再只是固定 sleep。
+- **PG 向量驱逐 COUNT 门控 + HNSW 搜索去全量克隆**：postgres upsert 对齐 SQLite 仅在超限时驱逐；hnsw_search 在 guard 内取候选元数据（消除每次搜索 O(n) 深拷贝）。
+- **CLI 流式渲染去重**：主响应与 follow-up 两段 token 分类/渲染循环提取共享 `render_streaming_tokens`（行为逐分支一致）。
+- **Planner::plan 同步化**：无 await 的 async 传染消除（调用点同步更新）。
+- **Council quorum 上界修复**：`<= active_members` 改 `<= total_members`（成员投票后被自动淘汰不再误拒已达标提案）。
+- **治理评审门直构 verdict**：消除 i18n 字符串往返（翻译改动不再静默翻转评审门）；删除死包装 `resolve_review_policy`/`review_verdict`。
+- **漂移监控误报修复（P2）**：auto-baseline 改滚动均值；harness 延迟改秒单位（0.01 分母成亚 10ms 死区），亚毫秒抖动不再触发 breach；新增回归测试。
+- **死代码/冗余清理**：`prompt_assembler` 死字段、`McpHttpServer.tls_acceptor` 恒 None 字段、`request_id_key` 重复实现、pg_migrate v3 死迁移（session_store 无消费者）、`filter_tools_by_exposure` 未用参数、`PromptLayer::all/name` 测试专用、`loop_executor` 改名 `file_walk`、`PerformanceMetrics.p95/p99` 无消费者（消除每次 get_metrics 全量排序）、`events.remove(0)` O(n) 改 VecDeque、`config_gen` 冗余 timeout 计算。
+- **工具描述双源统一**：MCP tools/list 优先共享 `tool_descriptors` 表（与 LLM function-calling 一致），per-tool description 仅作回退。
+- **三端修复**：GUI `api_key` serde skip 文档如实化、Export Masked/Full 合并（两按钮输出相同）；vscode `go-on.language` 接线生效 + 补声明 `pythonPath`/`execution.*` 配置键、statusMonitor 注释键名修正；i18n 默认值统一 `en-US`。
+- **部署链路修复**：multi-users 部署改 `GO_ON_PG_CONNECTION_STRING`（原 DB_* 变量代码不读取）；k8s secret 键名与 envFrom 对齐；CI `cargo deny` 补安装步骤；删除随发布包分发的过时 `.github/workflows` 副本与 `.DS_Store`。
+- **文档全面更新**：README/CHANGELOG 数字（lib 1537）、cookbook 三语构建命令（profile 语义）、zed.md 模式推断行为、workflow-config `[skills]` 幽灵段改 `[runtime]` 键、SAFEGUARD_MODE posture 表、storage/路径/日志名等多处对齐代码。
+- 验证：lib 1537/0/0；clippy 全目标零警告；4 profile + GUI + vscode tsc + SDK 零错误；16 集成套件全通过。
+
 ## [Unreleased] - 2026-08-10
 
 ### 第 43 轮 — 超级深度/广度扫描 XI：统一链路与收敛（2026-08-10，docs/log/log-20260810-4.md）
@@ -38,6 +59,13 @@
 - `$/cancel_request` 真实取消机制（ACP 镜像 MCP `cancelled_requests` 注册表，飞行中请求以 -32800 中止）；`session/cancel` 真实语义（取消会话拒绝新提示）。
 - RecoveryAction 真实 dispatch（5 个动作可观察执行 + 恢复后一致性检查）；postgres warm tier DSN 修复，不可达时降级 cold；prompt_layers 注入接线；双遗忘循环统一；council tally 参与路由。
 - 三套校验引擎收敛为单一 `ConfigValidator` + 硬门禁；profile 推荐名真实化（local/simple-server/multi-users-server/full）；keyring async 封装（阻塞 I/O 移出 tokio worker）；四 profile 编译全绿。
+
+## [1.5.2] - 2026-08-11
+
+### 版本升级 + 第 45 轮（2026-08-11，docs/log/log-20260811-3.md）
+
+- 全平台版本统一为 **1.5.2**（workspace、GUI、VS Code 插件、rust/python/typescript SDK、crates、cookbook、README 徽章）。
+- 第 45 轮全功能架构统一：完整变更见上方 `[Unreleased]` 区块（P1 语义缓存/world_model 修复、协议/mTLS/drain、DAG/council/治理/漂移、死代码清理、三端、部署/文档）。
 
 ## [1.5.1] - 2026-08-07
 

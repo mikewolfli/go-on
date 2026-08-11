@@ -189,7 +189,7 @@ impl OrchestrationCouncil {
             .lock()
             .map_err(|e| anyhow!("Failed to acquire lock on members: {}", e))?;
 
-        let active_members = members.values().filter(|m| m.is_active).count() as u32;
+        let total_members = members.len() as u32;
         // Drop members lock before acquiring proposals to minimize hold time.
         drop(members);
 
@@ -226,9 +226,14 @@ impl OrchestrationCouncil {
             .filter(|v| v.proposal_id == proposal_id)
             .collect();
 
-        // Check quorum: at least min_members_for_quorum must vote.
+        // Check quorum: at least min_members_for_quorum must vote. The upper
+        // bound uses the TOTAL member count, not the currently-active count:
+        // a member can be auto-ejected (inactive) after casting their vote,
+        // so requiring `votes <= active_members` would wrongly reject a
+        // proposal that already met quorum. The upper bound only guards
+        // against impossible vote counts (more votes than members).
         let quorum_met = proposal_votes.len() as u32 >= self.config.min_members_for_quorum
-            && proposal_votes.len() as u32 <= active_members;
+            && proposal_votes.len() as u32 <= total_members;
 
         if !quorum_met {
             // Mark as rejected when quorum is not met.

@@ -81,11 +81,11 @@ async fn record_agent_intelligence_outcome(
 
 pub(crate) fn is_quota_or_token_limit_error(error_text: &str) -> bool {
     let text = error_text.to_ascii_lowercase();
-    // HTTP 429 rate limit / quota errors
-    text.contains("429")
-        || text.contains("rate limit")
-        || text.contains("quota")
-        || text.contains("insufficient_quota")
+    // Rate-limit / quota markers are delegated to the canonical detector
+    // (agents::agent::is_rate_limit_error) so the shared retry paths and the
+    // fallback path agree on the same keyword set (previously this function
+    // re-listed the first four markers, which could drift apart).
+    crate::agents::agent::is_rate_limit_error(error_text)
         // Token limit/exhaustion
         || text.contains("token") && text.contains("limit")
         || text.contains("token") && text.contains("exhaust")

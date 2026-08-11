@@ -69,7 +69,7 @@ pub struct PlannerExecutionBridge {
 impl PlannerExecutionBridge {
     /// Create a new bridge from a task envelope.
     pub async fn from_task(task: &AgentTaskEnvelope) -> Self {
-        let plan = Planner::plan(task).await;
+        let plan = Planner::plan(task);
         let graph = build_execution_graph_from_plan(&plan);
         let total_steps = plan.steps.len();
         Self {
@@ -85,13 +85,11 @@ impl PlannerExecutionBridge {
     }
 
     /// Mark a step as completed in the DAG.
-    #[cfg(test)]
     pub fn complete_step(&mut self, step_id: &str, output: Value) {
         let _ = self.graph.complete_task(step_id, output);
     }
 
     /// Mark a step as failed in the DAG.
-    #[cfg(test)]
     pub fn fail_step(&mut self, step_id: &str, error: String) {
         let _ = self
             .graph

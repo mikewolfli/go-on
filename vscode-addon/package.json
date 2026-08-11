@@ -2,7 +2,7 @@
   "name": "go-on-vscode",
   "displayName": "Go-On VS Code Extension",
   "description": "VS Code extension for the Go-On Rust ACP proxy",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -829,7 +829,7 @@
         },
         "go-on.health.interval": {
           "type": "number",
-          "default": 300,
+          "default": 30,
           "minimum": 30,
           "maximum": 3600,
           "description": "Health check interval in seconds"
@@ -865,6 +865,33 @@
             "Traditional Chinese"
           ],
           "description": "Language used for the Go-On runtime interface"
+        },
+        "go-on.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Path to the Python interpreter used when running code from the chat view"
+        },
+        "go-on.execution.timeout": {
+          "type": "number",
+          "default": 30000,
+          "minimum": 1000,
+          "description": "Timeout in milliseconds for code executed from the chat view"
+        },
+        "go-on.execution.allowedShellPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "/bin/bash",
+            "/bin/sh",
+            "/usr/bin/bash",
+            "/bin/zsh",
+            "/usr/bin/zsh",
+            "cmd.exe",
+            "C:\\Windows\\System32\\cmd.exe"
+          ],
+          "description": "Whitelist of shell executables that may run code from the chat view"
         }
       }
     }

@@ -2814,7 +2814,7 @@ dependencies = [
 
 [[package]]
 name = "go-on"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2888,7 +2888,7 @@ dependencies = [
 
 [[package]]
 name = "go-on-gui-egui"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2920,14 +2920,14 @@ dependencies = [
 
 [[package]]
 name = "go-on-latex"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "go-on-mermaid-render"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "anyhow",
  "merman",
@@ -2940,7 +2940,7 @@ dependencies = [
 
 [[package]]
 name = "go-on-web-search"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -2950,7 +2950,7 @@ dependencies = [
 
 [[package]]
 name = "go_on_sdk"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "fastrand",
  "futures",

@@ -55,7 +55,7 @@
 
 ```toml
 # config/config.multi-users-server.toml
-default_phase = "coding"
+default_phase = "think"
 model_selection_mode = "adaptive"
 
 [protocol]
@@ -90,7 +90,7 @@ tenant_default_daily_api_calls = 10000
 otel_enabled = true
 otel_exporter = "otlp"
 otel_endpoint = "http://localhost:4317"
-otel_sample_ratio = 0.1
+otel_sample_ratio = 0.5
 
 [cache]
 enabled = true
@@ -115,10 +115,9 @@ min_similarity = 0.7
 > `GET /metrics` 提供。
 
 ### 特性标志
-多用户服务器模式需要：
-- `backend-postgres`：PostgreSQL 数据库支持
-- `postgres`：PostgreSQL 客户端库
-- `pgvector`：PostgreSQL 的向量扩展
+多用户服务器模式是一个 **profile**（`multi-users-server`），已包含 PostgreSQL
+后端；单独启用 `backend-postgres` 特性不会选择任何 profile，会触发编译期门禁失败。
+具体 profile 组成见 `Cargo.toml`。
 
 ### 运行时配置字段
 
@@ -144,11 +143,8 @@ min_similarity = 0.7
 
 ### 为企业部署构建
 ```bash
-# 使用 multi-users-server 配置文件构建
+# 使用 multi-users-server profile 构建（包含 PostgreSQL + pgvector）
 cargo build --no-default-features -F multi-users-server
-
-# 或显式启用后端特性（仍然只启用一个后端）：
-cargo build --no-default-features --features backend-postgres
 ```
 
 ### 系统要求
@@ -185,7 +181,7 @@ services:
   go-on:
     build:
       context: .
-      dockerfile: Dockerfile.multi-users
+      dockerfile: Dockerfile
     environment:
       GO_ON_ENTRY_API_KEY: ${ENTRY_API_KEY}
       RUST_LOG: info
@@ -355,7 +351,7 @@ spec:
           valueFrom:
             secretKeyRef:
               name: go-on-secrets
-              key: entry-api-key
+              key: GO_ON_ENTRY_API_KEY
         resources:
           requests:
             memory: "2Gi"

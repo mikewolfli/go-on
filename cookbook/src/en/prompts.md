@@ -176,10 +176,13 @@ AI agents discover these tools via the MCP protocol and can automatically select
 
 ## Settings Toggle
 
-In **Settings → Feature Toggles**, you can enable or disable the **Prompts** module. When disabled:
+In **Settings → Feature Toggles**, you can enable or disable the **Prompts** tab.
+When disabled:
 
 - The Prompts Tab is hidden from the tab bar
-- Related RPC interfaces stop responding
-- Related MCP tools stop responding
+
+The toggle only controls GUI visibility — the backend `prompts.*` RPC
+interfaces and MCP `prompts_list` / `prompts_get` tools remain available to
+clients regardless of the GUI toggle.
 
 > Default state: **Enabled**

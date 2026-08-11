@@ -17,7 +17,8 @@ This document defines production SLO and pre-release drill gates for go-on.
 3. Run release readiness gate (it validates all four profiles against the configs in `config/`):
    - Linux/macOS: `scripts/run-release-readiness-gate.sh`
    - Windows: `scripts/run-release-readiness-gate.ps1`
-4. Ensure all checks pass:
+4. Run the manual runtime drill (not automated by the gate script, which only
+   covers compile-time checks) against a running server and confirm:
    - `runtime.stability`
    - `security.baseline`
    - `observability.alerts`

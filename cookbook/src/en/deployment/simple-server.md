@@ -71,19 +71,16 @@ otel_endpoint = "http://localhost:4317"
 > on the ACP HTTP port (8090).
 
 ### Feature Flags
-Simple Server mode requires:
-- `backend-sqlite`: SQLite database support
-- `backend-sqlite`: SQLite backend (rusqlite + sqlite-vec)
+Simple Server mode is a **profile** (`simple-server`) that already includes the
+SQLite backend; the raw `backend-sqlite` feature alone does not select any
+profile. See `Cargo.toml` for the exact profile composition.
 
 ## Installation
 
 ### Building for Server Deployment
 ```bash
-# Build with simple-server profile
+# Build with simple-server profile (includes SQLite + sqlite-vec)
 cargo build --no-default-features -F simple-server
-
-# Or explicitly enable the backend feature
-cargo build --features backend-sqlite
 ```
 
 ### System Requirements

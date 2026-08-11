@@ -62,12 +62,13 @@ fi
 if [ ! -f "${INSTALL_DIR}/backend/environment" ]; then
   echo "ERROR: Environment file not found at ${INSTALL_DIR}/backend/environment"
   echo "Create it manually with the required variables:"
-  echo "  DB_HOST=localhost"
-  echo "  DB_PORT=5432"
-  echo "  DB_USER=goon"
-  echo "  DB_PASS=<your-password>"
-  echo "  DB_NAME=goon"
+  echo "  GO_ON_PG_CONNECTION_STRING=postgres://USER:PASS@HOST:5432/goon?sslmode=require"
   echo "  GO_ON_ENTRY_API_KEY=<your-api-key>"
+  echo "  DEEPSEEK_API_KEY=<your-key>"
+  echo ""
+  echo "The legacy DB_HOST/DB_PORT/DB_USER/DB_PASS/DB_NAME variables are NOT read by"
+  echo "the binary — the PostgreSQL DSN is resolved via GO_ON_PG_CONNECTION_STRING"
+  echo "(fallbacks: DATABASE_URL, PG_DSN, GO_ON_DATABASE_URL)."
   exit 1
 else
   echo "Environment file exists — keeping existing."

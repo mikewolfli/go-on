@@ -440,7 +440,7 @@ If `--chat` is passed and no providers are configured, the onboarding prompt is 
 
 ```bash
 go-on -c config.toml -a
-# → "No AI agents configured. Run go-on --init to set up a provider first."
+# → "No AI agents configured. Run `go-on --init` to set up a provider."
 ```
 
 ## Common command recipes

@@ -1,6 +1,6 @@
 [package]
 name = "go-on-latex"
-version = "1.5.1"
+version = "1.5.2"
 edition = "2021"
 description = "LaTeX math rendering for go-on - converts LaTeX expressions to SVG"
 

@@ -72,13 +72,6 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         summary_text    TEXT NOT NULL,
         updated_at      BIGINT NOT NULL
     );",
-    // v3: session_store
-    "CREATE TABLE IF NOT EXISTS session_store (
-        session_id      TEXT PRIMARY KEY,
-        session_data    TEXT NOT NULL,
-        created_at      BIGINT NOT NULL,
-        updated_at      BIGINT NOT NULL
-    );",
 ];
 
 /// Run all pending migrations up to (and including) `target_version`.

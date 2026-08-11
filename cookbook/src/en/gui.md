@@ -27,7 +27,7 @@ The backend process is started from the configured working directory. The GUI ex
 ### Chat Tab
 - Multi-session management: create, switch, delete sessions
 - Multi-model support: each session can select a different AI model
-- Phase selection: coding / review / debug / test / deploy
+- Phase selection: from backend config (default `think/act/check/done`)
 - Mode switching: Ask / Plan / Edit / Safeguard / Full Auto
 - File attachments: upload files as chat context
 - Dynamic send button: changes based on AI status (loading / ready / error)
@@ -97,7 +97,7 @@ cargo run --manifest-path gui/Cargo.toml
 
 ## Linking the backend
 
-The GUI can auto-discover the backend executable. When auto-link succeeds it uses the executable's parent directory as the working directory and stores logs as `go-on.log` there.
+The GUI can auto-discover the backend executable. When auto-link succeeds it uses the executable's parent directory as the working directory and stores logs as `backend.log` there.
 
 If auto-discovery does not succeed, configure manually:
 
@@ -116,9 +116,9 @@ API keys no longer need to be written to `.env.goon` — all keys are injected d
 
 ## Runtime process behavior
 
-When the GUI starts the backend process, it launches the configured executable from the working directory and writes stdout and stderr to `go-on.log`.
+When the GUI starts the backend process, it launches the configured executable from the working directory and writes stdout and stderr to `backend.log`.
 
-**Auto-restart**: if the backend crashes, the GUI automatically restarts it after a 3-second cool-down.
+**Auto-restart**: if the backend crashes, the GUI automatically restarts it after a 300 ms cool-down.
 
 Because startup depends on the working directory, the most common operator mistake is pointing the GUI at the correct binary but the wrong directory.
 

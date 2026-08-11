@@ -46,34 +46,3 @@ pub(crate) fn review_timeout(
         })
         .map(Duration::from_secs)
 }
-
-pub(crate) fn review_verdict(response: &str, min_response_chars: usize) -> QualityVerdict {
-    if response.trim().chars().count() < min_response_chars {
-        return QualityVerdict::Invalid;
-    }
-
-    let first_line = response.lines().find(|line| !line.trim().is_empty());
-    match first_line.map(|line| line.trim().to_ascii_uppercase()) {
-        Some(value) if value == "APPROVE" => QualityVerdict::Approve,
-        Some(value) if value == "REJECT" => QualityVerdict::Reject,
-        // Allow optional colon separator: "APPROVE:" or "REJECT:"
-        Some(value) if value.starts_with("APPROVE:") => {
-            // Require at least one valid reason character after the colon
-            let rest = &value["APPROVE:".len()..];
-            if !rest.trim().is_empty() {
-                QualityVerdict::Approve
-            } else {
-                QualityVerdict::Invalid
-            }
-        }
-        Some(value) if value.starts_with("REJECT:") => {
-            let rest = &value["REJECT:".len()..];
-            if !rest.trim().is_empty() {
-                QualityVerdict::Reject
-            } else {
-                QualityVerdict::Invalid
-            }
-        }
-        _ => QualityVerdict::Invalid,
-    }
-}

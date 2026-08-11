@@ -292,6 +292,7 @@ pub async fn dispatch_server(
             let mtls_ca = acp_server.runtime_config.mtls_ca_cert_path.clone();
             let mtls_cert = acp_server.runtime_config.mtls_server_cert_path.clone();
             let mtls_key = acp_server.runtime_config.mtls_server_key_path.clone();
+            let mtls_require_client_cert = acp_server.runtime_config.mtls_require_client_cert;
             let acp_server = Arc::new(acp_server);
             // Reuse the tenant rate limiter injected by the server builder
             // (`new_acp_server` → `server.rate_limiting.rate_limit_middleware`)
@@ -312,7 +313,13 @@ pub async fn dispatch_server(
             )
             // Wire the runtime mTLS config so MCP HTTP can actually serve
             // TLS/mTLS (previously the acceptor fields were unreachable).
-            .with_mtls_config(mtls_enabled, &mtls_ca, &mtls_cert, &mtls_key);
+            .with_mtls_config(
+                mtls_enabled,
+                &mtls_ca,
+                &mtls_cert,
+                &mtls_key,
+                mtls_require_client_cert,
+            );
             let s = match shared_limiter {
                 Some(limiter) => s.with_rate_limiter(limiter),
                 None => s,

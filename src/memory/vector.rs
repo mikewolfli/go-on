@@ -1084,15 +1084,16 @@ impl VectorStore {
         let ef = (top_k * 4).max(hnsw.ef_search);
         let results = hnsw.search(query_embedding, ef);
 
-        let metadata = hnsw.metadata.clone();
-        drop(hnsw_guard);
-
+        // Do NOT clone the entire metadata Vec (each entry carries the full
+        // response_text — O(n) deep copy on every search). Only the top-k
+        // candidates' metadata is touched, so access it while the guard is
+        // held instead of cloning it out.
         let mut scored: Vec<(String, f32, String)> = Vec::with_capacity(results.len());
         for nd in &results {
             if nd.dist > 1.0 - min_similarity {
                 continue;
             }
-            let meta = &metadata[nd.idx];
+            let meta = &hnsw.metadata[nd.idx];
             // The SQLite paths filter by phase (`WHERE phase = ?1`); the HNSW
             // path must do the same so the two paths never disagree on which
             // memories are visible.
@@ -1103,6 +1104,7 @@ impl VectorStore {
             let blended = blend_similarity_with_recency(similarity, now, meta.updated_at);
             scored.push((meta.memory_key.clone(), blended, meta.response_text.clone()));
         }
+        drop(hnsw_guard);
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);
@@ -1795,14 +1797,22 @@ impl VectorStore {
                 ],
             )?;
 
-            client.execute(
-                "DELETE FROM vector_memory
-                 WHERE memory_key NOT IN (
-                     SELECT memory_key FROM vector_memory
-                     ORDER BY updated_at DESC LIMIT $1
-                 )",
-                &[&max_entries],
-            )?;
+            // Evict only when the table actually exceeds the cap. The COUNT
+            // gate avoids the full-table ORDER BY sort + DELETE on every normal
+            // write, matching the SQLite path (vector.rs upsert / cache.rs).
+            let over_cap: i64 = client
+                .query_one("SELECT COUNT(*) - $1 FROM vector_memory", &[&max_entries])?
+                .get(0);
+            if over_cap > 0 {
+                client.execute(
+                    "DELETE FROM vector_memory
+                     WHERE memory_key NOT IN (
+                         SELECT memory_key FROM vector_memory
+                         ORDER BY updated_at DESC LIMIT $1
+                     )",
+                    &[&max_entries],
+                )?;
+            }
 
             Ok(())
         })

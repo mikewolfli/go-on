@@ -228,7 +228,7 @@ async fn record_plan_alignment(
                 "message_count": 1,
             }),
         };
-        Planner::plan(&envelope).await
+        Planner::plan(&envelope)
     };
     let plan_value = json!({
         "plan_id": execution_plan.plan_id,

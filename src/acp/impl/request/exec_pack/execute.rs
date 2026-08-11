@@ -621,6 +621,24 @@ pub(crate) async fn handle_workflow_execute(
     )
     .await;
 
+    // Reflect the real execution outcome in the DAG observation payload:
+    // previously the planner bridge was read-only in production, so
+    // progress_snapshot() always reported the initial state (completed=1 for
+    // the Start node) and dag_is_stalled() could never fire. Push each
+    // subtask's actual outcome into the bridge so the payload is truthful.
+    let mut planner_bridge = planner_bridge;
+    for record in &execution_records {
+        match record.outcome.as_deref() {
+            Some("completed") => {
+                planner_bridge.complete_step(&record.id, json!({ "status": "completed" }));
+            }
+            Some("failed") => {
+                planner_bridge.fail_step(&record.id, record.status.clone());
+            }
+            _ => {} // pending / skipped: leave the node untouched
+        }
+    }
+
     let characteristics = TaskRouter::analyze_task(&task_text);
     let phase_options = server.flow_manager().and_then(|flow| {
         flow.config()
