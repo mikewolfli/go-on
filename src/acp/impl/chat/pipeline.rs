@@ -183,7 +183,7 @@ impl ChatPipeline {
                 trace,
                 stream_observer.clone(),
                 started,
-                &resolve_out,
+                &mut resolve_out,
                 &routing_out,
             )
             .await

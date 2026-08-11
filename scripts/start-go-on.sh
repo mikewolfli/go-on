@@ -52,9 +52,11 @@ start() {
 
     # Print current protocol mode from config file ([protocol].mode — the
     # canonical key; the legacy [runtime].protocol_mode key was removed).
+    # Scope the match to the [protocol] section: a bare "^mode" prefix match
+    # would pick up the top-level `model_selection_mode` line instead.
     CONFIG_FILE="${GOON_CONFIG:-$ROOT_DIR/config/config.toml}"
-    if grep -q "^mode" "$CONFIG_FILE" 2>/dev/null; then
-        PROTO_MODE=$(grep "^mode" "$CONFIG_FILE" | head -n1 | cut -d'=' -f2 | tr -d ' "')
+    PROTO_MODE=$(sed -n '/^\[protocol\]/,/^\[/p' "$CONFIG_FILE" 2>/dev/null | grep '^mode' | head -n1 | cut -d'=' -f2 | tr -d ' "')
+    if [ -n "$PROTO_MODE" ]; then
         echo "[info] current protocol mode: $PROTO_MODE"
     fi
 

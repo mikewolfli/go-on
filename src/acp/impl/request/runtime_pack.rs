@@ -185,10 +185,7 @@ fn copilot_models_cache() -> &'static CopilotModelsCache {
 fn read_copilot_models_cache() -> Option<Vec<String>> {
     let guard = copilot_models_cache().try_lock().ok()?;
     let (fetched_at, models) = guard.as_ref()?.clone();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let now = crate::shared::timestamps::now_ts() as u64;
     if now.saturating_sub(fetched_at) <= COPILOT_MODELS_CACHE_TTL_SECS {
         Some(models)
     } else {
@@ -203,10 +200,7 @@ async fn read_stale_copilot_models_cache() -> Option<Vec<String>> {
 
 async fn store_copilot_models_cache(models: Vec<String>) {
     let mut guard = copilot_models_cache().lock().await;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let now = crate::shared::timestamps::now_ts() as u64;
     *guard = Some((now, models));
 }
 

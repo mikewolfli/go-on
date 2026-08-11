@@ -23,19 +23,20 @@ suite("configManager", () => {
     test("default cache config has expected values", () => {
       const config = configManager.getConfig();
       assert.strictEqual(config.cache.enabled, true);
-      assert.strictEqual(config.cache.default_ttl_seconds, 1800);
-      assert.strictEqual(config.cache.max_entries, 2000);
-      assert.ok(config.cache.path.length > 0);
+      assert.strictEqual(config.cache.default_ttl_seconds, 3600);
+      assert.strictEqual(config.cache.max_entries, 5000);
+      assert.strictEqual(config.cache.path, "sqlite3/acp_cache.sqlite3");
     });
 
     test("default vector config has expected values", () => {
       const config = configManager.getConfig();
       assert.strictEqual(config.vector.enabled, true);
       assert.strictEqual(config.vector.auto_mode, true);
-      assert.strictEqual(config.vector.dimensions, 128);
+      assert.strictEqual(config.vector.dimensions, 192);
       assert.strictEqual(config.vector.top_k, 2);
       assert.strictEqual(config.vector.min_similarity, 0.82);
-      assert.strictEqual(config.vector.max_entries, 3000);
+      assert.strictEqual(config.vector.max_entries, 10000);
+      assert.strictEqual(config.vector.path, "sqlite3/acp_vector.sqlite3");
     });
 
     test("default autotune config has expected values", () => {
@@ -43,6 +44,10 @@ suite("configManager", () => {
       assert.strictEqual(config.autotune.enabled, false);
       assert.strictEqual(config.autotune.evaluate_interval, 20);
       assert.strictEqual(config.autotune.max_top_k, 4);
+      assert.strictEqual(
+        config.autotune.state_path,
+        "sqlite3/acp_autotune_state.json",
+      );
     });
 
     test("default runtime config has expected values", () => {
@@ -128,7 +133,7 @@ suite("configManager", () => {
       const val = configManager.getConfigValue("cache.max_entries");
       assert.strictEqual(val, 1000);
       // Reset
-      configManager.setConfigValue("cache.max_entries", 2000);
+      configManager.setConfigValue("cache.max_entries", 5000);
     });
 
     test("creates intermediate objects for a deeply nested path", () => {
@@ -164,7 +169,7 @@ suite("configManager", () => {
     test("getConfigValue returns number for numeric fields", () => {
       const val = configManager.getConfigValue("vector.dimensions");
       assert.strictEqual(typeof val, "number");
-      assert.strictEqual(val, 128);
+      assert.strictEqual(val, 192);
     });
 
     test("getConfigValue returns string for string fields", () => {

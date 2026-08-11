@@ -121,6 +121,8 @@ pub async fn create_checkpoint_record(
 
     let checkpoint_id = format!(
         "cp-{}-{}",
+        // Nanosecond resolution for checkpoint-id uniqueness; the shared
+        // timestamp helpers expose seconds/millis only, so this stays inline.
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -142,10 +144,7 @@ pub async fn create_checkpoint_record(
         conversation_id: conversation_id.to_string(),
         branch_id: branch_id.to_string(),
         parent_checkpoint_id: resolved_parent,
-        created_at: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
+        created_at: crate::shared::timestamps::now_ts(),
         note,
         metacognitive_loop: None,
         messages,

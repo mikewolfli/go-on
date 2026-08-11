@@ -8,7 +8,12 @@ if "%ACTION%"=="" set "ACTION=start"
 
 set "PID_FILE=go-on.pid"
 set "LOG_FILE=go-on.log"
-set "EXE=go-on.exe"
+rem Binary/config resolve relative to the repo root (up one dir from scripts/),
+rem matching scripts/start-go-on.sh (which uses ROOT/target/... + ROOT/config/...).
+set "EXE=%~dp0..\target\release\go-on.exe"
+set "CONFIG_FILE=%~dp0..\config\config.toml"
+rem tasklist IMAGENAME matches the process image name only (not a path).
+set "IMAGE_NAME=go-on.exe"
 set "PID="
 
 if /I "%ACTION%"=="start" goto do_start
@@ -29,7 +34,7 @@ if "%PID%"=="" (
     exit /b 1
 )
 
-tasklist /FI "PID eq %PID%" | findstr /I /C:"%EXE%" >nul
+tasklist /FI "PID eq %PID%" | findstr /I /C:"%IMAGE_NAME%" >nul
 if errorlevel 1 (
     echo Stale PID %PID% found; cleaning pid file.
     del /f /q "%PID_FILE%" >nul 2>&1
@@ -76,15 +81,25 @@ if not exist "%EXE%" (
     exit /b 1
 )
 
+rem Extract protocol mode from the [protocol] section only. A plain
+rem "mode" prefix match would pick up the top-level model_selection_mode
+rem (same issue fixed in start-go-on.sh).
 set "PROTO_MODE="
-for /f "tokens=2 delims==" %%M in ('findstr /b /c:"mode" config.toml 2^>nul') do set "PROTO_MODE=%%M"
+set "IN_PROTO="
+for /f "usebackq delims=" %%L in ("%CONFIG_FILE%") do (
+    echo(%%L|findstr /b /c:"[" >nul && set "IN_PROTO="
+    echo(%%L|findstr /b /c:"[protocol]" >nul && set "IN_PROTO=1"
+    if defined IN_PROTO (
+        echo(%%L|findstr /b /c:"mode" >nul && for /f "tokens=2 delims==" %%M in ("%%L") do set "PROTO_MODE=%%M"
+    )
+)
 if defined PROTO_MODE echo [info] protocol mode:%PROTO_MODE%
 
-start "" /b "%EXE%" > "%LOG_FILE%" 2>&1
+start "" /b "%EXE%" --config "%CONFIG_FILE%" > "%LOG_FILE%" 2>&1
 timeout /t 1 >nul
 
 set "PID="
-for /f "tokens=2 delims=," %%P in ('tasklist /FI "IMAGENAME eq %EXE%" /FO CSV /NH ^| findstr /V /I "INFO:"') do (
+for /f "tokens=2 delims=," %%P in ('tasklist /FI "IMAGENAME eq %IMAGE_NAME%" /FO CSV /NH ^| findstr /V /I "INFO:"') do (
     set "PID=%%~P"
 )
 

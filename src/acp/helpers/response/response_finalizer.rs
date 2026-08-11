@@ -126,10 +126,7 @@ async fn collect_agent_outputs(
             "duration_ms": started.elapsed().as_millis() as u64,
             "success": !response_text.trim().is_empty(),
         });
-        let timestamp_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let timestamp_ms = crate::shared::timestamps::now_ts_ms_u64();
         ledger.append(crate::shared::provenance_helpers::ProvenanceEntry {
             id: format!("routing:{}", trace.request_id),
             task_id: trace.request_id.clone(),

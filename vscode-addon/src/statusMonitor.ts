@@ -41,6 +41,9 @@ export class StatusMonitor {
   private _configListener: vscode.Disposable | undefined;
   private _disposed = false;
   private _noProviderWarningShown: boolean = false;
+  /** Timestamp (ms since epoch) of the last backend heartbeat received via
+   *  state sync SSE. `undefined` until the first heartbeat arrives. */
+  private lastHeartbeatAt: number | undefined;
 
   constructor(manager: RuntimeManagerLike) {
     this.manager = manager;
@@ -67,10 +70,29 @@ export class StatusMonitor {
   private async updateStatus() {
     const isRunning = this.manager.isRunning();
     this.statusBarItem.text = `$(comment-discussion) ${i18n.getMessage(MessageKeys.statusBarText)}`;
-    this.statusBarItem.tooltip = isRunning
+    let tooltip = isRunning
       ? i18n.getMessage(MessageKeys.statusBarRunningTooltip)
       : i18n.getMessage(MessageKeys.statusBarStoppedTooltip);
+    if (isRunning && this.lastHeartbeatAt !== undefined) {
+      // Heartbeat is a liveness signal from the backend (state sync SSE, ~30s
+      // interval); surface the last-seen time as a complement to the periodic
+      // health poll.
+      tooltip += `\n${i18n.getMessage(MessageKeys.statusBarLastHeartbeat, [
+        new Date(this.lastHeartbeatAt).toLocaleTimeString(),
+      ])}`;
+    }
+    this.statusBarItem.tooltip = tooltip;
     this.statusBarItem.backgroundColor = undefined;
+  }
+
+  /**
+   * Record a backend heartbeat (liveness signal from state sync SSE) and
+   * refresh the status bar so the last-seen heartbeat time stays visible.
+   * Supplementary to the periodic health poll — never a replacement.
+   */
+  public noteHeartbeat(timestamp?: number): void {
+    this.lastHeartbeatAt = timestamp ?? Date.now();
+    this.updateStatus();
   }
 
   private restartHealthMonitoring() {

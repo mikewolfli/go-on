@@ -302,7 +302,7 @@ impl AnthropicAgent {
                     warn!(
                         error = %e,
                         parse_error_total = total,
-                        data_preview = %truncate_event_data(data, 160),
+                        data_preview = %crate::shared::truncate::truncate_chars(data, 160, "..."),
                         "anthropic SSE frame parse failed; continue streaming"
                     );
                     return Ok(SseEventAction::Continue);
@@ -427,16 +427,6 @@ fn parse_anthropic_event(data: &str) -> anyhow::Result<(SseEventAction, Option<S
         .map(|text| text.to_string());
 
     Ok((SseEventAction::Continue, token))
-}
-
-fn truncate_event_data(data: &str, max_chars: usize) -> String {
-    let mut iter = data.chars();
-    let truncated: String = iter.by_ref().take(max_chars).collect();
-    if iter.next().is_some() {
-        format!("{}...", truncated)
-    } else {
-        truncated
-    }
 }
 
 #[async_trait]

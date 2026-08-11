@@ -239,19 +239,11 @@ pub async fn consensus_vote_with_reputation(
     reputations: &HashMap<String, f64>,
     config: &VoteConfig,
 ) -> (bool, f64) {
-    let proposal_confidence = proposal
-        .get("confidence")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.5);
-    let is_risky = proposal
-        .get("risk_level")
-        .and_then(|v| v.as_str())
-        .map(|s| matches!(s, "high" | "critical"))
-        .unwrap_or(false);
-
-    // Collect votes — prefer stored AgentVoter impls, fall back to hardcoded.
-    // This is now truly async-safe: we directly await the voter futures
-    // instead of blocking the current thread.
+    // Collect votes from the registered AgentVoter impls. This is truly
+    // async-safe: the voter futures are awaited directly instead of blocking
+    // the current thread. (The former hardcoded fallback for an empty voter
+    // list was removed: `init_intelligence_hub` always registers voters at
+    // server startup, so that branch was dead code in production and tests.)
     // The hub is now actively engaged in a consensus round.
     INTEL_HUB_ACTIVATIONS.fetch_add(1, Ordering::Relaxed);
 
@@ -262,84 +254,35 @@ pub async fn consensus_vote_with_reputation(
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
-        if voters.is_empty() {
-            // No voters registered — build hardcoded votes (legacy path)
-            let mut votes = std::collections::HashMap::new();
+        // Build the voting context from the proposal
+        let context = serde_json::to_string(&proposal).unwrap_or_default();
 
-            let cb_approve = if is_risky {
-                approve && proposal_confidence > 0.6
-            } else {
-                approve || proposal_confidence > 0.7
-            };
-            votes.insert(
-                "capability-bus".to_string(),
-                weighted_vote::Vote {
-                    approves: cb_approve,
-                    reasoning: format!(
-                        "proposal_confidence={}, is_risky={}",
-                        proposal_confidence, is_risky
-                    ),
-                    confidence: proposal_confidence,
-                },
-            );
-
-            votes.insert(
-                "local-agent".to_string(),
-                weighted_vote::Vote {
-                    approves: approve,
-                    reasoning: "Caller intent".to_string(),
-                    confidence: 0.7,
-                },
-            );
-
-            let rg_approve = if is_risky {
-                proposal_confidence > 0.5
-            } else {
-                proposal_confidence > 0.3
-            };
-            votes.insert(
-                "rationalization-guard".to_string(),
-                weighted_vote::Vote {
-                    approves: rg_approve,
-                    reasoning: format!(
-                        "risk_assessment: confidence={}, risky={}",
-                        proposal_confidence, is_risky
-                    ),
-                    confidence: proposal_confidence.max(0.3),
-                },
-            );
-            votes
-        } else {
-            // Build the voting context from the proposal
-            let context = serde_json::to_string(&proposal).unwrap_or_default();
-
-            let mut votes = HashMap::new();
-            // Spawn all voters concurrently and await them directly.
-            let voter_futures: Vec<_> = voters
-                .iter()
-                .cloned()
-                .map(|voter| {
-                    let context = context.clone();
-                    tokio::spawn(async move {
-                        let name = voter.name().to_string();
-                        let vote = voter.vote(&context).await;
-                        (name, vote)
-                    })
+        let mut votes = HashMap::new();
+        // Spawn all voters concurrently and await them directly.
+        let voter_futures: Vec<_> = voters
+            .iter()
+            .cloned()
+            .map(|voter| {
+                let context = context.clone();
+                tokio::spawn(async move {
+                    let name = voter.name().to_string();
+                    let vote = voter.vote(&context).await;
+                    (name, vote)
                 })
-                .collect();
-            let results = futures_util::future::join_all(voter_futures).await;
-            for result in results {
-                match result {
-                    Ok((name, vote)) => {
-                        votes.insert(name, vote);
-                    }
-                    Err(e) => {
-                        tracing::warn!("intel_hub: voter task failed: {}", e);
-                    }
+            })
+            .collect();
+        let results = futures_util::future::join_all(voter_futures).await;
+        for result in results {
+            match result {
+                Ok((name, vote)) => {
+                    votes.insert(name, vote);
+                }
+                Err(e) => {
+                    tracing::warn!("intel_hub: voter task failed: {}", e);
                 }
             }
-            votes
         }
+        votes
     };
 
     // Compute final result based on mode

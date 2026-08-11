@@ -515,7 +515,7 @@ pub fn default_non_ai_config_toml() -> String {
         "max_top_k = 4",
         "low_precision_threshold = 0.35",
         "high_precision_threshold = 0.75",
-        "state_path = \"acp_autotune_state.json\"",
+        "state_path = \"sqlite3/acp_autotune_state.json\"",
         "cooldown_windows = 2",
         "min_vector_searches = 5",
         "summary_trigger_min = 3",

@@ -32,3 +32,17 @@ pub fn now_ts_ms() -> i64 {
 pub fn now_ts_ms_u64() -> u64 {
     now_ts_ms() as u64
 }
+
+/// Get the current UTC hour-of-day (0..=23) for time-bucket classification.
+///
+/// Single source for context-feature bucketing: `adaptive_selector`
+/// (`ContextFeatures::from_time_and_task`) and the execution path
+/// (`exec_pack/task.rs` `model_context_features`) previously each computed
+/// this inline; the clock-error fallback (unreachable in practice) is 0.
+pub fn utc_hour() -> u32 {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    ((secs % 86_400) / 3_600) as u32
+}

@@ -44,22 +44,22 @@ governance_policy_mode = "advisory"
 [cache]
 enabled = true
 path = "sqlite3/acp_cache.sqlite3"
-default_ttl_seconds = 1800
-max_entries = 2000
+default_ttl_seconds = 3600
+max_entries = 5000
 persist_enabled = true
 
 [vector]
 enabled = true
 auto_mode = true
 path = "sqlite3/acp_vector.sqlite3"
-dimensions = 128
-min_query_chars = 120
+dimensions = 192
+min_query_chars = 80
 top_k = 2
 min_similarity = 0.82
-max_snippet_chars = 600
-max_entries = 3000
-summary_trigger_messages = 4
-summary_max_chars = 800
+max_snippet_chars = 800
+max_entries = 10000
+summary_trigger_messages = 8
+summary_max_chars = 1200
 
 [runtime]
 deployment_target = "local-dev"
@@ -181,24 +181,24 @@ curl http://127.0.0.1:8090/health
 ### Cache Location
 - **Default**: `sqlite3/acp_cache.sqlite3` (see `config/config.toml`)
 - **Custom**: Set `cache.path` in configuration
-- **Size limit**: 2000 entries by default (see `config/config.toml` `max_entries`)
+- **Size limit**: 5000 entries by default (see `config/config.toml` `max_entries`)
 
 ### Vector Store
 - **Location**: `sqlite3/acp_vector.sqlite3` (see `config/config.toml`)
-- **Dimensions**: 128-dimensional embeddings (see `config/config.toml` `dimensions`)
-- **Auto-mode**: Automatically uses available vector extensions
+- **Dimensions**: 192-dimensional embeddings (see `config/config.toml` `dimensions`)
+- **Auto-mode**: enables autotune adjustments of vector query parameters (`min_query_chars` / `top_k` / `min_similarity`; see `config/config.toml` `auto_mode`)
 
 ### Maintenance
 ```bash
 # Clean cache (manual)
-rm -f acp_cache.sqlite3 acp_cache.sqlite3-*
+rm -f sqlite3/acp_cache.sqlite3 sqlite3/acp_cache.sqlite3-*
 
 # Reset vector store
-rm -f acp_vector.sqlite3
+rm -f sqlite3/acp_vector.sqlite3
 
 # Vacuum SQLite databases
-sqlite3 acp_cache.sqlite3 "VACUUM;"
-sqlite3 acp_vector.sqlite3 "VACUUM;"
+sqlite3 sqlite3/acp_cache.sqlite3 "VACUUM;"
+sqlite3 sqlite3/acp_vector.sqlite3 "VACUUM;"
 ```
 
 ## Performance Tuning
@@ -219,7 +219,7 @@ Concurrency limits are configured per phase via `[phases.<name>.options]`
 sqlite3 --version
 
 # Repair corrupted database
-sqlite3 acp_cache.sqlite3 ".recover" | sqlite3 acp_cache_fixed.sqlite3
+sqlite3 sqlite3/acp_cache.sqlite3 ".recover" | sqlite3 sqlite3/acp_cache_fixed.sqlite3
 ```
 
 #### Vector Store Issues
@@ -257,8 +257,8 @@ tail -f go-on.log
 ### From Previous Versions
 ```bash
 # Backup existing data
-cp acp_cache.sqlite3 acp_cache.sqlite3.backup
-cp acp_vector.sqlite3 acp_vector.sqlite3.backup
+cp sqlite3/acp_cache.sqlite3 sqlite3/acp_cache.sqlite3.backup
+cp sqlite3/acp_vector.sqlite3 sqlite3/acp_vector.sqlite3.backup
 ```
 
 Config schema is versioned (`schema_version`); go-on validates and migrates

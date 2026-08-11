@@ -7,6 +7,25 @@
 
 ---
 
+## ⚠️ 2026-08-11 状态回写(§21 独立验证)
+
+> 本报告基于 2026-08-09 代码扫描。以下两项结论经 2026-08-11 与当前代码核对后回写
+> (正文保持 2026-08-09 原始记录,不作修改):
+
+1. **“真实缺口 2:MCP 客户端零实现” → 已于 2026-08-11 实现**。
+   代码事实:`src/mcp/client.rs` 已实现 `McpHttpClient` / `McpStdioClient` /
+   `McpClientHandle` / `McpClientRegistry`(经 `global_mcp_client_registry()` 访问);
+   `src/acp/impl/request/mcp_client_pack.rs` 实现 `mcp.client.connect` /
+   `mcp.client.list` / `mcp.client.call`,且已在 `src/acp/impl/request/protocol.rs`
+   的 ACP 方法表中注册。
+2. **“真实缺口 1:EvolutionLoop 人工审批(P0 占位违规)” → 拒绝方案已采纳(诚实拒绝)**。
+   代码事实:`src/orchestration/self_evolution/evolution_loop/mod.rs` 的
+   `RequireApproval` / `RequireHuman` 分支返回 `Err(Rejected)`(生产无外部审批子系统
+   接线,服务器以 AutoApproval 运行);测试 `test_await_approval_require_human_rejects_honestly`
+   固化“可观测拒绝”行为(BLUE72 收敛审计回滚结论,见 log-20260809-2.md §6)。
+
+---
+
 ## 1. 候选功能逐一验证结论(基于代码事实)
 
 ### ❌ 误判 1:技能市场激活(原建议 #1)——**已实现,不必要**

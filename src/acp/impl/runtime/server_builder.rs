@@ -185,10 +185,7 @@ pub async fn new_acp_server(
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 description: "Go-On ACP cognitive engine with full capability bus".to_string(),
                 creator: "go-on".to_string(),
-                created_ms: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0),
+                created_ms: crate::shared::timestamps::now_ts_ms_u64(),
                 tags: vec!["acp".to_string(), "intelligence".to_string()],
             });
         tracing::info!("self_model: system identity set from package metadata");
@@ -406,16 +403,6 @@ pub async fn new_acp_server(
                     "fault-tolerance node registration skipped: {e}"
                 );
             }
-        }
-    }
-
-    // P2-3 wiring: give CapabilityBus::decide the server's shared adaptive
-    // model selector so candidate re-ranking + learned outcomes are visible
-    // to provider tests / autotune (previously the field was always None and
-    // the adaptive re-rank path was dead).
-    if let Some(cb) = server.governance_deps.capability_bus.as_mut() {
-        if let Some(cb_inner) = Arc::get_mut(cb) {
-            cb_inner.model_selector = Some(Arc::clone(&server.model_deps.adaptive_model_selector));
         }
     }
 
@@ -812,7 +799,12 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     // Start background memory pressure monitoring. Periodically queries
     // system memory, logs warnings on low/critical conditions, and
     // evaluates AlertManager rules for threshold-based alerting.
-    crate::observability::memory_health::start_memory_monitor();
+    // query_system_memory does blocking I/O (subprocess spawn on macOS,
+    // /proc reads on Linux), so run the startup one-shot on a blocking
+    // thread — same pattern as the periodic 30s loop in background.rs.
+    tokio::task::spawn_blocking(crate::observability::memory_health::start_memory_monitor)
+        .await
+        .ok();
     info!("memory health check completed (one-shot at startup)");
 
     // ── Wire security subsystems (GAP-B52, S-FIX3) ────────────────────

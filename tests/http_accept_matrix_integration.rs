@@ -323,6 +323,48 @@ fn http_servers_reject_malformed_requests_without_crash() {
     acp.kill();
 }
 
+/// Oversized Content-Length must be rejected with 413 from the header alone.
+///
+/// Regression for the ACP arm's OOM window: it used to allocate the read
+/// buffer sized by the attacker-controlled Content-Length BEFORE enforcing
+/// MAX_BODY_SIZE. Both arms must now reject from the header (no body is
+/// sent at all, so a post-read check could never be the guard).
+#[test]
+fn oversized_content_length_is_rejected_with_413_before_body_read() {
+    let mut acp = HttpProcess::spawn("acp_http");
+    let mut mcp = HttpProcess::spawn("mcp_http");
+    acp.wait_ready(Duration::from_secs(30));
+    mcp.wait_ready(Duration::from_secs(30));
+
+    // MAX_BODY_SIZE is 10 MiB (crate::protocol::mcp_server::MAX_BODY_SIZE);
+    // claim 10 MiB + 1 byte and send no body — the server must reject from
+    // the header before attempting to read.
+    let oversized = 10 * 1024 * 1024 + 1;
+
+    let acp_req = format!(
+        "POST /chat HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {oversized}\r\nConnection: close\r\n\r\n"
+    );
+    let acp_resp = raw_http_request(&acp.bind_addr, &acp_req);
+    assert!(
+        acp_resp.starts_with("HTTP/1.1 413"),
+        "ACP arm must reject oversized Content-Length with 413 before reading the body; got: {}",
+        acp_resp.lines().next().unwrap_or("")
+    );
+
+    let mcp_req = format!(
+        "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {oversized}\r\nConnection: close\r\n\r\n"
+    );
+    let mcp_resp = raw_http_request(&mcp.bind_addr, &mcp_req);
+    assert!(
+        mcp_resp.starts_with("HTTP/1.1 413"),
+        "MCP arm must reject oversized Content-Length with 413; got: {}",
+        mcp_resp.lines().next().unwrap_or("")
+    );
+
+    acp.kill();
+    mcp.kill();
+}
+
 /// ACP 与 MCP 的健康检查响应都携带平台上下文（inject_platform_profiles 生效）。
 #[test]
 fn both_http_health_responses_have_platform_context() {

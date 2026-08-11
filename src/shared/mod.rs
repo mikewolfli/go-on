@@ -15,6 +15,7 @@ pub mod timestamps;
 pub mod token_bucket;
 pub mod token_estimator;
 pub mod tool_descriptors;
+pub mod truncate;
 pub mod vec_utils;
 
 use std::collections::HashMap;

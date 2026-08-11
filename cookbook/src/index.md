@@ -5,7 +5,7 @@ This book documents the current `1.5.2` architecture and usage model of `go-on`.
 The runtime implements a **sub-bus capability architecture** (7 feature-gated sub-buses per `Cargo.toml`) with **37 AI provider integrations**,
 a passing test suite (zero failures; see `CHANGELOG.md` for the latest counts), and **zero clippy warnings across all build profiles**.
 
-All 153 JSON-RPC methods (the `ACP_METHODS` whitelist) return a unified `DispatchOutput` enum, with the dispatch layer
+All 154 JSON-RPC methods (the `ACP_METHODS` whitelist) return a unified `DispatchOutput` enum, with the dispatch layer
 handling serialization for JSON-RPC, SSE streaming, text/plain, and silent responses.
 
 It is organized as a trilingual mdBook:

@@ -2,6 +2,41 @@
 
 ## [Unreleased] - 2026-08-11
 
+### Round 47 — Super-Deep/Broad Scan XV: Protocol & Concurrency Honesty (2026-08-11, docs/log/log-20260811-5.md)
+
+#### Protocol domain
+
+- **HTTP body OOM window fixed (P1)**: `route_http_post` allocated a read buffer sized by the attacker-controlled `Content-Length` before enforcing the 10 MB cap, so a malicious client could force an oversized allocation. The size check now runs before the allocation, and both ACP/MCP HTTP arms share the single `MAX_BODY_SIZE` constant (no more drifting duplicate).
+- **`notifications/cancelled` routed**: the bare MCP notification (`notifications/cancelled` / `notifications_cancelled`) is now normalized to `mcp.notifications_cancelled` and added to the `ACP_METHODS` whitelist; the ACP bridge arm marks the shared cancelled-request registry so an in-flight request's loops abort early (mirroring the native MCP arm). Regression tests added.
+- **MCP stdio shutdown race fixed**: a one-shot `Notify::notify_one()` can lose a signal arriving while a request is being processed (no waiter is stored), leaving the loop running forever. A durable `AtomicBool` flag is now set before the notify and polled each iteration — parity with the ACP stdio arm.
+
+#### Intelligence / selection
+
+- **UCB ranking tie-break removed**: `rank_candidates_with_context` sorted by UCB score then alphabetically, silently overwriting caller-ordered candidates on cold-start ties; it now stable-sorts by UCB only. `latency_tier` removed from the context key (an execution-time outcome the pre-execution read side cannot reproduce); `utc_hour()` extracted as the single time-bucket source shared with the execution path.
+- **Task-description thread-local cache removed**: under the multi-thread runtime a request's phases migrate across workers at `.await` points, so the cached value could be read by a different request (cross-request phase routing / knowledge attribution contamination). `extract_task_description` is now a pure function.
+- **Hub consensus hardcoded-fallback votes removed**: `init_intelligence_hub` always registers voters at startup, so the empty-voter branch was dead code in production and tests.
+
+#### Memory / governance
+
+- **Vector lock-order fix (P1)**: `ensure_hnsw_index` acquired `hnsw` before `conn` while `upsert`/`clear_all` acquire `conn` first — a concurrent lazy build and upsert could deadlock. All paths now follow the `conn` → `hnsw` order, with the `conn` guard held through index publication.
+- **`known_tool_names` unified**: `governance/status.rs` now reads the canonical `ToolCapabilityRegistry::known_names` table (with a small legacy-name supplement) instead of a parallel hardcoded list that drifted from the classifier.
+- **`PolicyVerdict::AllowWithConstraints` removed**: a variant no path ever constructed; harness accounting and de-escalation counters updated.
+- **Memory monitor startup unblocked**: the startup one-shot runs on a blocking thread (`query_system_memory` spawns a subprocess on macOS / reads `/proc` on Linux).
+
+#### Config / three-ends / docs
+
+- **Config values unified**: `config/config.toml` cache/vector keys restored to the authoritative values (3600 / 5000 / 192 / 80 / 800 / 10000 / 8 / 1200) and mirrored in the vscode `configManager` defaults; autotune `state_path` unified to the `sqlite3/` prefix; `config.reload` now diffs the real top-level TOML sections instead of hardcoding `["runtime"]`.
+- **`[security]`/`[feature]` section keys backfilled**: `#[serde(flatten)]` only absorbs top-level keys, so values written inside those sections (e.g. `[security] entry_auth_enabled = true`) were silently dropped while the section parsed cleanly. `sync_legacy_flat_keys` now lifts section keys into `[runtime]` from the raw TOML; regression test added.
+- **Three-ends fixes**: vscode forwards state-sync heartbeats to the status monitor (last-seen heartbeat time in the status bar) and stops writing the camelCase `runtime.protocolMode` (not a backend schema key) into config.toml; GUI force-kill derives the port from the configured bind address instead of a hardcoded 8090; i18n locale updates.
+- **Docs synchronized**: README/CHANGELOG numbers (lib 1555), cookbook local/simple-server facts (protocol mode, governance key placement, vector numbers, autotune `auto_mode` semantics, `sqlite3/` paths), workflow-config high-risk keyword table, k8s README component list, declaration-count 口径.
+
+#### Verification
+
+```
+cargo test --lib → 1555 passed / 0 failed / 0 ignored
+integration suites (152 non-chaos declarations) all pass
+```
+
 ### Round 46 — Super-Deep/Broad Scan XIV: Constant-Path Cleanup & Unified Chains (2026-08-11, docs/log/log-20260811-4.md)
 
 #### P1 correctness

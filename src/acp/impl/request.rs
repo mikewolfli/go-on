@@ -1005,6 +1005,36 @@ pub async fn handle_request(
                     // MCP notification — no response expected per JSON-RPC spec
                     dispatch_to_client(server, request_id, Ok(DispatchOutput::silent())).await
                 }
+                "mcp.notifications_cancelled" => {
+                    // MCP notification — no response expected per JSON-RPC
+                    // spec. Mirror the native MCP arm (handlers.rs
+                    // `notifications/cancelled`): mark the target request id
+                    // so an in-flight request's loops abort early. The bridge
+                    // arm holds only `&AcpServer` (no McpServer reference), so
+                    // it marks the same shared cancelled-request registry the
+                    // ACP `$/cancel_request` arm uses and the chat session
+                    // checks — the closest honest cancellation hook here.
+                    match request
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("requestId"))
+                        .map(crate::rpc_protocol::value_to_id)
+                    {
+                        Some(target_id) => {
+                            protocol_pack::mark_acp_request_cancelled(&target_id);
+                            tracing::info!(
+                                target: "acp::protocol_pack",
+                                target_request = %target_id,
+                                "mcp.notifications_cancelled: marked request {} for cancellation",
+                                target_id
+                            );
+                        }
+                        None => {
+                            tracing::warn!("mcp.notifications_cancelled: missing requestId");
+                        }
+                    }
+                    dispatch_to_client(server, request_id, Ok(DispatchOutput::silent())).await
+                }
                 "mcp.ping" => {
                     crate::acp::r#impl::io::respond(
                         server,
@@ -2537,6 +2567,61 @@ mod tests {
             .await
             .expect("dispatch must emit a JSON-RPC response");
         assert_eq!(unknown_resp["error"]["code"], json!(-32601));
+
+        clear_current_transport();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn auto_mode_notifications_cancelled_is_silent_and_marks() {
+        // Regression: `notifications/cancelled` in Auto mode previously fell
+        // into the dispatch `_ =>` branch and was answered with -32601
+        // MethodNotFound, because `is_mcp_request` / `normalize_mcp_method`
+        // did not recognize it. It must be normalized to
+        // `mcp.notifications_cancelled`, mark the shared cancelled-request
+        // registry (the semantics of the native MCP arm's
+        // `mark_cancelled_request`), and produce no JSON-RPC response.
+        use crate::acp::server::ServerBuilder;
+        use crate::acp::transport::{
+            clear_current_transport, set_current_transport, RpcBufferTransport,
+        };
+        use std::sync::Arc;
+
+        let buffer = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let transport = Arc::new(RpcBufferTransport::new(buffer.clone()));
+        clear_current_transport();
+        set_current_transport(transport.clone() as Arc<dyn crate::acp::transport::Transport>);
+
+        let mut server = ServerBuilder::new().build();
+        server.runtime_config.protocol_mode = Some("adaptive".to_string());
+
+        super::handle_request(
+            &server,
+            crate::rpc_protocol::JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                method: "notifications/cancelled".to_string(),
+                params: Some(json!({ "requestId": 77 })),
+                id: None,
+            },
+            None,
+        )
+        .await
+        .expect("handle_request must complete");
+
+        // Id-less notifications never produce a response — in particular no
+        // MethodNotFound error may be emitted for the recognized method.
+        assert!(
+            transport.last_response().await.is_none(),
+            "notifications/cancelled must not emit a response"
+        );
+        // The cancellation mark must be applied to the shared registry so an
+        // in-flight request with this id aborts early.
+        assert!(
+            super::protocol_pack::is_acp_request_cancelled("77"),
+            "notifications/cancelled must mark request id 77 for cancellation"
+        );
+        // Consume the mark so a later request reusing id 77 is not cancelled.
+        super::protocol_pack::clear_acp_request_cancelled("77");
 
         clear_current_transport();
     }

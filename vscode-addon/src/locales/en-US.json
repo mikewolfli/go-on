@@ -695,6 +695,7 @@
     "stoppedTooltip": "Click to open chat. Backend can be configured from Chat/Settings.",
     "healthCheckFailedTooltip": "Go-On Status: Health check failed ({0}/{1})\nMonitoring will continue automatically.\nClick to open chat",
     "healthTooltip": "Go-On Status: Healthy\nLast health check: {0}\n{1}\nClick to open chat",
+    "lastHeartbeat": "Last heartbeat: {0}",
     "text": "Go-On Chat"
   },
   "rpc": {

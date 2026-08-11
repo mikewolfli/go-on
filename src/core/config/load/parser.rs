@@ -224,6 +224,24 @@ fn sync_legacy_flat_keys(cfg: &mut AppConfig, normalized: &str) {
         .map(|table| table.keys().map(String::as_str).collect())
         .unwrap_or_default();
 
+    // Keys written inside `[security]` / `[feature]` sections: `#[serde(flatten)]`
+    // only absorbs top-level keys into the structs, so values placed inside
+    // these sections parse as an unknown `security`/`feature` table and are
+    // silently dropped — e.g. `[security] entry_auth_enabled = true` would
+    // leave entry auth off. Treat such keys as legacy sources and read their
+    // raw TOML values below, so the sections actually take effect instead of
+    // being ignored.
+    let mut section_values: std::collections::HashMap<&str, &toml::Value> =
+        std::collections::HashMap::new();
+    for section in ["security", "feature"] {
+        if let Some(table) = top.get(section).and_then(|v| v.as_table()) {
+            for (key, value) in table {
+                section_values.insert(key.as_str(), value);
+            }
+        }
+    }
+    let section_keys: HashSet<&str> = section_values.keys().copied().collect();
+
     // All legacy top-level keys that mirror a [runtime] field.
     const LEGACY_KEYS: &[&str] = &[
         "entry_auth_enabled",
@@ -257,9 +275,13 @@ fn sync_legacy_flat_keys(cfg: &mut AppConfig, normalized: &str) {
         "enable_delphi_debate",
     ];
 
-    // When no legacy key is present, leave cfg.runtime untouched (None stays
-    // None) so the config shape is preserved for None-vs-Some callers.
-    if !LEGACY_KEYS.iter().any(|key| top.contains_key(*key)) {
+    // When no legacy key is present (top-level or inside [security]/[feature]
+    // sections), leave cfg.runtime untouched (None stays None) so the config
+    // shape is preserved for None-vs-Some callers.
+    if !LEGACY_KEYS
+        .iter()
+        .any(|key| top.contains_key(*key) || section_keys.contains(key))
+    {
         return;
     }
 
@@ -267,8 +289,27 @@ fn sync_legacy_flat_keys(cfg: &mut AppConfig, normalized: &str) {
 
     macro_rules! sync_from_legacy {
         ($key:literal, $src:expr, $field:ident) => {
-            if top.contains_key($key) && !runtime_explicit.contains($key) {
-                runtime.$field = $src.$field.clone();
+            if (top.contains_key($key) || section_keys.contains($key))
+                && !runtime_explicit.contains($key)
+            {
+                // Top-level legacy layout wins; otherwise take the raw TOML
+                // value from the [security]/[feature] section (the flattened
+                // structs never received it, so `$src.$field` is the default).
+                let value = top.get($key).or_else(|| section_values.get($key).copied());
+                match value {
+                    Some(value) => {
+                        let json = serde_json::to_value(value).unwrap_or_default();
+                        // `typed`'s type is inferred from the assignment target
+                        // (`runtime.$field`), so the raw TOML value round-trips
+                        // into whatever runtime field type the key maps to.
+                        if let Ok(typed) = serde_json::from_value(json) {
+                            runtime.$field = typed;
+                        }
+                    }
+                    None => {
+                        runtime.$field = $src.$field.clone();
+                    }
+                }
             }
         };
     }
@@ -413,6 +454,47 @@ mod tests {
         assert!(runtime.enable_dag_execution);
         assert_eq!(runtime.entry_rate_limit_rpm, 999);
         assert_eq!(runtime.mtls_allowed_cns, "client-a");
+    }
+
+    #[test]
+    fn section_written_legacy_keys_backfill_runtime() {
+        let path = write_temp_config(
+            r#"
+            schema_version = "1.0.0"
+
+            default_phase = "coding"
+
+            [agents.copilot]
+            agent_type = "copilot"
+
+            [flow]
+            name = "flow"
+            phases = ["coding"]
+
+            [phases.coding]
+            agents = ["copilot"]
+
+            [security]
+            entry_auth_enabled = true
+            user_auth_enabled = true
+
+            [feature]
+            governance_enabled = false
+            skills_enabled = false
+            "#,
+        );
+
+        let cfg = AppConfig::load_uncached(&path).expect("config should parse");
+        let runtime = cfg.runtime.as_ref().expect("runtime should exist");
+
+        // Keys written inside [security]/[feature] sections are absorbed into
+        // the flattened structs and must be synced into runtime.* instead of
+        // being silently ignored (the section is parseable yet would have had
+        // no effect otherwise).
+        assert!(runtime.entry_auth_enabled);
+        assert!(runtime.user_auth_enabled);
+        assert!(!runtime.governance_enabled);
+        assert!(!runtime.skills_enabled);
     }
 
     #[test]

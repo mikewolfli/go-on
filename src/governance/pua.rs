@@ -757,7 +757,7 @@ pub fn merge_phase_principles(
         _ => principles.push("Delivery must include quality-compass coverage".to_string()),
     }
 
-    dedupe_strings(&mut principles);
+    crate::shared::vec_utils::dedupe_strings(&mut principles);
     if principles.is_empty() {
         None
     } else {
@@ -837,10 +837,6 @@ pub fn review_gate_prompt() -> String {
 \
          Your job is just to confirm: did the user ask for this?"
         .to_string()
-}
-
-fn dedupe_strings(values: &mut Vec<String>) {
-    crate::shared::vec_utils::dedupe_strings(values);
 }
 
 fn dedupe_roles(values: &mut Vec<AgentRole>) {

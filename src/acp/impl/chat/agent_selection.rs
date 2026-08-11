@@ -113,11 +113,23 @@ pub(crate) async fn select_and_score_agents(
     // have no producers, so no additional segments are emitted; keeping the
     // framework is safe because the assembled output is now genuinely
     // consumed.
-    let agent_messages =
-        merge_context_into_messages(&params.messages, Some(layered_prompt.assembled.clone()));
+    let mut agent_messages = params.messages.clone();
+    merge_context_into_messages(&mut agent_messages, Some(layered_prompt.assembled.clone()));
 
-    let capability_risk_policy = build_risk_vote_policy(&HashMap::new());
-    let capability_risk = assess_high_risk(&params.messages, &params.mode, &capability_risk_policy);
+    // ── Model-based agent routing / Filtering ──────────────────────
+    // Assembled before the risk assessment below: the risk policy, the agent
+    // filter, and the vote config all derive from the same options map.
+    let base_agent_options =
+        crate::acp::helpers::agent_options::assemble_agent_options(server, phase, params);
+
+    // Single risk assessment shared by the capability-bus selection and the
+    // high-risk vote config: the user-message corpus (lowercased + joined)
+    // is scanned once against the options-derived policy. The former
+    // capability-bus pass rebuilt the policy from an empty map, which is a
+    // strict subset of these keywords (identical when no high_risk_* options
+    // are set).
+    let risk_policy = build_risk_vote_policy(&base_agent_options);
+    let risk_assessment = assess_high_risk(&params.messages, &params.mode, &risk_policy);
 
     // ── Determine if user specified an explicit model ────────────────
     // When the user explicitly selects a model (not "auto"), skip the
@@ -148,7 +160,7 @@ pub(crate) async fn select_and_score_agents(
                         &params.messages,
                         &params.mode,
                         &mut resolved.agents,
-                        &capability_risk,
+                        &risk_assessment,
                         &trace.request_id,
                         routing_provenance,
                     )
@@ -191,8 +203,8 @@ pub(crate) async fn select_and_score_agents(
     let conversation_id = agent_prefs.conversation_id;
     let branch_id = agent_prefs.branch_id;
 
-    let agent_messages = merge_context_into_messages(
-        &agent_messages,
+    merge_context_into_messages(
+        &mut agent_messages,
         build_vector_context_message(
             vector_context.summary.as_deref(),
             &vector_context.hits,
@@ -201,22 +213,16 @@ pub(crate) async fn select_and_score_agents(
     );
 
     // ── StartupContext injection ───────────────────────────────────────
-    let agent_messages = {
-        if let Some(ctx) = crate::orchestration::startup_context::get() {
-            let summary = crate::orchestration::startup_context::summary_text(&ctx);
-            if !summary.is_empty() {
-                let startup_msg = format!("[startup context]\n{}", summary);
-                merge_context_into_messages(&agent_messages, Some(startup_msg))
-            } else {
-                agent_messages
-            }
-        } else {
-            agent_messages
+    if let Some(ctx) = crate::orchestration::startup_context::get() {
+        let summary = crate::orchestration::startup_context::summary_text(&ctx);
+        if !summary.is_empty() {
+            let startup_msg = format!("[startup context]\n{}", summary);
+            merge_context_into_messages(&mut agent_messages, Some(startup_msg));
         }
-    };
+    }
 
     // ── Skill system prompt enhancement ────────────────────────────────
-    let agent_messages = {
+    {
         let reg_guard = server
             .orchestration_deps
             .skill_registry
@@ -230,13 +236,12 @@ pub(crate) async fn select_and_score_agents(
             "prompts.skill_system",
             &[("count", &skill_count.to_string())],
         );
-        merge_context_into_messages(&agent_messages, Some(skill_instruction))
+        merge_context_into_messages(&mut agent_messages, Some(skill_instruction));
     };
 
     // ── Model-based agent routing / Filtering ──────────────────────
-    let base_agent_options =
-        crate::acp::helpers::agent_options::assemble_agent_options(server, phase, params);
-
+    // `base_agent_options` is assembled earlier (shared with the risk
+    // assessment); only the model-based filter runs here.
     let filter_result =
         model_router::filter_agents_by_model(&mut resolved.agents, &base_agent_options);
 
@@ -257,8 +262,6 @@ pub(crate) async fn select_and_score_agents(
         );
     }
 
-    let risk_policy = build_risk_vote_policy(&base_agent_options);
-    let risk_assessment = assess_high_risk(&params.messages, &params.mode, &risk_policy);
     let vote_config = model_router::build_high_risk_vote_config(
         &base_agent_options,
         &risk_policy,

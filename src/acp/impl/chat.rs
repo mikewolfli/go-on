@@ -1154,7 +1154,7 @@ pub(crate) async fn apply_review_gate_assemble(
 
     let token_economy = estimate_token_economy(&params.messages, response_text);
 
-    // Cache task description once for all full_auto sub-steps
+    // Compute task description once for all full_auto sub-steps
     let task_description = extract_task_description(&params.messages);
     // Evaluate once — used by all full_auto sub-steps below.
     let is_full_auto = ModeKind::from(params.mode.as_str()) == ModeKind::FullAuto;
@@ -1174,13 +1174,7 @@ pub(crate) async fn apply_review_gate_assemble(
                 "Task completed: {} with response: {}",
                 task_description, response_text
             ),
-            timestamp: format!(
-                "{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            ),
+            timestamp: crate::shared::timestamps::now_ts().to_string(),
             usefulness: 0.8,
             staleness: 0,
             // Carry the conversation id so the durable tiers can serve
@@ -1512,44 +1506,26 @@ async fn check_phase_escalation_rules(
     }
 }
 
-// Thread-local cache for task description to avoid recomputing it
-// 5+ times per request (O(N²) → O(1) optimization).
-thread_local! {
-    static TASK_DESCRIPTION_CACHE: std::cell::RefCell<Option<String>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Clear the task description cache (call at the start of each request).
-pub(crate) fn clear_task_description_cache() {
-    TASK_DESCRIPTION_CACHE.with(|cache| {
-        *cache.borrow_mut() = None;
-    });
-}
-
-/// Extract task description from messages, caching the result per request.
+/// Extract the task description from messages: the content of the last
+/// `user` message, falling back to the last message, and to an empty string
+/// when `messages` is empty.
 ///
-/// Uses a thread-local cache so that calling this 5+ times in a single
-/// request (e.g. from infer_adaptive_phase, persist_chat_knowledge,
-/// persist_session_distillation) costs only one iteration over messages.
+/// This is a pure function (no cache). The previous implementation cached
+/// the result in a `thread_local!`; under `tokio`'s multi-thread runtime a
+/// request's phases migrate between workers across `.await` points, so a
+/// cache cleared on one worker could be read by a different request on
+/// another worker — cross-request contamination (wrong phase routing / wrong
+/// knowledge attribution). Each call is an O(N) pass over `messages`; callers
+/// that need the value more than once in the same scope compute it once and
+/// reuse it (e.g. `reflect_phase` in chat_phases.rs).
 pub(crate) fn extract_task_description(messages: &[Message]) -> String {
-    // Return cached value if available (computed earlier in this request)
-    if let Some(cached) = TASK_DESCRIPTION_CACHE.with(|cache| cache.borrow().clone()) {
-        return cached;
-    }
-
-    // Compute and cache
-    let result = messages
+    messages
         .iter()
         .rev()
         .find(|message| message.role.eq_ignore_ascii_case("user"))
         .map(|message| message.content.clone())
         .or_else(|| messages.last().map(|message| message.content.clone()))
-        .unwrap_or_default();
-
-    TASK_DESCRIPTION_CACHE.with(|cache| {
-        *cache.borrow_mut() = Some(result.clone());
-    });
-    result
+        .unwrap_or_default()
 }
 
 /// Get routing handles
@@ -1801,10 +1777,7 @@ fn generate_workflow_name(last_msg: &str, _full_task: &str) -> String {
     }
 
     // Fall back to timestamp-based name
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let ts = crate::shared::timestamps::now_ts();
     format!("auto-workflow-{}", ts)
 }
 
@@ -1843,13 +1816,7 @@ fn generate_skill_name_from_conversation(user_msg: &str, ai_response: &str) -> S
     if sanitized.len() > 50 {
         format!("{}-skill", &sanitized[..50])
     } else if sanitized.is_empty() {
-        format!(
-            "skill-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        )
+        format!("skill-{}", crate::shared::timestamps::now_ts())
     } else {
         format!("{}-skill", sanitized)
     }

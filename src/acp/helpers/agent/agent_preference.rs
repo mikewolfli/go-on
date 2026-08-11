@@ -219,6 +219,9 @@ pub fn resolve_agent_preferences(
     let raw_conversation_id = params.conversation_id.clone().unwrap_or_else(|| {
         format!(
             "conv_{}",
+            // Nanosecond resolution keeps generated conversation ids unique;
+            // the shared timestamp helpers expose seconds/millis only, so this
+            // stays inline.
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()

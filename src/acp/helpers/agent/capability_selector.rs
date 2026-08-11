@@ -138,8 +138,8 @@ pub(crate) async fn apply_capability_bus_selection(
 
 /// Content of the last `user` message, falling back to the last message when
 /// no user message exists, and to an empty string when `messages` is empty.
-/// Mirrors the extraction style of `extract_task_description` (chat.rs) without
-/// its request-scoped thread-local cache, which this helper module does not use.
+/// Mirrors the extraction style of `extract_task_description` (chat.rs); the
+/// task description is derived purely from `messages` with no caching.
 fn latest_user_message_content(messages: &[Message]) -> String {
     messages
         .iter()

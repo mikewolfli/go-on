@@ -65,10 +65,18 @@ doc: ## Build documentation for the go-on crate
 	@echo "Documentation generated at target/doc/go_on/index.html"
 
 audit: ## Check dependencies for vulnerabilities (requires cargo-audit)
-	cargo audit 2>/dev/null || echo "cargo-audit not installed. Run: cargo install cargo-audit"
+	@if command -v cargo-audit >/dev/null 2>&1; then \
+		cargo audit; \
+	else \
+		echo "cargo-audit not installed. Run: cargo install cargo-audit"; \
+	fi
 
 deny: ## Check dependency licenses (requires cargo-deny)
-	cargo deny check 2>/dev/null || echo "cargo-deny not installed. Run: cargo install cargo-deny"
+	@if command -v cargo-deny >/dev/null 2>&1; then \
+		cargo deny check; \
+	else \
+		echo "cargo-deny not installed. Run: cargo install cargo-deny"; \
+	fi
 
 bench: ## Run benchmarks (criterion runs on stable Rust)
 	cargo bench

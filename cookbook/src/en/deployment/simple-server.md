@@ -53,7 +53,7 @@ max_entries = 20000
 
 [vector]
 enabled = true
-auto_mode = false  # Require sqlite-vec
+auto_mode = false  # Disable autotune adjustments of vector query parameters
 path = "/var/lib/go-on/vector.sqlite3"
 dimensions = 384  # Higher dimensions for better accuracy
 top_k = 5

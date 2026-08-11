@@ -9,6 +9,7 @@ use futures_util::future::join_all;
 use serde_json::json;
 use std::io;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -29,9 +30,9 @@ use crate::tool::ToolRegistry;
 
 /// Shared HTTP body-size cap (10 MB) for the ACP and MCP HTTP transports.
 ///
-/// The ACP runtime keeps a same-valued local copy in
-/// `src/acp/impl/runtime/http.rs` (outside this module's edit scope); keep
-/// the two values in sync until that copy can reference this one.
+/// Single definition: the ACP HTTP runtime references this constant
+/// (`crate::protocol::mcp_server::MAX_BODY_SIZE`) instead of keeping a
+/// local copy, so the two arms cannot drift apart.
 pub const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
 
 /// Unified predicate for notification responses (JSON-RPC 2.0 §notifications).
@@ -116,18 +117,49 @@ impl McpStdioServer {
         // Reuse the platform-gated signal watcher (SIGINT/SIGTERM on Unix,
         // Ctrl-C elsewhere) — the previous inline `signal::unix::signal`
         // calls did not compile on Windows.
+        //
+        // A one-shot `Notify::notify_one()` alone can lose the signal: the
+        // `shutdown_notify.notified()` future created inside `select!` is
+        // dropped at the end of every iteration, and Notify does not store
+        // a notification for a future waiter — so a signal arriving while a
+        // request is being processed leaves no waiter and the loop never
+        // exits. The ACP stdio arm documents the same race and polls a
+        // flag; mirror it here: the signal task sets the flag BEFORE the
+        // notify, the loop checks the flag at the top of every iteration
+        // and on a 200ms polling branch, so shutdown is honored within
+        // 200ms in every interleaving.
         let shutdown_notify = Arc::new(Notify::new());
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
         let sig_notify = shutdown_notify.clone();
+        let sig_flag = shutdown_flag.clone();
         tokio::spawn(async move {
             crate::shared::tcp_accept_loop::shutdown_signal().await;
+            sig_flag.store(true, Ordering::SeqCst);
             sig_notify.notify_one();
         });
 
         loop {
+            // Flag check first: the one-shot notify may have been consumed
+            // by nobody, so the flag is the durable shutdown signal.
+            if shutdown_flag.load(Ordering::SeqCst) {
+                info!("MCP stdio: shutting down gracefully");
+                break;
+            }
             tokio::select! {
             _ = shutdown_notify.notified() => {
                 info!("MCP stdio: shutting down gracefully");
                 break;
+            }
+            // Poll the flag on a short timeout so a signal that arrived
+            // while blocked on `stdin_rx.recv()` is honored even though the
+            // notify had no waiter. Mirrors the ACP stdio arm's 200ms
+            // polling workaround for the same race.
+            _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                if shutdown_flag.load(Ordering::SeqCst) {
+                    info!("MCP stdio: shutting down gracefully");
+                    break;
+                }
+                continue;
             }
             line = stdin_rx.recv() => {
                 // None = stdin EOF (client closed the pipe) → shut down.
@@ -173,16 +205,11 @@ impl McpStdioServer {
                                                 // (id null) so the client learns of the
                                                 // failure; the code is mapped from the
                                                 // underlying error, not hardcoded.
-                                                Some(JsonRpcResponse {
-                                                    jsonrpc: "2.0".to_string(),
-                                                    result: None,
-                                                    error: Some(JsonRpcError {
-                                                        code: crate::mcp::error_code_for(&e),
-                                                        message: err_msg,
-                                                        data: None,
-                                                    }),
-                                                    id: req_id,
-                                                })
+                                                Some(handler_error_response(
+                                                    req_id,
+                                                    crate::mcp::error_code_for(&e),
+                                                    &err_msg,
+                                                ))
                                             }
                                         }
                                     }))
@@ -336,8 +363,7 @@ fn tools_list_changed_notification() -> String {
 /// no SSE client is currently subscribed — a broadcast with zero receivers is
 /// a no-op, not an error). This is the single send path for the SSE
 /// broadcaster; the only payload published today is the
-/// `notifications/tools/list_changed` notification (sent at server startup, on
-/// SSE subscribe, and by `McpHttpServer::run`'s startup broadcast).
+/// `notifications/tools/list_changed` notification (sent on SSE subscribe).
 fn broadcast_sse_notification(sse_broadcaster: &SseBroadcaster, payload: String) -> usize {
     // `Err(SendError)` means zero receivers (no connected SSE client); the
     // broadcast channel never closes while the server owns the sender, so
@@ -468,19 +494,12 @@ impl McpHttpServer {
         );
 
         // ── SSE notification: tool/resource registries initialized ───────
-        // The tool registry is fully registered before the server is
-        // constructed (see `transport_factory::dispatch_server`), so this
-        // startup broadcast marks the end of tool registration. Any SSE
-        // client already connected (e.g. reconnect) receives the
-        // `tools/list_changed` notification and re-fetches the tool list.
-        let delivered =
-            broadcast_sse_notification(&self.sse_broadcaster, tools_list_changed_notification());
-        if delivered > 0 {
-            info!(
-                "MCP HTTP: broadcast tools/list_changed on startup to {} SSE subscriber(s)",
-                delivered
-            );
-        }
+        // A startup broadcast of `tools/list_changed` was removed: it ran
+        // before the accept loop below started, so no SSE subscriber could
+        // exist yet and the delivery count was always 0 (a log line that
+        // could never fire). The only delivery path is the subscribe-time
+        // re-push in `handle_mcp_sse_connection`, which sends the current
+        // tool list to each new subscriber.
 
         // Shared accept loop: signal handling (SIGINT/SIGTERM/notify), accept
         // dispatch, and per-connection spawn live in
@@ -716,8 +735,8 @@ async fn handle_http_connection(
 
     // ── Content-Length validation (before any auth processing) ────────
     // Check Content-Length before allocating buffers to prevent OOM.
-    // Cap is the module-level `MAX_BODY_SIZE` (10 MB), the same value the
-    // ACP HTTP runtime enforces (its local copy lives in http.rs).
+    // Cap is the shared `MAX_BODY_SIZE` (10 MB), also enforced by the ACP
+    // HTTP runtime (both arms reference this single constant).
     let content_length =
         crate::acp::r#impl::runtime::protocol::extract_content_length(header_part).unwrap_or(0);
     // ── CORS headers (computed once, reused by every error/response path) ──
@@ -1018,19 +1037,15 @@ async fn handle_http_connection(
                         "MCP HTTP: error handling batch request from {} {}: {}",
                         method, path, e
                     );
-                    JsonRpcResponse {
-                        jsonrpc: "2.0".to_string(),
-                        result: None,
-                        error: Some(JsonRpcError {
-                            // Same error-code mapping as the single-request
-                            // path, so e.g. METHOD_NOT_FOUND keeps its code
-                            // instead of collapsing into INTERNAL_ERROR.
-                            code: crate::mcp::error_code_for(&e),
-                            message: format!("{}", e),
-                            data: None,
-                        }),
-                        id: req_id,
-                    }
+                    // Same error-code mapping as the single-request path and
+                    // the stdio batch path (shared `handler_error_response`),
+                    // so e.g. METHOD_NOT_FOUND keeps its code instead of
+                    // collapsing into INTERNAL_ERROR.
+                    handler_error_response(
+                        req_id,
+                        crate::mcp::error_code_for(&e),
+                        &format!("{}", e),
+                    )
                 }
             }
         }))
@@ -1268,6 +1283,30 @@ async fn send_parse_error(
     Ok(())
 }
 
+/// Build a JSON-RPC error response for a failed `handle_request` call.
+///
+/// Shared by the stdio serial path (`send_handler_error`) and the batch
+/// path (previously two inline copies of the same shape). The error `code`
+/// is mapped from the underlying error by `crate::mcp::error_code_for`; if
+/// the original request `id` is unavailable, a `null` id is sent per the
+/// JSON-RPC 2.0 spec.
+fn handler_error_response(
+    id: Option<serde_json::Value>,
+    code: i32,
+    error_message: &str,
+) -> JsonRpcResponse {
+    JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        result: None,
+        error: Some(JsonRpcError {
+            code,
+            message: error_message.to_string(),
+            data: None,
+        }),
+        id,
+    }
+}
+
 /// Send a JSON-RPC error response to the client.
 ///
 /// Used when `handle_request` returns an `Err` after successfully parsing
@@ -1281,15 +1320,8 @@ async fn send_handler_error(
     code: i32,
     error_message: &str,
 ) -> std::io::Result<()> {
-    let error = json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": {
-            "code": code,
-            "message": error_message
-        }
-    });
-    let line = serde_json::to_string(&error).map_err(std::io::Error::other)?;
+    let line = serde_json::to_string(&handler_error_response(id, code, error_message))
+        .map_err(std::io::Error::other)?;
     writer.write_all(line.as_bytes()).await?;
     writer.write_all(b"\n").await?;
     writer.flush().await?;
@@ -1514,8 +1546,8 @@ mod tests {
         let broadcaster: SseBroadcaster = tokio::sync::broadcast::channel::<String>(256).0;
         let mut rx = broadcaster.subscribe();
 
-        // The same notification `McpHttpServer::run` and
-        // `handle_mcp_sse_connection` publish.
+        // The same notification `handle_mcp_sse_connection` publishes for
+        // each new SSE subscriber.
         let delivered = broadcast_sse_notification(&broadcaster, tools_list_changed_notification());
         assert_eq!(
             delivered, 1,
@@ -1534,7 +1566,8 @@ mod tests {
         assert_eq!(parsed["method"], "notifications/tools/list_changed");
 
         // A send with no subscribers is a no-op (0 receivers), not an error —
-        // this is the disconnect/reconnect case during startup.
+        // this is the disconnect/reconnect case (the subscribe-time re-push
+        // in `handle_mcp_sse_connection` is the only delivery path).
         let empty: SseBroadcaster = tokio::sync::broadcast::channel::<String>(256).0;
         assert_eq!(broadcast_sse_notification(&empty, String::new()), 0);
     }

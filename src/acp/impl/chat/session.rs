@@ -332,8 +332,14 @@ pub(crate) async fn handle_chat(
                 );
 
                 // Generate continuity marker for the trimmed messages.
+                // Build a HashSet once for O(1) membership tests instead of
+                // `Vec::contains` per candidate index (O(n) per index). The
+                // ordered `retained_indices` Vec is still used below to rebuild
+                // the message list in ascending-index order.
+                let retained_set: std::collections::HashSet<usize> =
+                    retained_indices.iter().copied().collect();
                 let trimmed_indices: Vec<usize> = (0..msg_count)
-                    .filter(|i| !retained_indices.contains(i))
+                    .filter(|i| !retained_set.contains(i))
                     .collect();
                 let marker = session_mgr.generate_continuity_marker(&trimmed_indices);
 

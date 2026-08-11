@@ -278,6 +278,8 @@ pub(super) fn negotiate_protocol_version(requested: Option<ProtocolVersion>) -> 
 static ACP_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub(super) fn generate_acp_session_id() -> String {
+    // Nanosecond resolution for id uniqueness; the shared timestamp helpers
+    // expose seconds/millis only, so this stays inline.
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -289,6 +291,8 @@ pub(super) fn generate_acp_session_id() -> String {
 static ACP_TERMINAL_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub(super) fn generate_terminal_id() -> String {
+    // Nanosecond resolution for id uniqueness; the shared timestamp helpers
+    // expose seconds/millis only, so this stays inline.
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

@@ -250,7 +250,13 @@ class ConfigManager {
    * Create default configuration
    *
    * Defaults mirror the single backend config `config/config.toml`
-   * (source of truth). Keep field values in sync when it changes.
+   * (source of truth) for the cache/vector/autotune/runtime/agents/flow
+   * sections. `phases` is a simplified default: field names align with
+   * config.toml, but the agents sets are common subsets (e.g. `done` uses
+   * `["copilot"]` instead of the backend's empty set, `check` only
+   * `["deepseek"]`) and `options` are omitted — the backend applies its
+   * own per-phase option defaults when the section is absent. Keep field
+   * values in sync when config.toml changes.
    */
   private createDefaultConfig(): void {
     // Values mirror the authoritative backend template config/config.toml.
@@ -259,25 +265,25 @@ class ConfigManager {
       default_phase: "think",
       cache: {
         enabled: true,
-        path: "acp_cache.sqlite3",
-        default_ttl_seconds: 1800,
-        max_entries: 2000,
+        path: "sqlite3/acp_cache.sqlite3",
+        default_ttl_seconds: 3600,
+        max_entries: 5000,
         // Mirrors backend CacheConfig::persist_enabled (config/config.toml).
         persist_enabled: true,
       },
       vector: {
         enabled: true,
         auto_mode: true,
-        path: "acp_vector.sqlite3",
-        dimensions: 128,
-        min_query_chars: 120,
+        path: "sqlite3/acp_vector.sqlite3",
+        dimensions: 192,
+        min_query_chars: 80,
         top_k: 2,
         min_similarity: 0.82,
-        max_snippet_chars: 600,
-        max_entries: 3000,
+        max_snippet_chars: 800,
+        max_entries: 10000,
         summary_enabled: true,
-        summary_trigger_messages: 4,
-        summary_max_chars: 800,
+        summary_trigger_messages: 8,
+        summary_max_chars: 1200,
       },
       autotune: {
         // Matches backend default (core/config/autotune.rs default_autotune_config).
@@ -289,7 +295,7 @@ class ConfigManager {
         max_top_k: 4,
         low_precision_threshold: 0.35,
         high_precision_threshold: 0.75,
-        state_path: "acp_autotune_state.json",
+        state_path: "sqlite3/acp_autotune_state.json",
         cooldown_windows: 2,
         min_vector_searches: 5,
         summary_trigger_min: 3,

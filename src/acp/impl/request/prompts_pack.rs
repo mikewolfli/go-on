@@ -529,6 +529,9 @@ mod tests {
     fn scoped_template_id_lookup_is_supported() {
         let tmp = std::env::temp_dir().join(format!(
             "go_on_prompts_test_{}",
+            // Nanosecond resolution keeps concurrent test temp dirs unique;
+            // the shared timestamp helpers expose seconds/millis only, so this
+            // stays inline.
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("time")
@@ -585,6 +588,9 @@ mod tests {
     fn non_en_collection_merges_missing_templates_from_en() {
         let tmp = std::env::temp_dir().join(format!(
             "go_on_prompts_merge_test_{}",
+            // Nanosecond resolution keeps concurrent test temp dirs unique;
+            // the shared timestamp helpers expose seconds/millis only, so this
+            // stays inline.
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("time")

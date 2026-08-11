@@ -40,8 +40,8 @@ use crate::acp::helpers::review_gate::run_review_gate;
 use crate::acp::helpers::vote_executor::{execute_high_risk_vote, HighRiskVoteExecutionResult};
 use crate::acp::r#impl::chat::{
     agent_switch_state, apply_review_gate_assemble, auto_create_skills_from_conversation,
-    auto_generate_workflow_from_conversation, clear_task_description_cache, emit_status_event,
-    emit_stream_chunk, emit_stream_done, emit_stream_token_economy, estimate_token_economy,
+    auto_generate_workflow_from_conversation, emit_status_event, emit_stream_chunk,
+    emit_stream_done, emit_stream_token_economy, estimate_token_economy,
     evaluate_pre_route_policies, execute_autonomy_round, execute_fallback_agents,
     extract_task_description, persist_chat_knowledge, persist_session_distillation,
     persist_vector_memory, resolve_request_phase, routing_handles, select_and_score_agents,
@@ -190,7 +190,6 @@ pub(crate) async fn observe_phase(
     ctx: ChatRequestContext,
     stream_observer: Option<&StreamObserver>,
 ) -> Result<ObserveOutput> {
-    clear_task_description_cache();
     let (flow, registry) = routing_handles(server)?;
     let tenant_id = ctx.tenant_id.clone();
     let user_id = ctx.user_id.clone();
@@ -982,7 +981,7 @@ pub(crate) async fn act_phase(
     trace: &RequestTraceContext,
     stream_observer: Option<StreamObserver>,
     started: Instant,
-    resolve_out: &ObserveOutput,
+    resolve_out: &mut ObserveOutput,
     routing_out: &ThinkOutput,
 ) -> Result<ActOutput> {
     let act_started = Instant::now();
@@ -1270,7 +1269,7 @@ pub(crate) async fn act_phase(
         let (fallback_result, vote_result, vote_flag) = execute_fallback_with_vote(
             server,
             params,
-            resolve_out,
+            &mut *resolve_out,
             routing_out,
             trace,
             stream_observer.clone(),
@@ -1554,11 +1553,7 @@ pub(crate) async fn act_phase(
     // branch, so autonomy-loop chats had no phase.agent telemetry.
     if !selected_agent.is_empty() && !response_text.is_empty() && last_err.is_none() {
         request::append_trace_event(TraceEvent {
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0)
-                .to_string(),
+            timestamp: crate::shared::timestamps::now_ts().to_string(),
             event_type: "phase.agent".into(),
             task_id: "chat".into(),
             phase: resolve_out.phase_name.clone(),
@@ -1666,7 +1661,7 @@ async fn stream_cache_response(
 async fn execute_fallback_with_vote(
     server: &AcpServer,
     params: &ChatParams,
-    resolve_out: &ObserveOutput,
+    resolve_out: &mut ObserveOutput,
     routing_out: &ThinkOutput,
     trace: &RequestTraceContext,
     stream_observer: Option<StreamObserver>,
@@ -1715,7 +1710,7 @@ async fn execute_fallback_with_vote(
         routing_out.escalation_models_per_agent,
         routing_out.escalation_max_agents,
         &resolve_out.reputation_scores,
-        &mut resolve_out.routing_provenance.clone(),
+        &mut resolve_out.routing_provenance,
     )
     .await;
 
@@ -1960,23 +1955,37 @@ pub(crate) async fn reflect_phase(
     );
     let result = assemble_result?;
 
-    // ── Independent post-execution side-effects (run concurrently) ─────
-    // Rationalization, capability feedback, memory-bus completion, provenance
-    // recording, memory-bridge store, and retrieval indexing are mutually
-    // independent and hold only shared references — serializing them added
-    // their latencies to the response. Run them concurrently instead.
+    // ── Independent post-execution side-effects ─────────────────────────
+    // Rationalization is spawned fire-and-forget (see below); capability
+    // feedback, memory-bus completion, provenance recording, and memory-bridge
+    // store are mutually independent and hold only shared references —
+    // serializing them added their latencies to the response. Run them
+    // concurrently instead.
     let task_desc = extract_task_description(&params.messages);
     let confidence = if exec_out.response_text.is_empty() {
         0.3
     } else {
         0.8
     };
-    let ((justified, reason), _, _, _, _) = tokio::join!(
-        crate::intelligence::hub::rationalize_decision(
-            &exec_out.selected_agent,
-            &task_desc,
-            confidence,
-        ),
+    // Rationalization (Delphi debate) runs off the response path: its verdict
+    // only feeds a debug log, but awaiting it would block the response up to
+    // the voter network timeouts (10s × voters). The audit records and
+    // counters inside `rationalize_decision` still run — just asynchronously.
+    {
+        let agent = exec_out.selected_agent.clone();
+        // `task_desc` is also borrowed by the provenance join-block below, so
+        // move a clone into the fire-and-forget spawn instead of the original.
+        let task_desc = task_desc.clone();
+        tokio::spawn(async move {
+            let (justified, reason) =
+                crate::intelligence::hub::rationalize_decision(&agent, &task_desc, confidence)
+                    .await;
+            if !justified {
+                debug!("rationalize: blocked agent={} reason={}", agent, reason);
+            }
+        });
+    }
+    let (_, _, _, _) = tokio::join!(
         capability_bus_feedback(
             server,
             trace,
@@ -2022,11 +2031,7 @@ pub(crate) async fn reflect_phase(
                     } else {
                         exec_out.response_text.clone()
                     },
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis()
-                        .to_string(),
+                    timestamp: crate::shared::timestamps::now_ts_ms().to_string(),
                     usefulness: 0.5,
                     staleness: 0,
                     user_id: None,
@@ -2041,21 +2046,12 @@ pub(crate) async fn reflect_phase(
             }
         },
     );
-    if !justified {
-        debug!(
-            "rationalize: blocked agent={} reason={}",
-            exec_out.selected_agent, reason
-        );
-    }
 
     // Metacognitive observation
     if let Some(ref cb) = server.governance_deps.capability_bus {
         let success = !exec_out.response_text.is_empty() && exec_out.last_err.is_none();
-        let task_desc = extract_task_description(&params.messages);
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let task_desc = task_desc.clone();
+        let now_ms = crate::shared::timestamps::now_ts_ms_u64();
         if let Ok(obs_id) = cb.metacognitive.record_observation(
             &format!("chat-{}", now_ms),
             &exec_out.selected_agent,
@@ -2247,7 +2243,7 @@ async fn run_multi_agent_pipeline(
         .unwrap_or_else(|| Arc::new(crate::agent::AgentRegistry::new()));
     let pipeline_result = MultiAgentPipeline::new(registry)
         .execute(
-            &extract_task_description(&params.messages),
+            &desc,
             &task_chars,
             resolved.agents.first().map(|(_, a)| a.clone()),
         )

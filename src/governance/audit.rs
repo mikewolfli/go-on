@@ -551,52 +551,27 @@ pub(crate) fn audit_chain_path() -> PathBuf {
 
 /// Get the current UTC time as an ISO-8601 string.
 pub(crate) fn chrono_now() -> String {
-    // Manual ISO-8601 formatting without pulling in the chrono crate
+    // ISO-8601 UTC timestamp. The Y/M/D part delegates to the canonical
+    // epoch→date conversion (`security_advisor::unix_ts_to_ymd`, shared with
+    // memory_persistence) instead of this module's own day-loop
+    // implementation — both are UTC civil-date conversions, and keeping one
+    // canonical converter prevents the two from drifting. Time-of-day is
+    // formatted here from the seconds remainder. Output format
+    // (`YYYY-MM-DDTHH:MM:SSZ`) is unchanged.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    let secs = now.as_secs();
-    // Simple breakdown
-    let days = secs / 86400;
-    let time_secs = secs % 86400;
+    let secs = now.as_secs() as i64;
+    let (y, m, d) = crate::security::security_advisor::unix_ts_to_ymd(secs);
+    let time_secs = secs.rem_euclid(86_400);
     let hours = time_secs / 3600;
     let minutes = (time_secs % 3600) / 60;
     let seconds = time_secs % 60;
-
-    // Approximate year/month/day from days since epoch (1970-01-01)
-    let mut y = 1970i64;
-    let mut remaining_days = days as i64;
-    loop {
-        let days_in_year = if is_leap(y) { 366 } else { 365 };
-        if remaining_days < days_in_year {
-            break;
-        }
-        remaining_days -= days_in_year;
-        y += 1;
-    }
-    let months_days = if is_leap(y) {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-    let mut m = 1usize;
-    for &md in &months_days {
-        if remaining_days < md {
-            break;
-        }
-        remaining_days -= md;
-        m += 1;
-    }
-    let d = remaining_days + 1;
 
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
         y, m, d, hours, minutes, seconds
     )
-}
-
-fn is_leap(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
 /// Redact sensitive fields from a JSON value.

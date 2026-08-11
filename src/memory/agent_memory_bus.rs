@@ -39,12 +39,21 @@ pub struct AgentMemoryBus {
     user_id: Option<String>,
 }
 
+/// Default maximum number of insight snippets stored per agent task
+/// completion.
+///
+/// Shared by both construction paths ([`AgentMemoryBus::new_default`] and
+/// [`init_agent_memory_bus_with_vector_store`]) so behavior no longer
+/// depends on which initializer ran first. 5 matches the value the
+/// production pre-init path (vector store attached) has always used.
+const DEFAULT_MAX_INSIGHTS_PER_TASK: usize = 5;
+
 impl AgentMemoryBus {
     /// Create a new agent memory bus with a default `MemoryStore`.
     pub fn new_default() -> Self {
         Self {
             store: Arc::new(Mutex::new(MemoryStore::new(Default::default()))),
-            max_insights_per_task: 3,
+            max_insights_per_task: DEFAULT_MAX_INSIGHTS_PER_TASK,
             vector_store: None,
             user_id: None,
         }
@@ -449,7 +458,7 @@ pub fn init_agent_memory_bus_with_vector_store(vs: Arc<VectorStore>, user_id: Op
         let store = Arc::new(Mutex::new(MemoryStore::new(Default::default())));
         AgentMemoryBus {
             store,
-            max_insights_per_task: 5,
+            max_insights_per_task: DEFAULT_MAX_INSIGHTS_PER_TASK,
             vector_store: Some(vs),
             user_id,
         }

@@ -1,6 +1,8 @@
 {
     "name": "go-on Development",
-    "image": "mcr.microsoft.com/devcontainers/rust:latest",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
     "features": {
         "ghcr.io/devcontainers/features/node:1": {
             "version": "22"
@@ -20,7 +22,7 @@
             "settings": {
                 "rust-analyzer.check.command": "clippy",
                 "rust-analyzer.checkOnSave": true,
-                "rust-analyzer.cargo.features": "all",
+                "rust-analyzer.cargo.features": ["local"],
                 "editor.formatOnSave": true,
                 "files.exclude": {
                     "target/**": true

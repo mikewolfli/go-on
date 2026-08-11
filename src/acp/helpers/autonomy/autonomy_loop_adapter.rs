@@ -105,14 +105,9 @@ fn extract_objective(messages: &[Message]) -> String {
         .rfind(|m| m.role == "user")
         .map(|m| {
             let text = m.content.trim();
-            // Take first 200 chars as the objective
-            // Use chars() to avoid panic on multi-byte UTF-8 boundary
-            let char_count = text.chars().count();
-            if char_count > 200 {
-                format!("{}...", text.chars().take(200).collect::<String>())
-            } else {
-                text.to_string()
-            }
+            // Take first 200 chars as the objective, using the shared
+            // character-based truncator (never splits a UTF-8 code point).
+            crate::shared::truncate::truncate_chars(text, 200, "...")
         })
         .unwrap_or_else(|| "complete the user request".to_string())
 }

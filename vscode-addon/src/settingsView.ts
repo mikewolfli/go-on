@@ -1811,8 +1811,13 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
           ),
         ]);
 
-        configManager.setConfigValue("runtime.protocolMode", protocolMode);
-        await configManager.saveToFile();
+        // Protocol mode is persisted exclusively via the VS Code setting
+        // `go-on.runtime.protocolMode` (updated above), which the extension
+        // forwards to the backend as `--protocol-mode`. Do NOT mirror it into
+        // config.toml: `runtime.protocolMode` (camelCase) is not a backend
+        // schema key — the backend only reads `runtime.protocol_mode` (legacy,
+        // migrated to `[protocol].mode`) — so writing it here would produce an
+        // ignored TOML key and a second, conflicting source of truth.
         await this._sendCurrentSettings();
 
         vscode.window.showInformationMessage(

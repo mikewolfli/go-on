@@ -68,6 +68,14 @@ impl Default for MemoryPolicy {
 }
 
 impl MemoryPolicy {
+    /// Whether an entry should be retained.
+    ///
+    /// `staleness` is always 0 at every production write site (see
+    /// chat.rs / chat_phases.rs / exec_pack/task.rs), so the
+    /// `staleness <= staleness_max_days` term is effectively constant-true
+    /// today: GC is driven by `usefulness`. The staleness term is kept as
+    /// the designed retention rule for future content-aging producers that
+    /// set a non-zero staleness; do not remove it.
     pub fn should_retain(&self, entry: &MemoryEntry) -> bool {
         entry.usefulness >= self.usefulness_threshold && entry.staleness <= self.staleness_max_days
     }
@@ -91,7 +99,7 @@ pub struct MemoryStore {
     policy: MemoryPolicy,
     /// O(1) count of entries per class
     class_counts: HashMap<MemoryClass, usize>,
-    /// O(log n) timestamp index per class: timestamp → entry_id
+    /// O(log n) insertion-order index per class: store_sequence → entry_id
     entries_by_class: HashMap<MemoryClass, BTreeMap<u64, String>>,
     /// Monotonically increasing sequence for ordering entries
     store_sequence: u64,
@@ -130,7 +138,8 @@ impl MemoryStore {
     /// Store a memory entry, enforcing per-class capacity limits.
     ///
     /// If the class already has `max_size` entries, the oldest entry
-    /// (by timestamp) is evicted to make room for the new one.
+    /// (by insertion order, i.e. smallest `store_sequence`) is evicted to
+    /// make room for the new one.
     ///
     /// Uses O(log n) lookup via class index trees.
     pub fn store(&mut self, entry: MemoryEntry) {
@@ -182,7 +191,8 @@ impl MemoryStore {
         let class_count = self.class_counts.get(&class).copied().unwrap_or(0);
 
         if class_count >= max_size {
-            // O(log n) oldest lookup via BTreeMap, then remove with index cleanup
+            // O(log n) oldest (by insertion order) lookup via BTreeMap, then
+            // remove with index cleanup.
             let oldest_id = self
                 .entries_by_class
                 .get(&class)
@@ -205,7 +215,8 @@ impl MemoryStore {
 
         // Enforce total capacity safety net across all classes.
         if self.entries.len() > MAX_ENTRIES {
-            // O(log n) global min across all class trees
+            // O(log n) global minimum insertion-order key across all class
+            // trees.
             let oldest = self
                 .entries_by_class
                 .values()

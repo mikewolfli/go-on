@@ -246,10 +246,7 @@ mod tests {
         let chain_path = dir.path().join("audit_chain.ndjson");
         write_chain(&chain_path, 3);
 
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let now_ms = crate::shared::timestamps::now_ts_ms_u64();
         let result = audit_chain_verify_at(
             &chain_path,
             &json!({"from_ms": now_ms - 60_000, "to_ms": now_ms + 60_000}),

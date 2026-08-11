@@ -162,10 +162,7 @@ fn run_council_route_deliberation(
         return None;
     }
 
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+    let now_ms = crate::shared::timestamps::now_ts_ms_u64();
     let proposal_id = format!("route-{}-{}", phase_name, now_ms);
 
     // Reputation-ranked route selection (primary source of truth for the winner).

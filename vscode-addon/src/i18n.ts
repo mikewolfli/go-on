@@ -271,6 +271,7 @@ export const MessageKeys = {
   statusBarStoppedTooltip: "statusBar.stoppedTooltip",
   statusBarHealthCheckFailedTooltip: "statusBar.healthCheckFailedTooltip",
   statusBarHealthTooltip: "statusBar.healthTooltip",
+  statusBarLastHeartbeat: "statusBar.lastHeartbeat",
 
   // Editing
   advancedEdit: "editing.advancedEdit",

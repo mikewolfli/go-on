@@ -103,6 +103,12 @@ fn backend_bind_addr_from_url(url: &str) -> String {
     }
 }
 
+/// Extract the port from a `host:port` bind address (e.g. `127.0.0.1:8090` → `8090`).
+/// Returns `None` when the address has no port component.
+fn bind_port_from_addr(addr: &str) -> Option<&str> {
+    addr.rsplit(':').next().filter(|p| !p.is_empty())
+}
+
 /// Check whether a TCP address is already listening (150ms connect timeout).
 fn is_addr_listening(addr: &str) -> bool {
     let Ok(candidates) = addr.to_socket_addrs() else {
@@ -370,30 +376,51 @@ impl GoOnApp {
                 }
             }
             if is_addr_listening(&bind_addr) {
-                // Force-kill the process holding the port
+                // Force-kill the process holding the port. Derive the port from
+                // the configured bind address so custom backend URLs (e.g.
+                // enterprise presets on 19090/29090) target the right process
+                // instead of a hardcoded 8090.
+                let bind_port = bind_port_from_addr(&bind_addr);
                 #[cfg(target_os = "macos")]
                 {
-                    let output = std::process::Command::new("lsof")
-                        .args(["-ti", "tcp:8090", "-sTCP:LISTEN"])
-                        .output();
-                    if let Ok(output) = output {
-                        if let Ok(pid_str) = String::from_utf8(output.stdout) {
-                            for pid in pid_str.trim().lines() {
-                                if let Ok(pid_num) = pid.trim().parse::<i32>() {
-                                    tracing::warn!("backend: force-killing stale PID {}", pid_num);
-                                    let _ = std::process::Command::new("kill")
-                                        .args(["-9", &pid_num.to_string()])
-                                        .output();
+                    if let Some(bind_port) = bind_port {
+                        let output = std::process::Command::new("lsof")
+                            .args(["-ti", &format!("tcp:{bind_port}"), "-sTCP:LISTEN"])
+                            .output();
+                        if let Ok(output) = output {
+                            if let Ok(pid_str) = String::from_utf8(output.stdout) {
+                                for pid in pid_str.trim().lines() {
+                                    if let Ok(pid_num) = pid.trim().parse::<i32>() {
+                                        tracing::warn!(
+                                            "backend: force-killing stale PID {}",
+                                            pid_num
+                                        );
+                                        let _ = std::process::Command::new("kill")
+                                            .args(["-9", &pid_num.to_string()])
+                                            .output();
+                                    }
                                 }
                             }
                         }
+                    } else {
+                        tracing::warn!(
+                            "backend: cannot extract port from bind address {:?}; skipping stale-process kill",
+                            bind_addr
+                        );
                     }
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
-                    let _ = std::process::Command::new("fuser")
-                        .args(["-k", "8090/tcp"])
-                        .output();
+                    if let Some(bind_port) = bind_port {
+                        let _ = std::process::Command::new("fuser")
+                            .args(["-k", &format!("{bind_port}/tcp")])
+                            .output();
+                    } else {
+                        tracing::warn!(
+                            "backend: cannot extract port from bind address {:?}; skipping stale-process kill",
+                            bind_addr
+                        );
+                    }
                 }
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
@@ -418,11 +445,15 @@ impl GoOnApp {
                         std::borrow::Cow::Owned(std::path::PathBuf::from(home))
                     }
                 };
+                // Do NOT pass `--low-memory` here: the flag forces the backend
+                // into the absolute-minimum resource tier (cache/vector 500,
+                // inflight 8) regardless of actual memory. The backend's own
+                // `estimate_safe_limits` auto-tiers by real free memory on
+                // startup, matching CLI/vscode launch behavior.
                 let mut cmd = std::process::Command::new(&path);
                 cmd.current_dir(&config_dir)
                     .arg("--protocol-mode")
                     .arg(&config.protocol_mode)
-                    .arg("--low-memory")
                     .stdout(std::process::Stdio::null());
 
                 // API keys are resolved exclusively via system keyring

@@ -52,16 +52,18 @@ impl ContextFeatures {
     }
 
     /// Produce a deterministic context hash string used as a key suffix.
+    ///
+    /// Only `time_bucket` and `task_type` participate: `latency_tier` is an
+    /// execution-time outcome, not a predictable context prior, so it cannot
+    /// be known when the read side constructs features before running. The
+    /// field is still recorded on written metrics for display/telemetry.
     pub fn context_key(&self) -> String {
-        format!(
-            "ctx:{}|{}|{}",
-            self.time_bucket, self.task_type, self.latency_tier
-        )
+        format!("ctx:{}|{}", self.time_bucket, self.task_type)
     }
 
     /// Convenience: build context from current system time (UTC hour).
     pub fn from_time_and_task(task_type: &str) -> Self {
-        let hour = chrono_hour();
+        let hour = crate::shared::timestamps::utc_hour();
         let time_bucket = match hour {
             0..=5 => "night",
             6..=11 => "morning",
@@ -297,6 +299,12 @@ impl AdaptiveModelSelector {
     }
 
     /// Rank candidates with context features.
+    ///
+    /// Stable sort by UCB score only: candidates with equal UCB scores keep
+    /// their input order (no alphabetical tie-break). Callers that rank first
+    /// (e.g. role/history ordering in the execution path) therefore survive a
+    /// cold-start UCB tie instead of being silently overwritten; when UCB has
+    /// signal it still wins.
     pub fn rank_candidates_with_context(
         &self,
         candidates: &[(String, Option<String>)],
@@ -312,7 +320,8 @@ impl AdaptiveModelSelector {
                 )
             })
             .collect::<Vec<_>>();
-        ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        // `sort_by` is stable: equal UCB scores keep the input order.
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
         ranked
             .into_iter()
             .map(|(agent_name, _)| agent_name)
@@ -320,6 +329,9 @@ impl AdaptiveModelSelector {
     }
 
     /// Legacy: rank candidates (global-only).
+    ///
+    /// Same tie semantics as [`Self::rank_candidates_with_context`]: equal UCB
+    /// scores keep the input order.
     pub fn rank_candidates(&self, candidates: &[(String, Option<String>)]) -> Vec<String> {
         self.rank_candidates_with_context(candidates, &ContextFeatures::default())
     }
@@ -452,18 +464,6 @@ impl Default for AdaptiveModelSelector {
     }
 }
 
-/// Helper: get the current hour (UTC) for context feature computation.
-/// Returns 0..=23.
-fn chrono_hour() -> u32 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let dur = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs();
-    // Days since epoch * 86400 + hour offset
-    ((secs % 86400) / 3600) as u32
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -544,7 +544,10 @@ mod tests {
     fn test_context_features_creates_deterministic_key() {
         let ctx = ContextFeatures::new("morning", "code", "low");
         let key = ctx.context_key();
-        assert_eq!(key, "ctx:morning|code|low");
+        // latency_tier is intentionally excluded from the key (it is only
+        // known after execution, so the pre-execution read side could never
+        // reproduce a three-segment key).
+        assert_eq!(key, "ctx:morning|code");
     }
 
     #[test]

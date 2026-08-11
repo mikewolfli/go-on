@@ -27,32 +27,33 @@
 本地模式使用 `config/config.toml` 作为默认配置：
 
 ```toml
-# config/config.toml（local 默认配置）
+# config/config.toml（local 默认配置；精简摘录）
 schema_version = "1.0.0"
 default_phase = "think"
 model_selection_mode = "adaptive"
 
-[protocol]
-mode = "acp_http"
+# 根级治理开关（经 #[serde(flatten)]）
+governance_enabled = true
+governance_policy_mode = "advisory"
 
 [cache]
 enabled = true
-path = "acp_cache.sqlite3"
-default_ttl_seconds = 1800
-max_entries = 2000
+path = "sqlite3/acp_cache.sqlite3"
+default_ttl_seconds = 3600
+max_entries = 5000
 
 [vector]
 enabled = true
 auto_mode = true
-path = "acp_vector.sqlite3"
-dimensions = 128
-min_query_chars = 120
+path = "sqlite3/acp_vector.sqlite3"
+dimensions = 192
+min_query_chars = 80
 top_k = 2
 min_similarity = 0.82
-max_snippet_chars = 600
-max_entries = 3000
-summary_trigger_messages = 4
-summary_max_chars = 800
+max_snippet_chars = 800
+max_entries = 10000
+summary_trigger_messages = 8
+summary_max_chars = 1200
 
 [runtime]
 acp_http_bind_addr = "127.0.0.1:8090"
@@ -63,8 +64,6 @@ entry_auth_enabled = false
 entry_rate_limit_rpm = 240
 entry_rate_limit_burst = 60
 i18n_default_language = "en-US"
-governance_enabled = true
-governance_policy_mode = "advisory"
 skills_enabled = true
 skills_cache_dir = "skills_cache"
 
@@ -72,6 +71,9 @@ skills_cache_dir = "skills_cache"
 otel_enabled = true
 otel_exporter = "otlp"
 otel_endpoint = "http://localhost:4317"
+
+[protocol]
+mode = "adaptive"
 ```
 
 ### 特性标志
@@ -165,35 +167,27 @@ curl http://127.0.0.1:8090/health
 ### 缓存位置
 - **默认**：`sqlite3/acp_cache.sqlite3`（见 `config/config.toml`）
 - **自定义**：在配置中设置 `cache.path`
-- **大小限制**：默认 2000 条记录（见 `config/config.toml` 的 `max_entries`）
+- **大小限制**：默认 5000 条记录（见 `config/config.toml` 的 `max_entries`）
 
 ### 向量存储
 - **位置**：`sqlite3/acp_vector.sqlite3`（见 `config/config.toml`）
-- **维度**：128 维嵌入（见 `config/config.toml` 的 `dimensions`）
-- **自动模式**：自动使用可用的向量扩展
+- **维度**：192 维嵌入（见 `config/config.toml` 的 `dimensions`）
+- **自动模式**：启用 autotune 对向量查询参数（`min_query_chars` / `top_k` / `min_similarity`）的自动调参（见 `config/config.toml` 的 `auto_mode`）
 
 ### 维护
 ```bash
 # 清理缓存（手动）
-rm -f acp_cache.sqlite3 acp_cache.sqlite3-*
+rm -f sqlite3/acp_cache.sqlite3 sqlite3/acp_cache.sqlite3-*
 
 # 重置向量存储
-rm -f acp_vector.sqlite3
+rm -f sqlite3/acp_vector.sqlite3
 
 # 压缩 SQLite 数据库
-sqlite3 acp_cache.sqlite3 "VACUUM;"
-sqlite3 acp_vector.sqlite3 "VACUUM;"
+sqlite3 sqlite3/acp_cache.sqlite3 "VACUUM;"
+sqlite3 sqlite3/acp_vector.sqlite3 "VACUUM;"
 ```
 
 ## 性能调优
-
-### 内存设置
-```toml
-[runtime]
-# 根据可用内存调整
-cache_max_memory_mb = 256
-vector_max_memory_mb = 512
-```
 
 ### 并发与超时
 并发限制通过 `[phases.<name>.options]` 按阶段配置（`phase_max_inflight` /
@@ -209,18 +203,16 @@ vector_max_memory_mb = 512
 sqlite3 --version
 
 # 修复损坏的数据库
-sqlite3 acp_cache.sqlite3 ".recover" | sqlite3 acp_cache_fixed.sqlite3
+sqlite3 sqlite3/acp_cache.sqlite3 ".recover" | sqlite3 sqlite3/acp_cache_fixed.sqlite3
 ```
 
 #### 向量存储问题
 ```bash
 # 检查 sqlite-vec 可用性
 cargo build --features backend-sqlite
-
-# 回退到 JSON 模式
-[vector]
-auto_mode = false
 ```
+
+向量存储自动解析模式：`local` profile 下 sqlite-vec 不可用时自动回退到 JSON 嵌入表；`simple-server` / `multi-users-server` 需要 sqlite-vec（或 pgvector）。`auto_mode` 仅控制 autotune 调参（对 `min_query_chars` / `top_k` / `min_similarity` 等查询参数的自动调整），与 JSON 回退无关，且不存在 `use_json_fallback` 配置开关。
 
 #### 端口冲突
 ```bash
@@ -246,8 +238,8 @@ tail -f go-on.log
 ### 从旧版本迁移
 ```bash
 # 备份现有数据
-cp acp_cache.sqlite3 acp_cache.sqlite3.backup
-cp acp_vector.sqlite3 acp_vector.sqlite3.backup
+cp sqlite3/acp_cache.sqlite3 sqlite3/acp_cache.sqlite3.backup
+cp sqlite3/acp_vector.sqlite3 sqlite3/acp_vector.sqlite3.backup
 
 # 配置 schema 带版本号（schema_version），启动时校验并迁移受支持的 schema。
 # 不存在 --migrate CLI 标志。

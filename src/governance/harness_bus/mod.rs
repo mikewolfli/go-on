@@ -38,12 +38,11 @@ pub mod types;
 pub use audit::PuaGovernanceProfile;
 pub use evaluator::PolicyEvaluator;
 pub use types::{
-    AgentExecutionPolicy, AuditConfig, AuditLevel, CodeExecutionPolicy, Constraint,
-    DegradationStrategy, DispatchPolicy, EscalationPolicy, EscalationReason, ExecutionMode,
-    ExecutionPolicy, FailureStrategy, FallbackStrategy, FileWritePolicy, GovernancePolicy,
-    IdempotencyPolicy, OutputVerdict, PolicyVerdict, PolicyViolation, QualityCompassConfig,
-    ReviewLevel, ReviewReason, RoutingStrategy, TimeoutPolicy, ToolUsagePolicy, ToolVerdict,
-    VersionCompatPolicy,
+    AgentExecutionPolicy, AuditConfig, AuditLevel, CodeExecutionPolicy, DegradationStrategy,
+    DispatchPolicy, EscalationPolicy, EscalationReason, ExecutionMode, ExecutionPolicy,
+    FailureStrategy, FallbackStrategy, FileWritePolicy, GovernancePolicy, IdempotencyPolicy,
+    OutputVerdict, PolicyVerdict, PolicyViolation, QualityCompassConfig, ReviewLevel, ReviewReason,
+    RoutingStrategy, TimeoutPolicy, ToolUsagePolicy, ToolVerdict, VersionCompatPolicy,
 };
 
 use crate::fault_tolerance::{FaultToleranceConfig, FaultToleranceEngine, FaultToleranceProfile};
@@ -236,9 +235,6 @@ impl HarnessBus {
                     // current pipeline — record as an approval request.
                     p.record_approval_request();
                 }
-                PolicyVerdict::AllowWithConstraints(_) => {
-                    p.allow_count = p.allow_count.saturating_add(1)
-                }
             }
             let ctrl = self
                 .evaluator
@@ -264,18 +260,13 @@ impl HarnessBus {
         }
 
         // Record execution outcome through the resilience engine (F-GAP-27).
-        let success = matches!(
-            &verdict,
-            PolicyVerdict::Allow
-                | PolicyVerdict::AllowWithConstraints(_)
-                | PolicyVerdict::Review(_)
-        );
+        let success = matches!(&verdict, PolicyVerdict::Allow | PolicyVerdict::Review(_));
 
         // PUA de-escalation: after 3 consecutive clean evaluations, de-escalate.
         // Uses compare_exchange for atomic reset to prevent double-de-escalation
         // when two concurrent evaluations both pass (principle #15: no races).
         match &verdict {
-            PolicyVerdict::Allow | PolicyVerdict::AllowWithConstraints(_) => {
+            PolicyVerdict::Allow => {
                 let prev = self.consecutive_allows.fetch_add(1, Ordering::SeqCst);
                 if prev >= 2 {
                     // Atomic reset: only the thread that successfully moves

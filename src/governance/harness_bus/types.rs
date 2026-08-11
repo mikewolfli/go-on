@@ -311,7 +311,6 @@ pub enum PolicyVerdict {
     Deny(PolicyViolation),
     Escalate(EscalationReason),
     Review(ReviewReason),
-    AllowWithConstraints(Vec<Constraint>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -329,12 +328,6 @@ pub struct EscalationReason {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewReason {
     pub reason: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Constraint {
-    pub field: String,
-    pub limitation: String,
 }
 
 // ---------------------------------------------------------------------------

@@ -284,157 +284,24 @@ pub fn quick_check_tool(tool_name: &str, args: &Value) -> Result<(), String> {
 }
 
 /// Collect the set of known tool names (for introspection / status).
+///
+/// The canonical source is the unified classification table
+/// ([`crate::governance::tool_capability::ToolCapabilityRegistry::known_names`]),
+/// so a newly classified tool automatically appears in status output instead
+/// of drifting from a parallel hardcoded list. A small supplementary set
+/// keeps legacy names that have no table entry (the registry classifies them
+/// via its keyword fallback) visible to introspection. Dynamically
+/// registered tool names are merged in below.
 pub fn known_tool_names() -> BTreeSet<&'static str> {
     let mut set = BTreeSet::new();
-    // Read tools
-    for &name in &[
-        "read_file",
-        "read",
-        "search_files",
-        "grep",
-        "search",
-        "list_files",
-        "ls",
-        "list_directory",
-        "find_files",
-        "find_path",
-        "inspect_git_diff",
-        "date_time",
-        "skill_list",
-        "skill_reload",
-        "archive_inspect",
-        "jsonl_read",
-        "diagnostics",
-        "environment_info",
-        "rss_read",
-        "code_index_search",
-        "semantic_search",
-        "diff",
-        "file_diff",
-        "read_file_lines",
-        "dns_lookup",
-        "ping",
-        "port_scan",
-        "read_excel",
-        "read_ppt",
-        "read_docx",
-        "read_pdf",
-        "csv_read",
-        "csv_analyze",
-        "toml_read",
-        "yaml_read",
-        "email_parse",
-        "web_scrape",
-        "invoice_parse",
-        "dxf_read",
-        "stl_read",
-        "obj_read",
-        "step_read",
-        "ply_read",
-        "iges_read",
-        "gltf_read",
-        "svg_read",
-        "obj_model_read",
-        "gcode_read",
-        "gpx_read",
-        "geo_util",
-        "cad_convert",
-        "image_analyze",
-        "qrcode_generate",
-        "sqlite_query",
-        "docker_logs",
-        "code_metrics",
-        "encode_decode",
-        "file_watch",
-        "hash_file",
-        "lint_run",
-        "random_token",
-        "search_packages",
-        "security_scan",
-        "template_render",
-        "uuid_gen",
-    ] {
-        set.insert(name);
-    }
-    // Write tools
-    for &name in &[
-        "write_file",
-        "write",
-        "create",
-        "apply_patch",
-        "create_directory",
-        "delete_path",
-        "move_path",
-        "file_move",
-        "file_delete",
-        "copy_path",
-        "compress",
-        "decompress",
-        "archive_extract",
-        "jsonl_write",
-        "csv_write",
-        "csv_transform",
-        "toml_write",
-        "yaml_write",
-        "write_docx",
-        "write_excel",
-        "write_ppt",
-        "pdf_merge",
-        "pdf_split",
-        "svg_generate",
-        "svg_export",
-        "stl_generate",
-        "image_generate",
-        "image_resize",
-        "image_convert",
-        "skill_create",
-        "game_mod_install",
-        "game_replay_recorder",
-        "game_save_manager",
-        "game_screen_capture",
-        "game_auto_grind",
-        "game_keyboard_input",
-        "game_mouse_input",
-        "game_state_modify",
-        "goon_workflow_run_cancel",
-        "goon_workflow_run_pause",
-        "goon_workflow_run_resume",
-        "goon_skill_update",
-        "goon_skill_version_rollback",
-        "edit_file",
-        "apply_code_action",
-        "dependency_add",
-        "format_code",
-    ] {
-        set.insert(name);
-    }
-    // Shell/exec tools
-    for &name in &[
-        "bash",
-        "execute_command",
-        "run",
-        "shell_exec",
-        "terminal",
-        "run_tests",
-        "cargo_test",
-        "cargo_check",
-        "skill_execute",
-        "http_request",
-        "git",
-        "game_launch",
-        "game_monitor",
-        "game_online_status",
-        "goon_provider_test_completion",
-        "goon_provider_test_connection",
-        "build_run",
-        "docker_build",
-        "docker_compose",
-        "docker_exec",
-        "docker_push",
-        "spawn_agent",
-    ] {
-        set.insert(name);
-    }
+    // Canonical source: every tool with an explicit classification entry.
+    set.extend(crate::governance::tool_capability::ToolCapabilityRegistry::known_names());
+    // Supplementary legacy names with no classification-table entry. They are
+    // handled by the registry's keyword fallback, so they must not disappear
+    // from introspection. Keep this list in sync when new tools are
+    // classified.
+    // Historical alias for `file_diff`; kept for older configs.
+    set.insert("diff");
     // Merge in dynamically registered tool names from ToolRegistry
     // so that introspection always reflects the complete set.
     if let Ok(guard) = governance_tool_names().lock() {

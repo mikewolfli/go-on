@@ -241,6 +241,11 @@ fn derive_knowledge_confidence(reusable_insights: &[String], verification_steps:
     (base + verification_bonus + insight_bonus).clamp(0.0, 0.98)
 }
 
+/// Truncate by characters with a hard output budget: the input is trimmed
+/// and the `...` ellipsis replaces the last 3 characters of the budget, so
+/// the result is at most `max_chars` characters. This differs from
+/// [`crate::shared::truncate::truncate_chars`] (append-style, no trim) and is
+/// kept local to preserve the exact knowledge-artifact excerpt semantics.
 pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
     if max_chars == 0 {
         return String::new();

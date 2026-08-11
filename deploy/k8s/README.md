@@ -6,17 +6,19 @@ production-grade multi-agent orchestration service.
 ## Quick Start
 
 ```bash
-# 1. Create a secret with your API keys. The secret KEY NAMES become the
-#    environment variable names injected via `envFrom` in deployment.yaml, so
-#    they must match what the config expects: GO_ON_DEEPSEEK_API_KEY (agent
-#    `api_key_env`) and GO_ON_ENTRY_API_KEY (entry auth, default env name).
-kubectl create secret generic go-on-secrets \
-  --from-literal=GO_ON_DEEPSEEK_API_KEY=sk-xxxxx \
-  --from-literal=GO_ON_ENTRY_API_KEY=change-me
-```
+# 1. Create the local secrets file (gitignored — never commit real secrets).
+#    Copy the committed template and fill in real values:
+cp deploy/k8s/.secrets.env deploy/k8s/.secrets.local.env
+#    then edit deploy/k8s/.secrets.local.env and set:
+#      GO_ON_ENTRY_API_KEY     (entry auth, default env name)
+#      GO_ON_DEEPSEEK_API_KEY  (deepseek agent `api_key_env`)
+#    The KEY NAMES become the environment variable names injected via `envFrom`
+#    in deployment.yaml; `kustomization.yaml` turns this file into the
+#    `go-on-secrets` Secret via its secretGenerator. For a PostgreSQL backend
+#    (multi-users-server parity) also set GO_ON_PG_CONNECTION_STRING.
 
-# 2. Deploy
-kubectl apply -f deploy/k8s/
+# 2. Deploy (the directory is a Kustomization, so use -k, not -f)
+kubectl apply -k deploy/k8s/
 
 # 3. Check status
 kubectl get pods -l app=go-on
@@ -46,8 +48,13 @@ kubectl logs -l app=go-on
 - `service.yaml` – ClusterIP Service for internal routing
 - `ingress.yaml` – Ingress with TLS termination via cert-manager (nginx ingress class)
 - `configmap.yaml` – go-on configuration (non-sensitive settings)
-- Secret – created manually via `kubectl create secret generic go-on-secrets`
-  (see Quick Start); no `secret.yaml` manifest is shipped
+- `network-policy.yaml` – NetworkPolicy restricting inbound traffic to the go-on
+  pods and outbound to the internet (no private RFC1918 egress)
+- `pod-disruption-budget.yaml` – PodDisruptionBudget (maxUnavailable: 1) for HA
+  during voluntary disruptions
+- Secret – generated from `deploy/k8s/.secrets.local.env` (gitignored; copy
+  from the `.secrets.env` template) by the `secretGenerator` in
+  `kustomization.yaml`; no `secret.yaml` manifest is shipped
 - `kustomization.yaml` – Kustomize overlay that includes all resources above
 
 ## Ingress Configuration

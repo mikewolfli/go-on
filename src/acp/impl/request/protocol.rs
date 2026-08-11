@@ -119,6 +119,7 @@ pub(super) fn is_mcp_request(method: &str) -> bool {
     method.starts_with("mcp.")
         || method == "initialize"
         || method == "notifications/initialized"
+        || method == "notifications/cancelled"
         || method.starts_with("tools/")
         || method.starts_with("resources/")
         || method.starts_with("prompts/")
@@ -140,6 +141,9 @@ pub(super) fn normalize_mcp_method(method: &str) -> String {
         "initialize" => "mcp.initialize".to_string(),
         "notifications/initialized" | "notifications_initialized" => {
             "mcp.notifications_initialized".to_string()
+        }
+        "notifications/cancelled" | "notifications_cancelled" => {
+            "mcp.notifications_cancelled".to_string()
         }
         "ping" => "mcp.ping".to_string(),
         _ if method.starts_with("tools/") => format!("mcp.tools.{}", &method[6..]),
@@ -213,6 +217,7 @@ pub(crate) const ACP_METHODS: &[&str] = &[
     "mcp.completion.complete",
     "mcp.initialize",
     "mcp.logging.setLevel",
+    "mcp.notifications_cancelled",
     "mcp.notifications_initialized",
     "mcp.ping",
     "mcp.prompts.get",

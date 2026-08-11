@@ -695,6 +695,7 @@
     "stoppedTooltip": "点击打开聊天。后端可在聊天/设置中配置。",
     "healthCheckFailedTooltip": "Go-On 状态：健康检查失败（{0}/{1}）\n监控将继续自动运行。\n点击打开聊天",
     "healthTooltip": "Go-On 状态：健康\n上次健康检查: {0}\n{1}\n点击打开聊天",
+    "lastHeartbeat": "上次心跳: {0}",
     "text": "Go-On 聊天"
   },
   "rpc": {

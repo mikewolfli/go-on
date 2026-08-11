@@ -306,11 +306,10 @@ fn query_windows_memory() -> SystemMemoryInfo {
 ///
 /// # Blocking caveat
 /// `query_system_memory` spawns subprocesses on macOS (`sysctl`/`vm_stat`)
-/// and reads `/proc` on Linux. The periodic caller in `acp/background.rs`
-/// runs on a tokio worker; on macOS the subprocess spawn + pipe reads are
-/// blocking I/O. The macOS branch is left unmodified here because it is
-/// unverifiable on non-macOS hosts; the safe follow-up is to route this call
-/// through `tokio::task::spawn_blocking` at the call site.
+/// and reads `/proc` on Linux. Both call sites run it off the tokio worker
+/// through `tokio::task::spawn_blocking`: the periodic 30s loop in
+/// `acp/background.rs` and the startup one-shot in
+/// `acp/impl/runtime/server_builder.rs` (via [`start_memory_monitor`]).
 pub fn evaluate_memory_alerts() {
     let info = query_system_memory();
     let free_mb = info.free_mb();

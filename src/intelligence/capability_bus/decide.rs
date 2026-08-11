@@ -10,7 +10,7 @@ use super::core::CapabilityBus;
 use super::sense::SensingOutput;
 use crate::governance::harness_bus::{AgentExecutionPolicy, PolicyVerdict};
 use crate::governance::pua::TaskContext;
-use crate::intelligence::adaptive_selector::ContextFeatures;
+
 use crate::intelligence::capability_bus::learning_optimization_bus::LearningEvent;
 
 use serde::Serialize;
@@ -450,9 +450,7 @@ impl CapabilityBus {
                     ],
                 };
             }
-            PolicyVerdict::Allow
-            | PolicyVerdict::Review(_)
-            | PolicyVerdict::AllowWithConstraints(_) => {
+            PolicyVerdict::Allow | PolicyVerdict::Review(_) => {
                 // Allowed — continue to agent selection.
             }
         }
@@ -529,40 +527,19 @@ impl CapabilityBus {
         // feeds real scoring instead of a log-only event. Observability for
         // the semantic signal is recorded below from the computed breakdown.
 
-        // ── P2-3: AdaptiveModelSelector — re-rank candidates by performance context ──
-        // Candidates carry their agent name as the model_id so UCB scores are
-        // computed per-agent (record_result_with_context keys on the agent
-        // name). Previously candidates were (name, None): every UCB score was
-        // 0.0 and the "adaptive" ranking silently degraded to alphabetical.
-        let model_selector_ranked: Option<Vec<String>> =
-            self.model_selector.as_ref().map(|selector| {
-                let context = ContextFeatures::from_time_and_task(&task_type_str);
-                let candidates_with_models: Vec<(String, Option<String>)> = candidate_agents
-                    .iter()
-                    .map(|name| (name.clone(), Some(name.clone())))
-                    .collect();
-                selector
-                    .lock()
-                    .map(|sel| sel.rank_candidates_with_context(&candidates_with_models, &context))
-                    .unwrap_or_else(|_| {
-                        tracing::warn!(
-                            "decide: model_selector lock poisoned, using original order"
-                        );
-                        candidate_agents.clone()
-                    })
-            });
-        let selection_candidates: &[String] = match model_selector_ranked {
-            Some(ref ranked) => ranked.as_slice(),
-            None => &candidate_agents,
-        };
-
         // Five-factor scoring runs for every candidate; the Q-learning
         // preference is applied afterwards as a small 6th factor (see
         // `apply_q_learning_factor`), so the breakdown always reflects real
         // computed values instead of a fabricated all-1.0 override.
-        let mut score_breakdown = self
-            .select_best_agent(task, selection_candidates, sensing)
-            .1;
+        //
+        // The former P2-3 adaptive re-rank fed `candidate_agents` through the
+        // shared AdaptiveModelSelector (UCB) before scoring — a no-op:
+        // `select_best_agent` re-sorts by `total_score` anyway, so the input
+        // order never affected the outcome, and every request paid an O(n log
+        // n) UCB computation plus a lock acquisition for nothing. The shared
+        // selector is still fed real outcomes by the execution path
+        // (exec_pack/task.rs `record_result`).
+        let mut score_breakdown = self.select_best_agent(task, &candidate_agents, sensing).1;
         score_breakdown = apply_q_learning_factor(
             score_breakdown,
             q_preferred_action.as_deref(),
@@ -570,7 +547,7 @@ impl CapabilityBus {
         );
         let selected_agent = score_breakdown.first().map(|entry| entry.agent.clone());
         tracing::info!(
-            candidates = ?selection_candidates,
+            candidates = ?candidate_agents,
             selected = ?selected_agent,
             "capability_bus agent selection"
         );
@@ -598,12 +575,12 @@ impl CapabilityBus {
             );
         }
 
-        // ── P2-3: No decision-time adaptive-learning record here ──
-        // The selector instance is shared with the execution path
-        // (exec_pack/task.rs records `record_result` with the REAL execution
-        // outcome). Recording a self-confirming `success=true` at decision
-        // time would feed the UCB statistics with outcomes that were never
-        // observed, biasing per-agent ranking.
+        // ── No decision-time adaptive-learning record here ──
+        // The adaptive selector's UCB statistics are fed exclusively by the
+        // execution path (exec_pack/task.rs records `record_result` with the
+        // REAL execution outcome). Recording a self-confirming `success=true`
+        // at decision time would feed the statistics with outcomes that were
+        // never observed, biasing per-agent ranking.
 
         // ── P2-6: LivePerformanceFeed — consumed at model-selection time ──
         // The feed's EMA cost/latency estimates are real but are read by the

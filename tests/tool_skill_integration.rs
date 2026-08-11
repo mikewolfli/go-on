@@ -305,7 +305,6 @@ async fn tool_governance_pre_check() {
         | go_on::governance::harness_bus::PolicyVerdict::Review(_)
         | go_on::governance::harness_bus::PolicyVerdict::Deny(_)
         | go_on::governance::harness_bus::PolicyVerdict::Escalate(_) => {}
-        other => panic!("unexpected verdict variant: {:?}", other),
     }
 
     // A high-risk task should not crash either

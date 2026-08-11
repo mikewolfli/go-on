@@ -287,7 +287,7 @@ npm run compile
 | Built-in tools | 60+ |
 | AI providers | 37 |
 | Skills in marketplace | 34 |
-| Unit tests | ~1.7K (1,623 lib + 151 integration declarations; see Verification below) |
+| Unit tests | ~1.6K (1,554 lib executed via `cargo test --lib` + 152 non-chaos integration declarations; see Verification below) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 
 ## Build Profiles
@@ -318,7 +318,7 @@ cargo build --no-default-features --features full
 
 All 4 build profiles compile with zero clippy warnings. The latest full `cargo test --all-targets` run passes every suite with zero failures (see the latest section of `CHANGELOG.md` for the current counts). The GUI and VS Code addon also compile cleanly with zero errors.
 
-Test numbers above are declaration counts: `#[test]` / `#[tokio::test...]` attributes in `src/` (lib) and in `tests/` including the `tests/structural/` submodule (integration, excluding the `chaos-testing`-feature-gated `chaos_drill` suite).
+The lib figure in the statistics table is the **executed** count measured on 2026-08-11: `cargo test --lib` → **1555 passed / 0 failed**. For reference, the `#[test]` / `#[tokio::test...]` attribute declaration counts are 1,625 in `src/` (lib) and 152 in `tests/` including the `tests/structural/` submodule (integration, excluding the `chaos-testing`-feature-gated `chaos_drill` suite of 6); the executed count is lower because some declarations sit behind feature gates not enabled in the default (local) profile. (Naive string greps for `#[test]` / `#[tokio::test` report 1,628 in `src/` — three of those hits are prose mentions of the attributes inside comments — and 158 in `tests/` including the `chaos_drill` suite.)
 
 ---
 

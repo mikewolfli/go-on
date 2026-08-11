@@ -2,6 +2,41 @@
 
 ## [Unreleased] - 2026-08-11
 
+### 第 47 轮 — 超级深度/广度扫描 XV：协议域与并发诚实化（2026-08-11，docs/log/log-20260811-5.md）
+
+#### 协议域
+
+- **HTTP body OOM 窗口修复（P1）**：`route_http_post` 在强制 10MB 上限之前就按攻击者可控的 `Content-Length` 分配读取缓冲区，恶意客户端可强制超大分配。大小检查现在先于分配执行，且 ACP/MCP 两个 HTTP 臂共享单一 `MAX_BODY_SIZE` 常量（不再有会漂移的重复副本）。
+- **`notifications/cancelled` 路由补齐**：裸 MCP 通知（`notifications/cancelled` / `notifications_cancelled`）现归一化为 `mcp.notifications_cancelled` 并加入 `ACP_METHODS` 白名单；ACP bridge 臂标记共享 cancelled-request 注册表，使进行中请求的循环提前中止（对齐原生 MCP 臂）。新增回归测试。
+- **MCP stdio 停机竞态修复**：一次性 `Notify::notify_one()` 在请求处理期间到达的信号可能丢失（无 waiter 被存储），导致循环永不退出。现改为 notify 之前先置持久 `AtomicBool` 标志，并在每次迭代轮询（与 ACP stdio 臂对齐）。
+
+#### 智能/选择
+
+- **UCB 排序平局规则移除**：`rank_candidates_with_context` 原来按 UCB 分数后按字母序排序，冷启动平局时静默覆盖调用方排序；现仅按 UCB 稳定排序。`latency_tier` 从上下文 key 中移除（执行期才有的结果，执行前读侧无法复现）；`utc_hour()` 提取为与执行路径共享的唯一时间桶来源。
+- **任务描述 thread-local 缓存移除**：多线程运行时下请求的 phases 会在 `.await` 点间迁移 worker，缓存值可能被另一个请求读到（跨请求 phase 路由/知识归属污染）。`extract_task_description` 现为纯函数。
+- **Hub 共识硬编码回退投票移除**：`init_intelligence_hub` 启动时总是注册 voters，空 voters 分支在生产与测试中均为死代码。
+
+#### 记忆/治理
+
+- **向量锁序修复（P1）**：`ensure_hnsw_index` 先锁 `hnsw` 再锁 `conn`，而 `upsert`/`clear_all` 先锁 `conn`——并发惰性建索引与 upsert 可能死锁。所有路径现统一 `conn` → `hnsw` 顺序，且 `conn` guard 保持到索引发布完成。
+- **`known_tool_names` 统一**：`governance/status.rs` 现读取权威 `ToolCapabilityRegistry::known_names` 表（辅以少量旧名补充），不再维护与分类器漂移的平行硬编码清单。
+- **`PolicyVerdict::AllowWithConstraints` 删除**：无任何路径构造的变体；harness 记账与降级计数同步更新。
+- **内存监控启动解除阻塞**：启动一次性检查改在 blocking 线程运行（`query_system_memory` 在 macOS 会 spawn 子进程、Linux 读 `/proc`）。
+
+#### 配置/三端/文档
+
+- **配置数值统一**：`config/config.toml` 的 cache/vector 键恢复权威值（3600 / 5000 / 192 / 80 / 800 / 10000 / 8 / 1200）并镜像到 vscode `configManager` 默认值；autotune `state_path` 统一为 `sqlite3/` 前缀；`config.reload` 改为 diff 真实顶层 TOML 段，不再硬编码 `["runtime"]`。
+- **`[security]`/`[feature]` 节内键回填**：`#[serde(flatten)]` 只吸收顶层键，节内键（如 `[security] entry_auth_enabled = true`）此前被静默丢弃（节可解析但无效）；`sync_legacy_flat_keys` 现在从原始 TOML 把节内键提升到 `[runtime]`；新增回归测试。
+- **三端修复**：vscode 把 state-sync heartbeat 转发到状态监视器（状态栏显示最近心跳时间），并停止向 config.toml 写入 camelCase `runtime.protocolMode`（非后端 schema 键）；GUI 强杀进程时按配置的 bind 地址推导端口（不再硬编码 8090）；i18n locale 更新。
+- **文档同步**：README/CHANGELOG 数字（lib 1555）、cookbook local/simple-server 事实（协议模式、治理键位置、向量数值、autotune `auto_mode` 语义、`sqlite3/` 路径）、workflow-config 高危关键词表、k8s README 组件清单、声明数口径。
+
+#### 验证
+
+```
+cargo test --lib → 1555 passed / 0 failed / 0 ignored
+集成套件（152 非 chaos 声明）全通过
+```
+
 ### 第 46 轮 — 超级深度/广度扫描 XIV：恒值路径清理与统一链路（2026-08-11，docs/log/log-20260811-4.md）
 
 #### P1 正确性

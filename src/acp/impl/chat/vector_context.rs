@@ -496,30 +496,34 @@ pub(crate) fn build_vector_context_message(
     }
 }
 
-pub(crate) fn merge_context_into_messages(
-    messages: &[Message],
-    context: Option<String>,
-) -> Vec<Message> {
+/// Append a context segment to the leading `system` message in `messages` in
+/// place (or insert a new leading `system` message when there is none).
+///
+/// The previous version returned a fully cloned `Vec<Message>` (deep-copying
+/// every message, content strings included) and callers chained 4 of these per
+/// request (layered prompt, vector, startup, skill) while only the first
+/// message ever changed — 4×N string allocations. Mutating in place keeps the
+/// exact same concatenation/ordering/trim semantics with a single initial
+/// clone at the call site.
+pub(crate) fn merge_context_into_messages(messages: &mut Vec<Message>, context: Option<String>) {
     let Some(context) = context else {
-        return messages.to_vec();
+        return;
     };
 
-    let mut merged = messages.to_vec();
-    if let Some(first) = merged.first_mut() {
+    if let Some(first) = messages.first_mut() {
         if first.role.eq_ignore_ascii_case("system") {
             first.content = format!("{}\n\n{}", first.content.trim(), context);
-            return merged;
+            return;
         }
     }
 
-    merged.insert(
+    messages.insert(
         0,
         Message {
             role: "system".to_string(),
             content: context,
         },
     );
-    merged
 }
 
 // ── Phase summary helpers ───────────────────────────────────────────────────

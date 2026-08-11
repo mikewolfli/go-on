@@ -58,8 +58,6 @@ use crate::intelligence::capability_bus::learning_optimization_bus::LearningOpti
 use crate::intelligence::capability_bus::reinforcement_bus::ReinforcementBus;
 use crate::intelligence::capability_bus::unified_knowledge_bus::UnifiedKnowledgeBus;
 
-use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
-
 /// A named evolve() subsystem future (stage-2 concurrent dispatch).
 pub(crate) type EvolveSubsystem<'a> =
     std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
@@ -343,11 +341,6 @@ pub struct CapabilityBus {
     /// Continuous learning center — lifelong learning (F-GAP-24)
     pub continuous_learning: Arc<Mutex<ContinuousLearningCenter>>,
 
-    /// Adaptive model selector for context-aware model routing (P2-3).
-    /// Wired to the server's shared selector (`server.model_deps.adaptive_model_selector`)
-    /// so learned re-ranking is visible to provider tests / autotune.
-    pub model_selector: Option<Arc<std::sync::Mutex<AdaptiveModelSelector>>>,
-
     /// Live performance feed — EMA-smoothed model cost estimates (P2-6)
     pub live_performance: Option<Arc<LivePerformanceFeed>>,
 
@@ -464,7 +457,6 @@ impl CapabilityBus {
             continuous_learning: Arc::new(Mutex::new(ContinuousLearningCenter::new(
                 Default::default(),
             ))),
-            model_selector: None,
             live_performance: None,
             config: CapabilityBusConfig::default(),
             evolve_timeout_count: std::sync::atomic::AtomicU64::new(0),

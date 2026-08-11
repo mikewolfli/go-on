@@ -53,7 +53,7 @@ max_entries = 20000
 
 [vector]
 enabled = true
-auto_mode = false  # 需要 sqlite-vec
+auto_mode = false  # 禁用 autotune 对向量查询参数的自动调参
 path = "/var/lib/go-on/vector.sqlite3"
 dimensions = 384  # 更高维度以获得更好准确性
 top_k = 5

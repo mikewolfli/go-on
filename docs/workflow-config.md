@@ -333,14 +333,15 @@ User sends high-risk query
 
 **Domain keywords** that trigger risk detection:
 `medical`, `diagnosis`, `clinical`, `prescription`, `treatment`, `surgery`,
-`healthcare`, `legal`, `contract`, `litigation`, `financial`, `investment`,
-`trading`, `compliance`, `security`, `authentication`, `authorization`,
-`encryption`, `infrastructure`, `deployment`, `production`
+`healthcare`, `legal`, `contract`, `compliance`, `regulation`, `litigation`,
+`finance`, `financial`, `investment`, `portfolio`, `credit`, `loan`,
+`underwriting`, `fraud`, `aml`, `tax`, `audit`, `insurance`, `privacy`,
+`security incident`, `safety-critical`
 
 **Decision keywords** that amplify risk:
-`delete`, `drop`, `remove`, `modify`, `alter`, `override`, `approve`,
-`authorize`, `grant`, `revoke`, `execute`, `deploy`, `release`, `publish`,
-`terminate`, `shutdown`
+`approve`, `reject`, `deny`, `diagnose`, `prescribe`, `recommendation`,
+`risk control`, `decision`, `compliance decision`, `legal advice`,
+`medical advice`, `financial advice`
 
 These defaults can be overridden per-phase via `high_risk_domain_keywords`
 and `high_risk_decision_keywords` options.

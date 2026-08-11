@@ -741,11 +741,14 @@ pub(crate) async fn execute_runtime_subtasks(
 // ============================================================================
 
 /// Build `ContextFeatures` for the adaptive model selector from the executed
-/// subtask: UTC hour-of-day bucket, a task-type derived from the single
-/// authoritative `TaskRouter::analyze_task` classification, and a latency
-/// tier from the measured duration. This restores the per-context learning
-/// signal (previously only the global `record_result` was fed, so the UCB
-/// context arms never learned).
+/// subtask: UTC hour-of-day bucket and a task-type derived from the single
+/// authoritative `TaskRouter::analyze_task` classification. The latency tier
+/// is derived from the measured duration and recorded on written metrics, but
+/// it does **not** participate in `context_key` (it is only known after
+/// execution, so a pre-execution read side could never reproduce a key that
+/// includes it). This restores the per-context learning signal (previously
+/// only the global `record_result` was fed, so the UCB context arms never
+/// learned).
 ///
 /// The former third keyword classifier (a private code/reasoning/chat
 /// keyword table) was removed: `TaskRouter::analyze_task` owns task-type
@@ -756,11 +759,7 @@ fn model_context_features(
     duration_ms: u64,
 ) -> crate::intelligence::adaptive_selector::ContextFeatures {
     use crate::orchestration::task_router::TaskType;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let hour = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| (d.as_secs() % 86_400) / 3600)
-        .unwrap_or(12) as u32;
+    let hour = crate::shared::timestamps::utc_hour();
     let time_bucket = match hour {
         6..=11 => "morning",
         12..=17 => "afternoon",
@@ -910,11 +909,23 @@ async fn execute_single_subtask(
         .collect::<Vec<_>>();
 
     {
+        // UCB re-ranking is a stable sort over the role/history order built
+        // above (or the configured candidate order when role collaboration is
+        // off): equal UCB scores keep the input order, so during cold start
+        // the role + execution-history ranking wins instead of being
+        // overwritten by an alphabetical tie-break.
         let sel = context.adaptive_selector.lock().unwrap_or_else(|poisoned| {
             warn!("Adaptive selector lock poisoned in execute_single_subtask, recovering");
             poisoned.into_inner()
         });
-        let ranked_agents = sel.rank_candidates(&ranking_inputs);
+        // Query with the same (time_bucket, task_type) the write side will
+        // record under after this run, so per-context UCB metrics are actually
+        // consulted (previously the read side used ContextFeatures::default()
+        // and the keys never intersected). The duration argument is 0: latency
+        // is an execution-time outcome that does not participate in the
+        // context key, so a pre-execution construction is valid.
+        let ranked_agents =
+            sel.rank_candidates_with_context(&ranking_inputs, &model_context_features(&task, 0));
         if !ranked_agents.is_empty() {
             let order = ranked_agents
                 .into_iter()
@@ -982,18 +993,6 @@ async fn execute_single_subtask(
                 run_result.is_ok(),
                 Some(&model_context_features(task.as_str(), duration_ms)),
             );
-            // Agent-level record: the capability_bus decide path reads UCB
-            // scores keyed on the *agent name* (decide.rs passes the candidate
-            // name as model_id), while the record above keys on the real
-            // model_id. Without this line the two value spaces never meet —
-            // every per-agent read stayed "unseen" and the adaptive agent
-            // ranking silently degraded to name order. `record_result` writes
-            // the global key (`<agent_name>::`), which the per-context query
-            // falls back to when no per-context metrics exist
-            // (adaptive_selector.rs ucb_score_for_model_in_context). Note
-            // total_observations now advances by 2 per run; the exploration
-            // term's effect is negligible.
-            selector.record_result(agent_name, run_result.is_ok());
         }
         let _ = context.outcome_tx.send(OutcomeEvent::AgentOutcome {
             phase_name: phase_name.to_string(),

@@ -93,6 +93,18 @@ impl ToolCapabilityRegistry {
             .and_then(|c| c.3)
             .unwrap_or_else(|| classify_risk_by_keyword(tool))
     }
+
+    // ── Introspection ──────────────────────────────────────────────────────
+
+    /// Names of every tool that has an explicit classification-table entry.
+    ///
+    /// Exposed for introspection (e.g. `governance::status::known_tool_names`)
+    /// so tool-name reporting stays derived from the single classification
+    /// table instead of maintaining a parallel hardcoded list that drifts
+    /// whenever a new tool is classified.
+    pub fn known_names() -> impl Iterator<Item = &'static str> {
+        TOOL_CLASSIFICATIONS.iter().map(|(name, ..)| *name)
+    }
 }
 
 /// Single row of the unified tool-classification table.

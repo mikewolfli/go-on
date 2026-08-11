@@ -418,6 +418,11 @@ impl SessionCompressor {
 
 /// Truncate a string to at most `max_len` characters, appending "…" if
 /// truncation occurred.
+///
+/// Byte-based budget (not `crate::shared::truncate::truncate_chars`, which is
+/// character-based): the caller constrains stored-payload byte size, so a
+/// char-based cutoff would not bound the actual byte length. Kept local
+/// deliberately.
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         return s.to_string();

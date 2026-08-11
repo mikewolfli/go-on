@@ -810,8 +810,15 @@ async function initializeGoOn(
         output.appendLine(`[state-sync] Backend restarting${tag}: ${reason}`);
         vscode.window.showWarningMessage(`Go-On backend restarting: ${reason}`);
       },
-      onHeartbeat(_timestamp) {
-        // Heartbeat is informational only
+      onHeartbeat(timestamp) {
+        // Heartbeat = backend liveness signal broadcast every 30s via state
+        // sync SSE. Forward it to the status monitor so the status bar shows
+        // the last-seen heartbeat time (supplementary to the periodic health
+        // poll — not a replacement).
+        statusMonitor.noteHeartbeat(timestamp);
+        output.appendLine(
+          `[state-sync] Heartbeat received${tag}: ${new Date(timestamp).toISOString()}`,
+        );
       },
     },
     output,

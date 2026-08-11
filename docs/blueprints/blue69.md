@@ -7,6 +7,24 @@
 
 ---
 
+## ⚠️ 2026-08-11 回写（§21 独立验证）
+
+> 以下 BLUE69 修复轮次记录中的若干声明，经 2026-08-11 与当前代码逐条核对后**已与代码现状不符**。
+> 按“历史记录如实保留”原则，下文原轮次记录正文不改写，仅在此声明失效/撤销/变更状态，证据见各条指向代码。
+> 后续引用本蓝图时以代码实际状态为准。
+
+| # | 原声明（轮次） | 2026-08-11 代码核对 | 回写 |
+|:--:|------|------|------|
+| a | Round 3 P2-2/P2-3：`websocket.rs` 完成 unbounded→bounded channel + pong 验证（heartbeat_seq/missed_pongs/RTT） | WebSocket 传输已整体移除，全项目无 `websocket.rs`（`**/websocket.rs` 0 匹配） | **声明已失效** |
+| b | Round 1 P0-3：`bootstrap.rs` enable_metrics false→true，metrics 现可用 | `src/core/bootstrap.rs` 无 metrics 开关（注释：旧 enable_telemetry 分支已移除，见 log-20260809-3）；生产 `src/main/mod.rs` 显式 `enable_metrics: false` | **声明已失效** |
+| c | Round 2 P1-1：PolicyReloader 已接线（evaluate() 从 RULES/ 加载） | `src/acp/background.rs` 注释：PolicyReloader/reloadable_policy 已于 2026-08-06 cleanup 删除（无生产调用者，policy_reloader 恒为 None） | **声明已撤销** |
+| d | Round 6 P5-6：bridge_metrics_recorder 持续运行（OTLP→RuntimeMetrics 桥接） | `src/observability/metrics_exporter.rs` 注释：桥接已移除（MetricsRecorder 零生产写入者，每次合并全零值属死工作） | **声明已移除** |
+| e | Round 7 P6-5：build.yml 已有 gate-docker job 使用 docker/build-push-action（build.yml:176-194） | `.github/workflows/build.yml` 全文件 99 行、3 个 job（gate-backend/gate-gui/gate-vscode），无 docker job | **声明不符** |
+| f | Round 5 P4-1：添加 sub-bus-tool-future 至 simple-server | `Cargo.toml` 注释：sub-bus-tool-future 因无代码使用已移除（sub-bus-distributed-memory 仍在） | **声明已变更** |
+| g | 尾部“版本: 1.12.0”（§6.4） | workspace 实际版本 1.5.2（`Cargo.toml` `[workspace.package]`） | **已统一为 1.5.2** |
+
+---
+
 ## 0. 执行规则（完整拷贝 BLUE68）
 
 ### 0.1 继承规则
@@ -663,7 +681,7 @@ BLUE69区别于BLUE68的最大原则: **每条修复必须有端到端可追踪�
 
 **蓝图编写**: go-on AI Agent System (BLUE69)
 **日期**: 2026-06-12
-**版本**: 1.12.0
+**版本**: 1.5.2（2026-08-11 与 workspace 对齐，见文首回写小节）
 **审计代理**: 5并行深度验证代理 + 8轮迭代修复
 **BLUE68修复验证率**: 51% genuine / 26% overstated / 23% false
 **BLUE69最终评分**: **9.6/10** (从7.2/10提升, +0.1来自跨profile零警告+11项深度修复)

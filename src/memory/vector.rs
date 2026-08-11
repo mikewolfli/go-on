@@ -457,6 +457,10 @@ pub struct VectorStore {
     embedding_provider: Option<ConfigurableEmbeddingProvider>,
     /// Optional in-memory HNSW index for approximate nearest neighbor search.
     /// Built lazily on first search; updated on upsert when present.
+    ///
+    /// Lock order convention: `conn` -> `hnsw` (never the reverse). Every
+    /// path that touches both guards acquires `conn` first, so a concurrent
+    /// `upsert` and a lazy first build can never form a lock-order cycle.
     hnsw: Arc<StdMutex<Option<HnswIndex>>>,
 }
 
@@ -995,23 +999,25 @@ impl VectorStore {
     /// Reads all vectors from the database and constructs the HNSW graph.
     /// Called lazily on first search when no HNSW index exists yet.
     /// Returns true if the index was built, false if it already existed.
+    ///
+    /// Lock order convention: `conn` -> `hnsw` (never the reverse), matching
+    /// [`VectorStore::upsert`] and [`VectorStore::clear_all`]. The `conn`
+    /// guard is held through the build and publication so that a concurrent
+    /// `upsert` cannot commit a row between the snapshot and the index
+    /// publication (which would silently drop that entry from the search fast
+    /// path), and a concurrent `clear_all` cannot wipe the rows the snapshot
+    /// was taken from and leave a stale index published afterwards.
     fn ensure_hnsw_index(&self) -> Result<bool> {
-        let mut hnsw_guard = self.hnsw.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector hnsw mutex poisoned in 'ensure_hnsw_index', recovering");
+        // Lock order: acquire `conn` first. The nested scope only ends the
+        // Statement / Rows borrows — the `conn` guard itself stays alive
+        // until the index is published (see the convention note above).
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'ensure_hnsw_index', recovering");
             poisoned.into_inner()
         });
-        if hnsw_guard.is_some() {
-            return Ok(false);
-        }
 
-        // Read all entries from SQLite (collect into Vec within a nested scope so
-        // the Statement / Rows borrow ends before we close the connection).
+        // Read all entries from SQLite into a Vec.
         let entries: Vec<(Vec<f32>, HnswNodeMeta)> = {
-            let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("vector mutex poisoned in 'ensure_hnsw_index', recovering");
-                poisoned.into_inner()
-            });
-
             let mut stmt = conn.prepare(
                 "SELECT memory_key, phase, response_text, updated_at, embedding_blob, embedding_json
                  FROM vector_memory
@@ -1057,6 +1063,17 @@ impl VectorStore {
             }
             entries
         };
+
+        // Acquire the `hnsw` lock only while already holding `conn`
+        // (conn -> hnsw order). Double-check: another thread may have built
+        // the index while this thread was snapshotting.
+        let mut hnsw_guard = self.hnsw.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector hnsw mutex poisoned in 'ensure_hnsw_index', recovering");
+            poisoned.into_inner()
+        });
+        if hnsw_guard.is_some() {
+            return Ok(false);
+        }
 
         if entries.is_empty() {
             *hnsw_guard = Some(HnswIndex::new(16, 200, 50));
@@ -1645,6 +1662,57 @@ mod tests {
             "stale HNSW entries must not survive clear_all: {hits:?}"
         );
         assert_eq!(feedback.hit_count, 0);
+    }
+
+    /// Regression (P1): a concurrent `upsert` + first `search` must not
+    /// deadlock, and the lazily-built HNSW index must not lose entries that
+    /// commit while the first build is in flight.
+    ///
+    /// Before the lock-order fix, `ensure_hnsw_index` held `hnsw` while
+    /// waiting for `conn` and `upsert` held `conn` while waiting for `hnsw`,
+    /// forming a ring that could hang both threads forever.
+    #[tokio::test]
+    async fn concurrent_upsert_and_first_search_no_deadlock() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = dir.path().join("hnsw_concurrent.sqlite3");
+        let store = Arc::new(VectorStore::new(&db_path, 64, 10_000).expect("vector store init"));
+
+        // A search task that triggers the lazy HNSW build on its first call,
+        // racing against the upserts below.
+        let search_store = Arc::clone(&store);
+        let search_task = tokio::spawn(async move {
+            for i in 0..10 {
+                Arc::clone(&search_store)
+                    .search("concurrent", &format!("query {i}"), 10, 0.0, 200)
+                    .await
+                    .expect("search should succeed");
+            }
+        });
+
+        // Concurrently upsert entries; some of them may commit while the
+        // lazy index build is snapshotting or publishing.
+        for i in 0..200 {
+            Arc::clone(&store)
+                .upsert(
+                    "concurrent",
+                    &format!("query {i}"),
+                    &format!("response {i}"),
+                )
+                .await
+                .expect("upsert");
+        }
+
+        search_task.await.expect("search task should not panic");
+
+        // Every upserted entry must be present in the published index: the
+        // build must not publish a snapshot that misses concurrent writes.
+        let hnsw_guard = store.hnsw.lock().expect("hnsw lock");
+        let hnsw = hnsw_guard.as_ref().expect("index should be built");
+        assert_eq!(
+            hnsw.metadata.len(),
+            200,
+            "no upserted entry may be lost from the HNSW index"
+        );
     }
 }
 

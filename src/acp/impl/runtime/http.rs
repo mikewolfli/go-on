@@ -433,10 +433,7 @@ async fn handle_state_events_sse(socket: &mut HttpStream, cors_headers: &str) ->
             }
             _ = heartbeat_interval.tick() => {
                 let heartbeat = crate::protocol::state_sync::StateSyncEvent::Heartbeat {
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64,
+                    timestamp: crate::shared::timestamps::now_ts_ms_u64(),
                 };
                 let payload = serde_json::to_value(&heartbeat)?;
                 if write_sse_event(socket, "state_sync", &payload).await.is_err() {
@@ -525,6 +522,54 @@ async fn route_http_post(
         return Ok(path.to_string());
     }
 
+    // Reject oversized bodies BEFORE allocating the read buffer: the
+    // Content-Length header is attacker-controlled, so sizing the `remaining`
+    // Vec by it up front would let a malicious client force an OOM allocation
+    // (the size check previously ran after the allocation, so it could not
+    // prevent that window). Cap is the single shared constant used by the MCP
+    // HTTP arm (crate::protocol::mcp_server::MAX_BODY_SIZE).
+    if content_length > crate::protocol::mcp_server::MAX_BODY_SIZE {
+        let too_large_message = tf(
+            "error.http_body_too_large",
+            &[
+                ("size", &content_length.to_string()),
+                (
+                    "max",
+                    &crate::protocol::mcp_server::MAX_BODY_SIZE.to_string(),
+                ),
+            ],
+        );
+        if responses_path {
+            write_http_json_response_with_context(
+                socket,
+                413,
+                serde_json::json!({
+                    "error": {
+                        "code": "payload_too_large",
+                        "type": "invalid_request_error",
+                        "message": too_large_message,
+                    }
+                }),
+                "responses.api",
+                cors_headers,
+            )
+            .await?;
+        } else {
+            write_http_json_response_with_context(
+                socket,
+                413,
+                serde_json::json!({"error": too_large_message}),
+                "chat",
+                cors_headers,
+            )
+            .await?;
+        }
+        return Ok(path.to_string());
+    }
+
+    // content_length was already bounded to MAX_BODY_SIZE above, so the
+    // read buffer below is at most 10 MB and the post-read length (after
+    // truncate) can never exceed the cap.
     let mut body_bytes = body_initial_part.as_bytes().to_vec();
     if body_bytes.len() < content_length {
         let mut remaining = vec![0u8; content_length - body_bytes.len()];
@@ -538,16 +583,6 @@ async fn route_http_post(
         body_bytes.extend_from_slice(&remaining);
     }
     body_bytes.truncate(content_length);
-
-    // Enforce max body size (10MB)
-    const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
-    if body_bytes.len() > MAX_BODY_SIZE {
-        anyhow::bail!(
-            "HTTP body too large: {} bytes (max {})",
-            body_bytes.len(),
-            MAX_BODY_SIZE
-        );
-    }
 
     let body: serde_json::Value = match serde_json::from_slice(&body_bytes) {
         Ok(value) => value,

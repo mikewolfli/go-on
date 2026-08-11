@@ -351,6 +351,38 @@ fn resolve_protocol_source(
     }
 }
 
+/// Top-level TOML sections seen by the last `config.reload`, for change
+/// diffing. Mirrors the `LAST_CONFIG_MODELS` static-snapshot pattern in
+/// `config_reload_payload`.
+static LAST_CONFIG_SECTIONS: std::sync::OnceLock<std::sync::Mutex<Option<HashSet<String>>>> =
+    std::sync::OnceLock::new();
+
+/// Diff the top-level TOML sections of `path` against the previous reload's
+/// snapshot and return the sections that changed, sorted. The first reload
+/// has no baseline and reports no changes ("if detectable" per the
+/// `ConfigReloaded` event contract).
+fn changed_config_sections(path: &std::path::Path) -> Vec<String> {
+    let raw = std::fs::read_to_string(path).unwrap_or_default();
+    let sections: HashSet<String> = toml::from_str::<toml::Value>(&raw)
+        .ok()
+        .and_then(|doc| doc.as_table().map(|table| table.keys().cloned().collect()))
+        .unwrap_or_default();
+    let mut keys: Vec<String> = LAST_CONFIG_SECTIONS
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .map(|mut last| {
+            let changed = last
+                .as_ref()
+                .map(|old: &HashSet<String>| old.symmetric_difference(&sections).cloned().collect())
+                .unwrap_or_default();
+            *last = Some(sections);
+            changed
+        })
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
 pub(super) async fn config_reload_payload(server: &AcpServer) -> Result<Value> {
     let path = server
         .config_path
@@ -435,7 +467,7 @@ pub(super) async fn config_reload_payload(server: &AcpServer) -> Result<Value> {
     }
 
     crate::protocol::state_sync::publish_event(StateSyncEvent::ConfigReloaded {
-        changed_keys: vec!["runtime".to_string()],
+        changed_keys: changed_config_sections(&config_path),
     });
 
     let report = validate_runtime_readiness(&config_path, &config)?;
@@ -574,4 +606,36 @@ pub(super) async fn config_baseline_payload(server: &AcpServer, _params: Value) 
             }
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changed_config_sections_reports_real_section_changes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+
+        // First reload has no baseline, so nothing is reported as changed.
+        std::fs::write(&path, "[runtime]\nentry_rate_limit_rpm = 60\n").expect("write");
+        assert!(
+            changed_config_sections(&path).is_empty(),
+            "first reload must report no changed sections (no baseline)"
+        );
+
+        // Second reload: only the section that actually moved differs — the
+        // `[runtime]` value change alone must NOT be reported (the former
+        // hardcoded `["runtime"]` claimed a runtime change every reload).
+        std::fs::write(
+            &path,
+            "[runtime]\nentry_rate_limit_rpm = 120\n[protocol]\nmode = \"adaptive\"\n",
+        )
+        .expect("write");
+        assert_eq!(
+            changed_config_sections(&path),
+            vec!["protocol".to_string()],
+            "only the added [protocol] section must be reported as changed"
+        );
+    }
 }

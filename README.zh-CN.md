@@ -187,7 +187,7 @@ go-on 采用**子总线能力架构** —— 7 个特性门控子总线（tool�
 
 ### 请求处理分发
 
-所有 153 个 JSON-RPC handler 返回统一的 `DispatchOutput` 枚举，dispatch 层自动序列化为对应的传输响应：
+所有 154 个 JSON-RPC handler 返回统一的 `DispatchOutput` 枚举，dispatch 层自动序列化为对应的传输响应：
 
 ```
 Handler → Result<DispatchOutput> → dispatch_to_client → JSON-RPC / SSE / text/plain
@@ -275,7 +275,7 @@ npm run compile
 | 内置工具数量 | 60+ |
 | AI 供应商数量 | 37 |
 | 技能市场数量 | 34 |
-| 单元测试数量 | ~1.7K（1623 lib + 151 集成声明，见下方验证状态）|
+| 单元测试数量 | ~1.6K（`cargo test --lib` 实测 1555 通过 + 152 非 chaos 集成声明，见下方验证状态）|
 | 三语国际化覆盖 | en / zh-CN / zh-TW（约 95%）|
 
 ## 构建配置
@@ -306,7 +306,7 @@ cargo build --no-default-features --features full
 
 所有 4 种构建配置零 clippy 警告通过。最近一次完整 `cargo test --all-targets` 运行全部通过、零失败（最新计数见 `CHANGELOG.md` 最新一节）。GUI 和 VS Code 插件同样零错误编译通过。
 
-上方测试数为声明口径：`src/` 下的 `#[test]` / `#[tokio::test...]` 属性为 lib 声明数；`tests/` 下（含 `tests/structural/` 子模块）为集成声明数（不含 `chaos-testing` 特性门控的 `chaos_drill` 套件）。
+统计表中的 lib 数字为**实测执行数**：2026-08-11 运行 `cargo test --lib` → **1555 通过 / 0 失败**。作为参考，`src/` 下 `#[test]` / `#[tokio::test...]` 属性声明数为 1625；`tests/` 下（含 `tests/structural/` 子模块）为 152（不含 `chaos-testing` 特性门控的 `chaos_drill` 套件 6 个）。实测数低于声明数，因部分声明位于默认（local）profile 未启用的特性门控之后。（按朴素字符串 grep 统计，`src/` 为 1628——其中 3 处是注释中对属性的文字提及；`tests/` 含 `chaos_drill` 共 158。）
 
 ---
 
