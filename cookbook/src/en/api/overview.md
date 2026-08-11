@@ -71,8 +71,7 @@ go-on provides a comprehensive API surface for agent orchestration, governance, 
 export GO_ON_ENTRY_API_KEY="your-api-key"
 
 # Server modes (required)
-export GO_ON_SERVER_API_KEY="server-key"
-export GO_ON_ENTRY_API_KEY="entry-key"
+export GO_ON_ENTRY_API_KEY="server-key"
 ```
 
 API keys are sent via the `X-Api-Key` or `X-Go-On-Key` HTTP header. Authentication is enforced based on the `entry_auth_enabled` runtime configuration.

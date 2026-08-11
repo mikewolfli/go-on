@@ -258,6 +258,11 @@ impl Default for OllamaEmbeddingConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(768),
+            // NOTE: hardcoded `true` in production — the env-based constructor
+            // (`embedding_provider_from_env`) never exposes this knob, so the
+            // zero-vector failure signal path stays unwired. Zero vectors that
+            // would leak through are rejected upstream in `vector.rs`
+            // (`embed_with_check`).
             fallback_to_hash: true,
         }
     }
@@ -662,6 +667,11 @@ pub fn embedding_provider_from_env() -> ConfigurableEmbeddingProvider {
                 api_key,
                 model,
                 dimensions: dims,
+                // NOTE: hardcoded `true` — not configurable from env in
+                // production, so the zero-vector failure signal path stays
+                // unwired (a zero vector would otherwise poison semantic
+                // matching with cosine=NaN). Zero vectors are rejected upstream
+                // in `vector.rs` (`embed_with_check`).
                 fallback_to_hash: true,
             };
             ConfigurableEmbeddingProvider::new(EmbeddingBackend::Qwen3, None, Some(config), None)

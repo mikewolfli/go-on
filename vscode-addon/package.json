@@ -748,13 +748,6 @@
           ],
           "description": "Runtime startup protocol mode override passed as --protocol-mode"
         },
-        "go-on.chat.maxHistory": {
-          "type": "number",
-          "default": 50,
-          "minimum": 1,
-          "maximum": 1000,
-          "description": "Maximum number of chat messages to keep in history"
-        },
         "go-on.chat.model": {
           "type": "string",
           "default": "auto",
@@ -805,18 +798,6 @@
           "maximum": 2,
           "description": "Temperature for chat responses (0.0 = deterministic, 2.0 = very random)"
         },
-        "go-on.chat.maxTokens": {
-          "type": "number",
-          "default": 2048,
-          "minimum": 1,
-          "maximum": 32768,
-          "description": "Maximum tokens for chat responses"
-        },
-        "go-on.chat.streaming": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable streaming responses for real-time chat"
-        },
         "go-on.cache.enabled": {
           "type": "boolean",
           "default": true,
@@ -833,13 +814,6 @@
           "minimum": 30,
           "maximum": 3600,
           "description": "Health check interval in seconds"
-        },
-        "go-on.ui.fontSize": {
-          "type": "number",
-          "default": 13,
-          "minimum": 8,
-          "maximum": 24,
-          "description": "Font size for chat interface"
         },
         "go-on.advancedAI.context": {
           "type": "string",

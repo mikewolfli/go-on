@@ -203,8 +203,11 @@ impl DeterministicVerifier {
         quality_compass()
             .into_iter()
             .map(|item| {
-                // For each compass item, emit a signal. In a full implementation
-                // this would actually evaluate the code against each criterion.
+                // Current status (honest): every compass item emits the SAME
+                // signal — `passed` is the single bracket-balance check and
+                // `confidence` is derived from it, so per-item signals carry no
+                // distinguishing information. A full implementation would
+                // evaluate the content against each criterion independently.
                 VerificationSignal {
                     signal_type: QualitySignalType::PuaQualityCompass,
                     passed: !content_has_issues,

@@ -14,12 +14,6 @@ commonLabels:
   app.kubernetes.io/name: go-on
   app.kubernetes.io/component: server
 
-configMapGenerator:
-  - name: go-on-config
-    behavior: replace
-    files:
-      - config.toml=configmap.yaml
-
 secretGenerator:
   - name: go-on-secrets
     behavior: create

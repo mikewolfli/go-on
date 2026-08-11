@@ -184,7 +184,7 @@ Key fields from `config/config.simple-server.toml`:
 |-------|---------|-------------|
 | `runtime.acp_http_bind_addr` | `127.0.0.1:8090` | Listen address |
 | `runtime.entry_auth_enabled` | `true` | Entry authentication |
-| `runtime.entry_auth_api_key_env` | `GO_ON_SERVER_API_KEY` | API key env var name |
+| `runtime.entry_auth_api_key_env` | `GO_ON_ENTRY_API_KEY` | API key env var name |
 | `runtime.entry_rate_limit_rpm` | `1000` | Requests per minute limit |
 | `runtime.entry_rate_limit_burst` | `200` | Burst limit |
 | `runtime.production_strict` | `true` | Strict mode |
@@ -208,8 +208,8 @@ cd /opt/go-on
 git pull
 cargo build --release --no-default-features -F simple-server
 
-cp backend/acp_cache.sqlite3 /backup/go-on/
-cp backend/acp_vector.sqlite3 /backup/go-on/
+cp /var/lib/go-on/cache.sqlite3 /backup/go-on/
+cp /var/lib/go-on/vector.sqlite3 /backup/go-on/
 
 sudo systemctl stop go-on
 cp target/release/go-on backend/

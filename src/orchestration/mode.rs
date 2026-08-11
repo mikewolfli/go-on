@@ -1,8 +1,9 @@
 //! Mode runtime orchestration for go-on (Phase 2)
 //!
-//! These structures are intentional framework definitions for Phase 0-9 architecture.
-//! Mode runtimes define orchestration policies per mode that will be activated once
-//! the orchestrator integrates them into the execution flow.
+//! Mode runtimes define orchestration policies per mode and are wired into the
+//! execution flow: `resolve_mode_runtime_with_posture` / `resolve_mode_runtime`
+//! are consumed by the chat pipeline (`src/acp/impl/chat_phases.rs`) and the
+//! CLI chat loop (`src/cli/chat.rs`).
 
 use crate::agent::{
     Agent, AgentError, AgentRegistry, AgentTaskEnvelope, AgentTaskResult, Message, StreamingSender,
@@ -622,9 +623,6 @@ pub struct GenericModeRuntime {
     pub agent_registry: Option<Arc<AgentRegistry>>,
     /// Name of the agent to use (defaults to first available).
     pub agent_name: Option<String>,
-    /// When true, auto-degrade the operation mode based on risk score
-    /// (SafeGuard only; ignored by other modes).
-    pub auto_degrade: bool,
     /// The policy to apply when risk is elevated (SafeGuard only).
     pub degrade_policy: AutoDegradePolicy,
     /// Approval posture — decoupled from mode kind (CodeWhale-compatible).
@@ -671,7 +669,6 @@ impl GenericModeRuntime {
             kind,
             agent_registry: Some(registry),
             agent_name,
-            auto_degrade: false,
             degrade_policy: AutoDegradePolicy::default(),
         }
     }
@@ -689,28 +686,15 @@ impl GenericModeRuntime {
         self
     }
 
-    /// Create a new SafeGuard-mode runtime with degradation enabled.
-    ///
-    /// # Deprecated
-    /// Use `GenericModeRuntime::new(ModeKind::SafeGuard, registry, agent_name)`
-    /// and set `auto_degrade = true` on the result instead.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `GenericModeRuntime::new(ModeKind::SafeGuard, registry, agent_name)` and set `.auto_degrade = true` on the result."
-    )]
-    pub fn new_safeguard(registry: Arc<AgentRegistry>, agent_name: Option<String>) -> Self {
-        let mut runtime = Self::new(ModeKind::SafeGuard, registry, agent_name);
-        runtime.auto_degrade = true;
-        runtime
-    }
-
     /// Compute a numeric risk score for the given objective string.
     ///
     /// Returns a value in 0.0–1.0 where:
-    /// - < 0.4  = low risk (safe operations)
-    /// - 0.4–0.7 = medium risk (warrants ReadOnly degradation)
-    /// - 0.7–0.95 = high risk (warrants AllowWithAudit degradation)
-    /// - > 0.95  = extreme risk (full Block)
+    /// - below 0.40 = low risk — SafeGuard policy: `AllowWithAudit`
+    /// - above 0.40 = elevated risk — SafeGuard policy: `ConfirmRequired`
+    ///   (operator confirms; there is no auto-ReadOnly degradation tier — see
+    ///   [`Self::safeguard_policy`]; the exact value 0.40 falls in the low
+    ///   band because the check is strictly `> 0.40`)
+    /// - above 0.95 = extreme risk — SafeGuard policy: `Block`
     pub fn compute_risk_score(&self, objective: &str) -> f64 {
         let mut score: f64 = 0.0;
         let lower = objective.to_lowercase(); // Pre-compute once
@@ -770,35 +754,27 @@ impl GenericModeRuntime {
             .any(|w| w.eq_ignore_ascii_case(word))
     }
 
-    /// Evaluate risk and return the appropriate degradation policy.
-    ///
-    /// Delegates to [`Self::safeguard_policy`] with auto-degrade enabled.
-    pub fn evaluate_degradation(&self, risk_score: f64) -> AutoDegradePolicy {
-        Self::safeguard_policy(risk_score, true)
-    }
-
     /// Compute the SafeGuard degradation policy for a given risk score.
     ///
-    /// Shared by `evaluate_degradation`, `pre_execute` and `fallback_result`
-    /// (previously the two non-auto-degrade branches duplicated this block
-    /// verbatim and drifted from `evaluate_degradation`).
+    /// Shared by `pre_execute` and `fallback_result` (previously the two
+    /// non-auto-degrade branches duplicated this block verbatim and drifted
+    /// from `evaluate_degradation`, which is removed — it had no production
+    /// callers).
     ///
-    /// - `auto_degrade = true`: 0.95 Block / 0.70 ConfirmRequired /
-    ///   0.40 ReadOnly / else AllowWithAudit.
-    /// - `auto_degrade = false`: 0.95 Block / 0.40 ConfirmRequired
-    ///   (no ReadOnly step — the operator confirms manually instead of
-    ///   auto-degrading) / else AllowWithAudit.
-    fn safeguard_policy(risk_score: f64, auto_degrade: bool) -> AutoDegradePolicy {
+    /// - 0.95 Block / 0.40 ConfirmRequired (no ReadOnly step — the operator
+    ///   confirms manually instead of auto-degrading) / else AllowWithAudit.
+    ///
+    /// NOTE: the auto-degrade tier is not wired. The former `auto_degrade`
+    /// field and `new_safeguard` constructor (the only path that set it) are
+    /// gone — `GenericModeRuntime::new` always kept the flag false and no
+    /// caller ever flipped it — so the ReadOnly tier of the old policy matrix
+    /// is intentionally unreachable (design retained: operators confirm
+    /// explicitly rather than being silently auto-degraded).
+    fn safeguard_policy(risk_score: f64) -> AutoDegradePolicy {
         if risk_score > 0.95 {
             AutoDegradePolicy::Block
-        } else if auto_degrade && risk_score > 0.70 {
-            AutoDegradePolicy::ConfirmRequired
         } else if risk_score > 0.40 {
-            if auto_degrade {
-                AutoDegradePolicy::ReadOnly
-            } else {
-                AutoDegradePolicy::ConfirmRequired
-            }
+            AutoDegradePolicy::ConfirmRequired
         } else {
             // Low risk: allow with audit logging
             AutoDegradePolicy::AllowWithAudit
@@ -913,7 +889,7 @@ impl ModeStrategy for GenericModeRuntime {
             }
             ModeKind::SafeGuard => {
                 let risk_score = self.compute_risk_score(objective);
-                let policy = Self::safeguard_policy(risk_score, self.auto_degrade);
+                let policy = Self::safeguard_policy(risk_score);
 
                 match policy {
                     AutoDegradePolicy::Block => {
@@ -944,11 +920,13 @@ impl ModeStrategy for GenericModeRuntime {
                             pua_report: Some(mode_execution_report("safeguard", true)),
                         }))
                     }
+                    // The former ReadOnly auto-degrade arm is gone with
+                    // `auto_degrade`: the policy matrix never returns ReadOnly
+                    // (see `safeguard_policy` note). The variant is still part
+                    // of `AutoDegradePolicy` (default + `allowed_tools` use
+                    // it), so the arm stays for match exhaustiveness.
                     AutoDegradePolicy::ReadOnly => {
-                        warn!(
-                            "[SafeGuard Mode] Auto-degrading to read-only for: {} (score: {:.2})",
-                            objective, risk_score
-                        );
+                        // Unreachable: `safeguard_policy` never returns it.
                         None
                     }
                     AutoDegradePolicy::AllowWithAudit => {
@@ -1071,7 +1049,7 @@ impl ModeStrategy for GenericModeRuntime {
             },
             ModeKind::SafeGuard => {
                 let risk_score = self.compute_risk_score(objective);
-                let policy = Self::safeguard_policy(risk_score, self.auto_degrade);
+                let policy = Self::safeguard_policy(risk_score);
                 AgentTaskResult {
                     success: true,
                     output: Some(serde_json::json!({
@@ -1114,6 +1092,11 @@ impl ModeRuntime for GenericModeRuntime {
             ModeKind::Plan => plan_tools(),
             ModeKind::Edit | ModeKind::FullAuto => all_exec_tools(),
             ModeKind::SafeGuard => {
+                // In-repo constant: `degrade_policy` is only ever the default
+                // (`AutoDegradePolicy::ReadOnly` — `GenericModeRuntime::new`),
+                // so the SafeGuard tool surface is always the read-only set.
+                // The `all_exec_tools()` arm is only reachable by out-of-tree
+                // consumers that construct a runtime with a non-default policy.
                 if matches!(self.degrade_policy, AutoDegradePolicy::ReadOnly) {
                     read_only_tools()
                 } else {

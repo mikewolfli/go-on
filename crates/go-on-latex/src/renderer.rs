@@ -214,12 +214,9 @@ fn layout_node(node: &MathNode, font_size: f32) -> LayoutBox {
             // Subscript (positioned below-right of base)
             if let Some(sub_node) = sub {
                 let sub_box = layout_node(sub_node, SCRIPT_FONT_SIZE);
-                let sub_x = if sup.is_some() {
-                    // If both sup and sub exist, align both to the right of the base
-                    base_box.width + 1.0
-                } else {
-                    base_box.width + 1.0
-                };
+                // Align to the right of the base (same offset whether or not a
+                // superscript is present).
+                let sub_x = base_box.width + 1.0;
                 let sub_y = baseline * 0.5;
                 elements.push(SvgElement::Group {
                     elements: sub_box.elements,

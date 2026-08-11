@@ -7,7 +7,7 @@
 
 use crate::acp::r#impl::chat::streaming::StreamFrame;
 use crate::acp::server::AcpServer;
-use crate::rpc_protocol::{JsonRpcError, JsonRpcResponse};
+use crate::rpc_protocol::JsonRpcResponse;
 use anyhow::Result;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -110,24 +110,11 @@ pub async fn dispatch_to_client(
             message,
             data,
         }) => {
-            // Mark for outcome accounting: this is an error response to the
-            // request, even though the I/O itself succeeds. The mark is
-            // consumed at request completion (request.rs).
-            crate::acp::r#impl::request::mark_error_response(Some(&id));
-            crate::acp::r#impl::io::write_response(
-                server,
-                JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id: Some(id),
-                    result: None,
-                    error: Some(JsonRpcError {
-                        code,
-                        message,
-                        data,
-                    }),
-                },
-            )
-            .await
+            // Delegate to the single error choke point (io::send_error): it
+            // marks the request id for outcome accounting AND injects the
+            // `acp.error` platform context, keeping dispatch-phase errors
+            // consistent with every other error path.
+            crate::acp::r#impl::io::send_error(server, Some(id), code, message, data).await
         }
         Ok(DispatchOutput::Text(text)) => {
             crate::acp::r#impl::io::write_response(

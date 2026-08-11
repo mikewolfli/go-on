@@ -113,4 +113,4 @@ registry.register_with_profile(
 
 ## Sandbox Integration
 
-Each tool is classified by action type (read, search, write, shell, network) and checked against the active `SandboxLevel`. See [Governance](../guides/governance.en.md) for details. (Note: the `governance.en.md` guide does not exist yet; the canonical governance docs live in `docs/SAFEGUARD_MODE.md` and the `src/governance/` module.)
+Each tool is classified by action type (read, search, write, shell, network) and checked against the active `SandboxLevel` (see `SandboxLevel`/`SandboxPolicy` in `src/governance/hardening.rs`).

@@ -84,7 +84,7 @@ Default health endpoint: `http://127.0.0.1:8090/health`
 ## Features
 
 ### Agent Orchestration
-- **5 chat modes** — Ask (streaming conversation), Plan (outline-only), Edit (iterative with high-risk guards), SafeGuard (risk-scored auto-degradation), FullAuto (memory+diff+verification)
+- **5 chat modes** — Ask (streaming conversation), Plan (outline-only), Edit (iterative with high-risk guards), SafeGuard (risk-scored gating with manual confirmation), FullAuto (memory+diff+verification)
 - **Autonomous agent loop** — Plan → Execute → Reflect → Replan, with complexity-adaptive iteration
 - **Sub-agent monitoring** — Real-time SSE panels for sub-agent execution and command output in the GUI
 - **DAG task execution** — Kahn topological sort, dependency edges, parallel group execution, cycle detection
@@ -287,7 +287,7 @@ npm run compile
 | Built-in tools | 60+ |
 | AI providers | 37 |
 | Skills in marketplace | 34 |
-| Unit tests | ~1.7K (1,537 lib + 151 integration declarations; see Verification below) |
+| Unit tests | ~1.7K (1,623 lib + 151 integration declarations; see Verification below) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 
 ## Build Profiles
@@ -317,6 +317,8 @@ cargo build --no-default-features --features full
 | `full` | ✅ **Zero warnings** | ✅ **all pass** |
 
 All 4 build profiles compile with zero clippy warnings. The latest full `cargo test --all-targets` run passes every suite with zero failures (see the latest section of `CHANGELOG.md` for the current counts). The GUI and VS Code addon also compile cleanly with zero errors.
+
+Test numbers above are declaration counts: `#[test]` / `#[tokio::test...]` attributes in `src/` (lib) and in `tests/` including the `tests/structural/` submodule (integration, excluding the `chaos-testing`-feature-gated `chaos_drill` suite).
 
 ---
 

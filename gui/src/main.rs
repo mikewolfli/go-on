@@ -373,9 +373,17 @@ fn make_icon() -> egui::IconData {
 
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
-    auto_detect_proxy().await;
+    // Proxy detection (async network probes) and app config loading (blocking
+    // file I/O) are independent — run them concurrently to cut startup latency.
+    let (_, config) = tokio::join!(
+        auto_detect_proxy(),
+        tokio::task::spawn_blocking(crate::config::load_app_config),
+    );
+    let config = config.unwrap_or_else(|err| {
+        eprintln!("WARNING: failed to load app config: {err}; using defaults");
+        crate::config::AppConfig::default()
+    });
     let icon = make_icon();
-    let config = crate::config::load_app_config();
     let title = app::GoOnApp::detect_initial_window_title(&config);
     let build_options = |renderer: eframe::Renderer| eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

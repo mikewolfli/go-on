@@ -192,7 +192,6 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             protocol_mode: None,
-            platform_mode: Some("phase_compat".to_string()),
             pua_report: false,
             deployment_target: None,
             maintenance_interval_seconds: default_runtime_maintenance_interval_seconds(),

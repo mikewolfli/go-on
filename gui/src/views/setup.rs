@@ -725,23 +725,10 @@ impl SetupView {
                             });
                     });
 
+                    // Keys always live in the system keyring (managed via the
+                    // Providers page); there is no configurable secret source.
                     ui.horizontal(|ui| {
-                        ui.label(i18n.t("setup.secretSource"));
-                        egui::ComboBox::from_id_salt("setup_secret_source")
-                            .selected_text(config.enterprise.secret_source.clone())
-                            .show_ui(ui, |ui| {
-                                for source in ["keyring", "env", "file", "auto"] {
-                                    if ui
-                                        .selectable_label(
-                                            config.enterprise.secret_source == source,
-                                            source,
-                                        )
-                                        .clicked()
-                                    {
-                                        config.enterprise.secret_source = source.to_string();
-                                    }
-                                }
-                            });
+                        ui.label(i18n.t("setup.secretSourceNote"));
                     });
                 }
 

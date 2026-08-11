@@ -259,7 +259,10 @@ pub async fn dispatch_server(
 
     // The caller (main/server.rs) resolves the "adaptive" configured mode to
     // either "acp_stdio" or "acp_http" before invoking this function, so
-    // "adaptive" can never reach the dispatch match below.
+    // "adaptive" should never reach the dispatch match below. The
+    // debug_assert only fires in debug builds; in release builds an
+    // unresolved "adaptive" falls through to the match arm, which reports
+    // that the mode must be resolved first (adaptive is a valid mode).
     debug_assert!(
         protocol_mode != "adaptive",
         "caller must resolve adaptive to acp_stdio/acp_http before dispatch"
@@ -326,7 +329,9 @@ pub async fn dispatch_server(
             };
             s.run().await
         }
-        other => anyhow::bail!("unsupported protocol mode: {other}"),
+        other => anyhow::bail!(
+            "protocol mode '{other}' must be resolved before transport dispatch (adaptive is a valid mode and requires resolution)"
+        ),
     }
 }
 
@@ -452,7 +457,10 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("unsupported protocol mode"));
+        assert!(
+            err.contains("must be resolved before transport dispatch"),
+            "unresolved protocol modes must report a resolution error: {err}"
+        );
     }
 
     // ── initialize_cache / initialize_vector_store disabled config ────

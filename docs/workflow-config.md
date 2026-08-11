@@ -370,10 +370,10 @@ Skills are configured in `config.toml` under `[runtime]` keys — there is no
 [runtime]
 skills_enabled = true            # master switch for user skill discovery
 skills_import_enabled = false    # allow importing skills from GitHub/URL/local
-skills_allowed_sources = []      # e.g. ["github", "url", "local"]
-skills_require_sha256 = false    # require pinned SHA-256 for imports
-skills_allow_floating_ref = true # allow non-pinned refs (branches/tags)
-skills_cache_dir = "~/.go-on/skills-cache"
+skills_allowed_sources = []      # e.g. ["local:*", "github:*"] — prefix-matched against source URIs ("local:*" matches "local:..." sources)
+skills_require_sha256 = true     # require pinned SHA-256 for imports
+skills_allow_floating_ref = false # allow non-pinned refs (branches/tags)
+skills_cache_dir = "./skills-cache"
 ```
 
 ### Skill Dedup Protection

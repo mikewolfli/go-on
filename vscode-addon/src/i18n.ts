@@ -137,12 +137,9 @@ export const MessageKeys = {
 
   // Chat
   chat: "chat.chat",
-  chatMaxHistory: "chat.chatMaxHistory",
   chatModel: "chat.chatModel",
   chatTemperature: "chat.chatTemperature",
   chatTimeout: "chat.chatTimeout",
-  chatMaxTokens: "chat.chatMaxTokens",
-  chatStreaming: "chat.chatStreaming",
   inputPlaceholder: "chat.inputPlaceholder",
   sendMessage: "chat.sendMessage",
   attachFiles: "chat.attachFiles",

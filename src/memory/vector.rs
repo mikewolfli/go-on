@@ -968,6 +968,7 @@ impl VectorStore {
     /// * `Result<(usize, usize)>` - Returns Ok((usize, usize)) with the number of memory entries and summary entries deleted, or an error if something goes wrong
     pub async fn clear_all(&self) -> Result<(usize, usize)> {
         let conn = self.conn.clone();
+        let hnsw = self.hnsw.clone();
         spawn_blocking_vec!(move || {
             let conn = conn.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("vector mutex poisoned in 'clear', recovering");
@@ -975,6 +976,16 @@ impl VectorStore {
             });
             let memory_deleted = conn.execute("DELETE FROM vector_memory", [])?;
             let summaries_deleted = conn.execute("DELETE FROM phase_summary", [])?;
+            drop(conn);
+
+            // Reset the in-memory HNSW index: it is the search fast path, so if
+            // it stays populated after the SQLite tables are cleared, the next
+            // `search` returns stale entries from before the clear. Setting it
+            // to None makes the next search rebuild from the (now empty) tables.
+            *hnsw.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector hnsw mutex poisoned in 'clear_all', recovering");
+                poisoned.into_inner()
+            }) = None;
             Ok((memory_deleted, summaries_deleted))
         })
     }
@@ -1291,6 +1302,19 @@ fn embed_with_check(
                 dimensions,
             );
         }
+        // Zero-vector guard: the OpenAI provider returns `vec![0.0; dims]` to
+        // signal an API failure, and the Ollama/Qwen3 zero-signal path is
+        // reachable when `fallback_to_hash` is disabled. A zero vector has
+        // cosine similarity NaN against every other vector (0/0), silently
+        // polluting semantic matching — reject it instead of storing/searching
+        // with it. (Dimensions are always > 0 in production, so an all-zero
+        // vector here is a failure signal, not a degenerate-but-legit embed.)
+        if vec.iter().all(|v| *v == 0.0) {
+            anyhow::bail!(
+                "Embedding provider returned an all-zero vector ({} dims) — treating it as an embedding failure; refusing to store/search",
+                vec.len(),
+            );
+        }
         Ok(vec)
     } else {
         Ok(embed_text(query, dimensions))
@@ -1574,6 +1598,52 @@ mod tests {
             .await
             .expect("search on empty");
         assert!(hits.is_empty());
+        assert_eq!(feedback.hit_count, 0);
+    }
+
+    /// Regression (P2): `clear_all` must reset the in-memory HNSW index.
+    ///
+    /// Previously it only issued the SQLite DELETEs; the HNSW index kept the
+    /// old vectors, so the next `search` took the HNSW fast path and returned
+    /// stale entries that no longer existed in the database.
+    #[tokio::test]
+    async fn clear_all_resets_hnsw_index() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = dir.path().join("hnsw_clear.sqlite3");
+        let store = Arc::new(VectorStore::new(&db_path, 64, 200).expect("vector store init"));
+
+        for i in 0..20 {
+            let query = format!("rust feature number {i}");
+            let response = format!("response for feature {i}");
+            Arc::clone(&store)
+                .upsert("test", &query, &response)
+                .await
+                .expect("upsert");
+        }
+        // Force the HNSW index to be built (search fast path).
+        let built = store.ensure_hnsw_index().expect("ensure_hnsw_index");
+        assert!(built, "HNSW index should be built");
+
+        // Search before clear hits the HNSW fast path and returns entries.
+        let (hits, _) = Arc::clone(&store)
+            .search("test", "rust feature number 5", 5, 0.0, 200)
+            .await
+            .expect("search before clear");
+        assert!(!hits.is_empty(), "search before clear should return hits");
+
+        let (memory_deleted, _) = store.clear_all().await.expect("clear_all should succeed");
+        assert_eq!(memory_deleted, 20, "all 20 entries should be deleted");
+
+        // After clear_all the HNSW index must be gone: a search must NOT
+        // return the entries that existed before the clear.
+        let (hits, feedback) = Arc::clone(&store)
+            .search("test", "rust feature number 5", 5, 0.0, 200)
+            .await
+            .expect("search after clear");
+        assert!(
+            hits.is_empty(),
+            "stale HNSW entries must not survive clear_all: {hits:?}"
+        );
         assert_eq!(feedback.hit_count, 0);
     }
 }

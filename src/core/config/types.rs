@@ -369,9 +369,6 @@ pub struct RuntimeConfig {
     /// Protocol mode: auto / acp / mcp
     #[serde(default)]
     pub protocol_mode: Option<String>,
-    /// Platform mode: universal / phase_compat
-    #[serde(default)]
-    pub platform_mode: Option<String>,
     /// Emit PUA execution report into JSON-RPC response metadata when enabled
     #[serde(default)]
     pub pua_report: bool,

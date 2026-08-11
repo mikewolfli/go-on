@@ -9,7 +9,6 @@ struct AutoTuneState {
     temperature: f32,
     top_p: f32,
     max_tokens: u32,
-    aggressive: bool,
 }
 
 impl Default for AutoTuneState {
@@ -18,7 +17,6 @@ impl Default for AutoTuneState {
             temperature: 0.7,
             top_p: 0.95,
             max_tokens: 2048,
-            aggressive: false,
         }
     }
 }
@@ -59,7 +57,6 @@ impl AutoTuneView {
             "temperature": temperature,
             "top_p": top_p,
             "max_tokens": max_tokens,
-            "aggressive": state.aggressive,
         })
     }
 
@@ -89,9 +86,6 @@ impl AutoTuneView {
                         egui::Slider::new(&mut self.state.max_tokens, 128..=8192)
                             .text(i18n.t("autotune.maxTokens")),
                     )
-                    .changed();
-                changed |= ui
-                    .checkbox(&mut self.state.aggressive, i18n.t("autotune.aggressive"))
                     .changed();
 
                 if ui.button(i18n.t("autotune.resetDefaults")).clicked() {

@@ -173,20 +173,49 @@ impl AgentMemoryBus {
         let insights = Self::extract_insights(response_text, self.max_insights_per_task);
         let importance = if success { 0.7 } else { 0.3 };
 
-        for (i, snippet) in insights.iter().enumerate() {
-            let tag_with_idx = format!("insight_{}", i);
-            let mut entry_tags = tags.clone();
-            entry_tags.push(tag_with_idx);
-            self.store_insight(
-                agent_name,
-                task_description,
-                snippet,
-                &entry_tags,
-                importance,
-                user_id,
-            )
-            .await;
-        }
+        // Parallelize the per-insight store: each `store_insight` does an
+        // optional vector upsert + in-memory store, previously awaited serially.
+        // `join_all` submits them concurrently — insights are capped at
+        // `max_insights_per_task`, so concurrency stays small. store_insight
+        // never returns Err, so a single insight's vector-store failure
+        // (already swallowed with `let _`) does not interrupt the rest.
+        //
+        // NOTE: inputs are collected into OWNED tuples first, and the async
+        // blocks capture only owned data + `self`. A `.map(|(_, &snippet)| …)`
+        // closure whose returned future borrows the iterator item would poison
+        // the Send/HRTB properties of every async fn awaiting this one (it
+        // surfaces as "Send is not general enough" at tokio::spawn call sites
+        // up the call chain, e.g. src/acp/impl/runtime.rs).
+        let stores: Vec<(String, String, String, Vec<String>)> = insights
+            .iter()
+            .enumerate()
+            .map(|(i, snippet)| {
+                let tag_with_idx = format!("insight_{}", i);
+                let mut entry_tags = tags.clone();
+                entry_tags.push(tag_with_idx);
+                (
+                    agent_name.to_string(),
+                    task_description.to_string(),
+                    snippet.to_string(),
+                    entry_tags,
+                )
+            })
+            .collect();
+
+        futures_util::future::join_all(stores.into_iter().map(
+            |(agent_name, task_description, snippet, entry_tags)| async move {
+                self.store_insight(
+                    &agent_name,
+                    &task_description,
+                    &snippet,
+                    &entry_tags,
+                    importance,
+                    user_id,
+                )
+                .await
+            },
+        ))
+        .await;
 
         info!(
             "AgentMemoryBus: stored {} insights for agent '{}' on phase '{}' (success={})",

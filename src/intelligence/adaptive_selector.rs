@@ -178,6 +178,9 @@ impl AdaptiveModelSelector {
         self.exploration_bias
     }
 
+    /// Override the UCB exploration bias. Test-only knob: no production path
+    /// calls this (production uses the default `DEFAULT_EXPLORATION_BIAS`), it
+    /// exists for unit tests to exercise exploration behavior deterministically.
     pub fn set_exploration_bias(&mut self, bias: f32) {
         self.exploration_bias = bias.max(0.0);
     }

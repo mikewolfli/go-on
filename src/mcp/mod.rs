@@ -71,6 +71,11 @@ pub const SUPPORTED_MCP_VERSIONS: &[&str] = &["2024-11-05"];
 /// (`src/acp/impl/request/protocol_pack/core.rs`) so the two entry points
 /// cannot drift.
 pub(crate) fn negotiate_mcp_version(client_version: &str) -> &'static str {
+    // Current state: single-version support (`SUPPORTED_MCP_VERSIONS` has one
+    // entry), so negotiation is effectively constant — any input resolves to
+    // `MCP_VERSION` ("2024-11-05"). The `rev().find()` logic below stays as
+    // the negotiation algorithm; when a second version is introduced it will
+    // start selecting instead of being a constant.
     SUPPORTED_MCP_VERSIONS
         .iter()
         .rev()

@@ -25,6 +25,11 @@ pub(crate) fn verdict_as_str(verdict: ReviewVerdict) -> String {
         QualityVerdict::Approve => t("status.review_controls.approve"),
         QualityVerdict::Reject => t("status.review_controls.reject"),
         QualityVerdict::Invalid => t("status.review_controls.invalid"),
+        // Production currently produces only Approve/Reject/Invalid; the
+        // remaining variants (ApproveWithCaveats/Revise/InsufficientEvidence/
+        // Valid/RequiresRepair/Inconclusive) are API-surface variants with no
+        // construction site. When a producer is wired, map it explicitly here
+        // instead of silently folding it into "invalid".
         _ => t("status.review_controls.invalid"),
     }
 }

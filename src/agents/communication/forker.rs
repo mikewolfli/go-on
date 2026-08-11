@@ -50,6 +50,12 @@ impl Default for ForkOptions {
 /// that child agents use to inherit relevant runtime context.
 pub struct ContextForker {
     /// Optional KV cache provider for cache reuse.
+    ///
+    /// BLUE70 §6.2 kv-cache reuse is not wired: there is no setter that ever
+    /// installs a provider, so `kv_cache_provider` is always `None` and the
+    /// `try_kv_cache_reuse` branch in `fork()` never executes — production
+    /// always forks with the full parent context (the fingerprint/attach path
+    /// below is dead in practice).
     kv_cache_provider: Option<Arc<dyn KvCacheProvider>>,
     /// Default forking options.
     default_options: ForkOptions,
@@ -116,7 +122,9 @@ impl ContextForker {
             }
         }
 
-        // Attempt KV cache reuse (BLUE70 §6.2)
+        // Attempt KV cache reuse (BLUE70 §6.2).
+        // Never reached in production: `kv_cache_provider` is always None (no
+        // setter exists), so fork() always carries the full parent context.
         if opts.try_kv_cache_reuse {
             if let Some(ref provider) = self.kv_cache_provider {
                 let fingerprint = provider.cache_fingerprint();

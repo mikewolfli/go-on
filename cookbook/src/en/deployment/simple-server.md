@@ -41,7 +41,7 @@ mode = "acp_http"  # HTTP mode for server deployment
 acp_http_bind_addr = "0.0.0.0:8090"  # Bind to all interfaces
 production_strict = true
 entry_auth_enabled = true
-entry_auth_api_key_env = "GO_ON_SERVER_API_KEY"
+entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 1000
 entry_rate_limit_burst = 200
 
@@ -102,7 +102,7 @@ Type=simple
 User=go-on
 Group=go-on
 WorkingDirectory=/opt/go-on
-Environment="GO_ON_SERVER_API_KEY=your-api-key-here"
+Environment="GO_ON_ENTRY_API_KEY=your-api-key-here"
 Environment="RUST_LOG=info"
 ExecStart=/opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
 Restart=on-failure
@@ -168,7 +168,7 @@ sudo journalctl -u go-on -f
 sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
 
 # With environment variables
-GO_ON_SERVER_API_KEY="your-key" sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
+GO_ON_ENTRY_API_KEY="your-key" sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
 ```
 
 ### Health and Monitoring
@@ -283,7 +283,7 @@ Concurrency limits are configured per phase via `[phases.<name>.options]`
 ### API Key Management
 ```bash
 # Set API key in environment
-export GO_ON_SERVER_API_KEY="secure-random-key-here"
+export GO_ON_ENTRY_API_KEY="secure-random-key-here"
 
 # Or use keyring
 keyring set go-on server-api-key
@@ -304,7 +304,7 @@ CORS origins and entry auth are configured in `[runtime]`:
 ```toml
 [runtime]
 entry_auth_enabled = true
-entry_auth_api_key_env = "GO_ON_SERVER_API_KEY"
+entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 cors_allowed_origins = ["https://your-domain.com"]
 ```
 

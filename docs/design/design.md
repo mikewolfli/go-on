@@ -233,8 +233,10 @@ pub trait Agent: Send + Sync {
 Use `clap` to support:
 
 - `--config <PATH>`: config file path (default: `config.toml` next to executable)
-- `--phase <PHASE>`: force phase override (for testing)
-- `--verbose`: enable verbose logging
+
+(Historical design note: an early design listed `--phase` and `--verbose`;
+neither exists in the shipped CLI — phase is a per-request `chat` param and
+verbosity is controlled via `RUST_LOG`.)
 
 ## 7. Performance and Robustness Requirements
 

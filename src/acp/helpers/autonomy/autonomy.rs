@@ -89,7 +89,6 @@ pub(crate) fn terminal_chat_contract_snapshot(
         total_rounds,
         total_tools: tool_call_count,
         final_phase,
-        rounds: Vec::new(),
         total_duration_ms: 0,
         stop_reason: stop_reason.to_string(),
     })
@@ -141,7 +140,6 @@ mod tests {
             total_rounds: 2,
             total_tools: 2,
             final_phase: AutonomyPhase::Completed,
-            rounds: Vec::new(),
             total_duration_ms: 0,
             stop_reason: "tools_exhausted_task_complete".to_string(),
         });
@@ -181,7 +179,6 @@ mod tests {
             total_rounds,
             total_tools: tool_call_count,
             final_phase,
-            rounds: Vec::new(),
             total_duration_ms: 0,
             stop_reason: stop_reason.to_string(),
         }

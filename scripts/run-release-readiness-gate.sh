@@ -53,18 +53,30 @@ for ENTRY in "${PROFILES[@]}"; do
 
     # Check 3: Cargo check
     echo "[3] Running cargo check..."
-    cargo check --no-default-features --features "$PROFILE" || { echo "  FAIL"; OVERALL_EXIT=1; }
-    echo "  PASS"
+    if cargo check --no-default-features --features "$PROFILE"; then
+        echo "  PASS"
+    else
+        echo "  FAIL"
+        OVERALL_EXIT=1
+    fi
 
     # Check 4: Clippy
     echo "[4] Running clippy..."
-    cargo clippy --no-default-features --features "$PROFILE" -- -D warnings || { echo "  FAIL"; OVERALL_EXIT=1; }
-    echo "  PASS"
+    if cargo clippy --no-default-features --features "$PROFILE" -- -D warnings; then
+        echo "  PASS"
+    else
+        echo "  FAIL"
+        OVERALL_EXIT=1
+    fi
 
     # Check 5: Tests
     echo "[5] Running tests..."
-    cargo test --lib --no-default-features --features "$PROFILE" || { echo "  FAIL"; OVERALL_EXIT=1; }
-    echo "  PASS"
+    if cargo test --lib --no-default-features --features "$PROFILE"; then
+        echo "  PASS"
+    else
+        echo "  FAIL"
+        OVERALL_EXIT=1
+    fi
 
     echo ""
 done

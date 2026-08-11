@@ -178,7 +178,7 @@ export class GoOnManager {
       let resolved = false;
       let stderrBuffer = "";
 
-      const args = ["--config", configPath, "--verbose"];
+      const args = ["--config", configPath];
       const normalizedProtocolMode = normalizeProtocolMode(
         protocolMode || "from_config",
       );

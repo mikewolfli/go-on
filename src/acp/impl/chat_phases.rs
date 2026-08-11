@@ -292,27 +292,33 @@ pub(crate) async fn observe_phase(
         }
     }
 
-    // ── Sub-step 2: Multimodal input detection ───────────────────
-    // Codex-style: skip for simple chat — no files/URIs to process
+    // ── Sub-steps 2+3: Multimodal input detection ∥ URL pre-fetching ──
+    // Codex-style: skip for simple chat — no files/URIs to process. The two
+    // expensive sub-steps run concurrently (multimodal only reads the
+    // messages; URL processing collects inserts applied after the join).
     let is_simple = is_simple_chat(params);
-    let multimodal_context = if is_simple {
-        None
-    } else {
-        emit_status_event(
-            stream_observer,
-            "Processing multimodal input (images, files, audio)...",
-            "analyzing",
-        )
-        .await?;
-        detect_and_process_multimodal(server, params).await
-    };
 
-    // ── Sub-step 3: URL auto-detection & pre-fetching ─────────────
-    // NOTE: Only scans the LAST user message for URLs to avoid re-fetching
-    // URLs from conversation history on every turn. Timeouts are aggressive
-    // (3s) so a slow/unreachable URL does not block the chat pipeline.
-    {
-        let url_entries: Vec<(usize, String)> = params
+    // Cache-gated skip: when the semantic cache is guaranteed to serve this
+    // request (probe on the last user message; the gate conditions are
+    // deterministic and identical to act_phase's — see
+    // `semantic_prefetch_should_skip`), the fetched URL content / multimodal
+    // context would never be consumed, so both expensive sub-steps are pure
+    // waste. Skip them.
+    let skip_expensive = semantic_prefetch_should_skip(server, params);
+    if skip_expensive {
+        tracing::debug!(
+            target = "chat_pipeline",
+            "observe_phase: semantic cache hit — skipping multimodal + URL prefetch"
+        );
+    }
+
+    // URL scan first (pure read of the LAST user message — avoids re-fetching
+    // URLs from conversation history on every turn) so both branches below can
+    // run concurrently.
+    let url_entries: Vec<(usize, String)> = if skip_expensive {
+        Vec::new()
+    } else {
+        params
             .messages
             .iter()
             .enumerate()
@@ -323,189 +329,216 @@ pub(crate) async fn observe_phase(
                 crate::orchestration::tool_extended::http::extract_url(&msg.content)
                     .map(|u| (i, u.to_string()))
             })
-            .collect();
+            .collect()
+    };
 
-        if url_entries.is_empty() {
-            // Fast path: no URLs to pre-fetch, skip immediately
-        } else {
-            emit_status_event(stream_observer, "Pre-fetching URLs...", "analyzing").await?;
-        }
+    // Status events are emitted before the join so `?` error propagation is
+    // preserved; the heavy work below then runs concurrently.
+    if !is_simple && !skip_expensive {
+        emit_status_event(
+            stream_observer,
+            "Processing multimodal input (images, files, audio)...",
+            "analyzing",
+        )
+        .await?;
+    }
+    if !skip_expensive && !url_entries.is_empty() {
+        emit_status_event(stream_observer, "Pre-fetching URLs...", "analyzing").await?;
+    }
 
-        // Phase 1: Fetch all URLs in parallel
-        let fetch_futures: Vec<_> = url_entries
-            .iter()
-            .filter_map(|(msg_idx, url)| {
-                let url_lower = url.to_lowercase();
-                if url_lower.starts_with("http://localhost")
-                    || url_lower.starts_with("http://127.0.0.1")
-                    || url_lower.starts_with("https://localhost")
-                    || url_lower.starts_with("https://127.0.0.1")
-                    || url_lower.starts_with("http://10.")
-                    || url_lower.starts_with("http://192.168.")
-                    || url_lower.starts_with("https://10.")
-                    || url_lower.starts_with("https://192.168.")
-                {
-                    tracing::info!(
-                        "observe_phase: skipping pre-fetch for local/private URL: {}",
-                        url
-                    );
-                    return None;
-                }
-
-                let fetch_url = url.split('#').next().unwrap_or(url).to_string();
-                let url_owned = url.clone();
-                let msg_idx = *msg_idx;
-                Some(async move {
-                    tracing::info!(
-                        "observe_phase: auto-detected URL, pre-fetching: {}",
-                        url_owned
-                    );
-
-                    let result = match tokio::time::timeout(
-                        std::time::Duration::from_secs(3),
-                        crate::shared::http_client::http_client()
-                            .expect("shared HTTP client must build")
-                            .get(&fetch_url)
-                            .send(),
-                    )
-                    .await
-                    {
-                        Ok(Ok(resp)) => {
-                            let status = resp.status().to_string();
-                            match tokio::time::timeout(
-                                std::time::Duration::from_secs(2),
-                                resp.text(),
-                            )
-                            .await
-                            {
-                                Ok(Ok(body)) => Some((status, body)),
-                                _ => None,
-                            }
-                        }
-                        _ => None,
-                    };
-                    (msg_idx, url_owned, fetch_url, result)
-                })
-            })
-            .collect();
-
-        let fetch_results = join_all(fetch_futures).await;
-
-        // Phase 2: Process each result sequentially (SPA detection, API probing, message insertion)
-        for (msg_idx, url, fetch_url, fetch_result) in fetch_results {
-            if let Some((status, body)) = fetch_result {
-                let truncated = if body.len() > 8192 {
-                    format!("{}...\n[Response truncated at 8192 bytes]", &body[..8192])
-                } else {
-                    body.clone()
-                };
-                let mut context_msg = format!(
-                    "[Auto-fetched content from {}]\nHTTP Status: {}\n\n{}",
-                    url, status, truncated
-                );
-
-                // Phase 2: Detect SPA and probe API endpoints
-                let is_spa = body.contains("<div id=\"root\"")
-                    || body.contains("<div id=\"app\"")
-                    || (body.contains("<script")
-                        && body.chars().filter(|c| *c == '<').count() > 20
-                        && body.len() > 200
-                        && body.len() < 5000);
-                if is_spa {
-                    tracing::info!("observe_phase: detected SPA page, probing API: {}", url);
-
-                    // Extract fragment params
-                    let fragment_params: Vec<(String, String)> = url
-                        .split('#')
-                        .nth(1)
-                        .map(|f| {
-                            url::form_urlencoded::parse(f.as_bytes())
-                                .map(|(k, v)| (k.to_string(), v.to_string()))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    let path_segments: Vec<&str> = url
-                        .split('#')
-                        .next()
-                        .unwrap_or(&url)
-                        .split('/')
-                        .filter(|s| !s.is_empty())
-                        .collect();
-
-                    let mut spa_info = format!(
-                        "\n\n[SPA Page Analysis]\n\
-                         The URL returned a JavaScript SPA shell.\n\
-                         Path segments: {}\nFragment params: {:?}",
-                        path_segments.join(" / "),
-                        fragment_params,
-                    );
-
-                    // Try common API pattern: POST /api/v1/agent-binding/invitations/{id}/agent-task
-                    if let Some(invitation_id) = path_segments
-                        .last()
-                        .filter(|s| s.starts_with("invite_") || s.starts_with("invitation_"))
-                    {
-                        let token = fragment_params
-                            .iter()
-                            .find(|(k, _)| k == "task_access_token")
-                            .map(|(_, v)| v.clone());
-
-                        if let Some(token_val) = token {
-                            let host = url.split('/').nth(2).unwrap_or("");
-                            let scheme = if fetch_url.starts_with("https") {
-                                "https"
-                            } else {
-                                "http"
-                            };
-                            let api_url = format!(
-                                "{}://{}/api/v1/agent-binding/invitations/{}/agent-task",
-                                scheme, host, invitation_id,
+    let (multimodal_context, url_inserts) = tokio::join!(
+        async {
+            if is_simple || skip_expensive {
+                None
+            } else {
+                detect_and_process_multimodal(server, params).await
+            }
+        },
+        async {
+            if skip_expensive || url_entries.is_empty() {
+                Vec::new()
+            } else {
+                // Phase 1: Fetch all URLs in parallel
+                let fetch_futures: Vec<_> = url_entries
+                    .iter()
+                    .filter_map(|(msg_idx, url)| {
+                        let url_lower = url.to_lowercase();
+                        if url_lower.starts_with("http://localhost")
+                            || url_lower.starts_with("http://127.0.0.1")
+                            || url_lower.starts_with("https://localhost")
+                            || url_lower.starts_with("https://127.0.0.1")
+                            || url_lower.starts_with("http://10.")
+                            || url_lower.starts_with("http://192.168.")
+                            || url_lower.starts_with("https://10.")
+                            || url_lower.starts_with("https://192.168.")
+                        {
+                            tracing::info!(
+                                "observe_phase: skipping pre-fetch for local/private URL: {}",
+                                url
                             );
-                            let web_origin = format!("{}://{}", scheme, host);
-                            let api_body = serde_json::json!({
-                                "task_access_token": token_val,
-                                "web_origin": web_origin,
-                            });
+                            return None;
+                        }
 
-                            match tokio::time::timeout(
-                                std::time::Duration::from_secs(10),
+                        let fetch_url = url.split('#').next().unwrap_or(url).to_string();
+                        let url_owned = url.clone();
+                        let msg_idx = *msg_idx;
+                        Some(async move {
+                            tracing::info!(
+                                "observe_phase: auto-detected URL, pre-fetching: {}",
+                                url_owned
+                            );
+
+                            let result = match tokio::time::timeout(
+                                std::time::Duration::from_secs(3),
                                 crate::shared::http_client::http_client()
                                     .expect("shared HTTP client must build")
-                                    .post(&api_url)
-                                    .header("Content-Type", "application/json")
-                                    .json(&api_body)
+                                    .get(&fetch_url)
                                     .send(),
                             )
                             .await
                             {
-                                Ok(Ok(api_resp)) => {
-                                    let api_status = api_resp.status();
+                                Ok(Ok(resp)) => {
+                                    let status = resp.status().to_string();
                                     match tokio::time::timeout(
-                                        std::time::Duration::from_secs(5),
-                                        api_resp.text(),
+                                        std::time::Duration::from_secs(2),
+                                        resp.text(),
                                     )
                                     .await
                                     {
-                                        Ok(Ok(api_body_text)) => {
-                                            let t = if api_body_text.len() > 4096 {
-                                                format!(
-                                                    "{}...\n[truncated]",
-                                                    &api_body_text[..4096]
-                                                )
-                                            } else {
-                                                api_body_text.clone()
-                                            };
-                                            spa_info.push_str(&format!(
+                                        Ok(Ok(body)) => Some((status, body)),
+                                        _ => None,
+                                    }
+                                }
+                                _ => None,
+                            };
+                            (msg_idx, url_owned, fetch_url, result)
+                        })
+                    })
+                    .collect();
+
+                let fetch_results = join_all(fetch_futures).await;
+
+                // Phase 2: Process each result sequentially (SPA detection, API probing,
+                // message building). Inserts are collected and applied by the caller
+                // (after the join) so this block can run concurrently with multimodal
+                // detection.
+                let mut url_inserts: Vec<(usize, Message)> = Vec::new();
+                for (msg_idx, url, fetch_url, fetch_result) in fetch_results {
+                    if let Some((status, body)) = fetch_result {
+                        let truncated = if body.len() > 8192 {
+                            format!("{}...\n[Response truncated at 8192 bytes]", &body[..8192])
+                        } else {
+                            body.clone()
+                        };
+                        let mut context_msg = format!(
+                            "[Auto-fetched content from {}]\nHTTP Status: {}\n\n{}",
+                            url, status, truncated
+                        );
+
+                        // Phase 2: Detect SPA and probe API endpoints
+                        let is_spa = body.contains("<div id=\"root\"")
+                            || body.contains("<div id=\"app\"")
+                            || (body.contains("<script")
+                                && body.chars().filter(|c| *c == '<').count() > 20
+                                && body.len() > 200
+                                && body.len() < 5000);
+                        if is_spa {
+                            tracing::info!(
+                                "observe_phase: detected SPA page, probing API: {}",
+                                url
+                            );
+
+                            // Extract fragment params
+                            let fragment_params: Vec<(String, String)> = url
+                                .split('#')
+                                .nth(1)
+                                .map(|f| {
+                                    url::form_urlencoded::parse(f.as_bytes())
+                                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+
+                            let path_segments: Vec<&str> = url
+                                .split('#')
+                                .next()
+                                .unwrap_or(&url)
+                                .split('/')
+                                .filter(|s| !s.is_empty())
+                                .collect();
+
+                            let mut spa_info = format!(
+                                "\n\n[SPA Page Analysis]\n\
+                         The URL returned a JavaScript SPA shell.\n\
+                         Path segments: {}\nFragment params: {:?}",
+                                path_segments.join(" / "),
+                                fragment_params,
+                            );
+
+                            // Try common API pattern: POST /api/v1/agent-binding/invitations/{id}/agent-task
+                            if let Some(invitation_id) = path_segments.last().filter(|s| {
+                                s.starts_with("invite_") || s.starts_with("invitation_")
+                            }) {
+                                let token = fragment_params
+                                    .iter()
+                                    .find(|(k, _)| k == "task_access_token")
+                                    .map(|(_, v)| v.clone());
+
+                                if let Some(token_val) = token {
+                                    let host = url.split('/').nth(2).unwrap_or("");
+                                    let scheme = if fetch_url.starts_with("https") {
+                                        "https"
+                                    } else {
+                                        "http"
+                                    };
+                                    let api_url = format!(
+                                        "{}://{}/api/v1/agent-binding/invitations/{}/agent-task",
+                                        scheme, host, invitation_id,
+                                    );
+                                    let web_origin = format!("{}://{}", scheme, host);
+                                    let api_body = serde_json::json!({
+                                        "task_access_token": token_val,
+                                        "web_origin": web_origin,
+                                    });
+
+                                    match tokio::time::timeout(
+                                        std::time::Duration::from_secs(10),
+                                        crate::shared::http_client::http_client()
+                                            .expect("shared HTTP client must build")
+                                            .post(&api_url)
+                                            .header("Content-Type", "application/json")
+                                            .json(&api_body)
+                                            .send(),
+                                    )
+                                    .await
+                                    {
+                                        Ok(Ok(api_resp)) => {
+                                            let api_status = api_resp.status();
+                                            match tokio::time::timeout(
+                                                std::time::Duration::from_secs(5),
+                                                api_resp.text(),
+                                            )
+                                            .await
+                                            {
+                                                Ok(Ok(api_body_text)) => {
+                                                    let t = if api_body_text.len() > 4096 {
+                                                        format!(
+                                                            "{}...\n[truncated]",
+                                                            &api_body_text[..4096]
+                                                        )
+                                                    } else {
+                                                        api_body_text.clone()
+                                                    };
+                                                    spa_info.push_str(&format!(
                                                 "\n\n[API: POST {}]\nStatus: {}\nRequest: {}\nResponse:\n{}",
                                                 api_url, api_status, api_body, t,
                                             ));
 
-                                            // ── Phase 3: Present raw task data to AI for planning ──────
-                                            // The AI receives the full task package and plans the workflow
-                                            // itself using general PUA principles (FETCH, ANALYZE, EXTRACT,
-                                            // CHAIN, RES, ERR). No task-specific instructions here.
-                                            match serde_json::from_str::<Value>(&api_body_text) {
+                                                    // ── Phase 3: Present raw task data to AI for planning ──────
+                                                    // The AI receives the full task package and plans the workflow
+                                                    // itself using general PUA principles (FETCH, ANALYZE, EXTRACT,
+                                                    // CHAIN, RES, ERR). No task-specific instructions here.
+                                                    match serde_json::from_str::<Value>(&api_body_text) {
                                                 Ok(task_json) => {
                                                     let ok_val = task_json
                                                         .get("ok")
@@ -539,36 +572,48 @@ pub(crate) async fn observe_phase(
                                                     e,
                                                 )),
                                             }
+                                                }
+                                                _ => spa_info.push_str(&format!(
+                                                    "\n\n[API: POST {}] - read failed",
+                                                    api_url
+                                                )),
+                                            }
                                         }
-                                        _ => spa_info.push_str(&format!(
-                                            "\n\n[API: POST {}] - read failed",
+                                        Ok(Err(e)) => spa_info.push_str(&format!(
+                                            "\n\n[API: POST {}] - failed: {}",
+                                            api_url, e
+                                        )),
+                                        Err(_) => spa_info.push_str(&format!(
+                                            "\n\n[API: POST {}] - timeout",
                                             api_url
                                         )),
                                     }
                                 }
-                                Ok(Err(e)) => spa_info.push_str(&format!(
-                                    "\n\n[API: POST {}] - failed: {}",
-                                    api_url, e
-                                )),
-                                Err(_) => spa_info
-                                    .push_str(&format!("\n\n[API: POST {}] - timeout", api_url)),
                             }
+                            context_msg.push_str(&spa_info);
                         }
+
+                        url_inserts.push((
+                            msg_idx,
+                            Message {
+                                role: "system".to_string(),
+                                content: context_msg,
+                            },
+                        ));
+                    } else {
+                        tracing::warn!("observe_phase: failed to fetch URL: {}", url);
                     }
-                    context_msg.push_str(&spa_info);
                 }
 
-                params.messages.insert(
-                    msg_idx,
-                    Message {
-                        role: "system".to_string(),
-                        content: context_msg,
-                    },
-                );
-            } else {
-                tracing::warn!("observe_phase: failed to fetch URL: {}", url);
+                url_inserts
             }
-        }
+        },
+    );
+
+    // Apply the fetched-content system messages (insertion order preserved —
+    // identical to the previous inline insertion loop).
+    for (msg_idx, msg) in url_inserts {
+        params.messages.insert(msg_idx, msg);
     }
 
     // ── HarnessBus during-execute checkpoint ───────────────────────
@@ -606,6 +651,53 @@ pub(crate) async fn observe_phase(
         reputation_scores: phase_res.reputation_scores,
         multimodal_context,
     })
+}
+
+/// Whether the expensive observe sub-steps (multimodal + URL prefetch) can be
+/// safely skipped because the semantic cache will serve this request.
+///
+/// Mirrors act_phase's semantic-cache gate exactly, so the decision is
+/// deterministic across both points:
+/// - the semantic key is the LAST user message — unchanged by observe/think,
+///   so the probe at observe time sees the same key act_phase will use;
+/// - the execution-like bypass scan runs on USER messages only (see
+///   [`should_bypass_for_execution`] — system/metadata injections are context,
+///   not intent), so `params.messages` and the think-phase `agent_messages`
+///   yield the same decision;
+/// - the duplicate check is user-message based
+///   (`last_user_message_is_duplicate`).
+///
+/// The only divergence from act_phase is a rare race: a background purge may
+/// remove the entry between the probe and act's lookup, in which case act
+/// falls through to a fresh agent run WITHOUT the prefetched URL context — a
+/// graceful, bounded degradation (the URL text is still visible to the model).
+fn semantic_prefetch_should_skip(server: &AcpServer, params: &ChatParams) -> bool {
+    let semantic_hit = match params
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.as_str())
+    {
+        Some(key) => try_semantic_cache(server, key).is_some(),
+        None => false,
+    };
+    semantic_prefetch_should_skip_condition(&params.mode, &params.messages, semantic_hit)
+}
+
+/// Pure gate for [`semantic_prefetch_should_skip`] (testable without a server):
+/// skip only when the semantic cache hit is guaranteed AND neither the
+/// execution-like bypass nor the duplicate-user bypass applies.
+fn semantic_prefetch_should_skip_condition(
+    mode: &str,
+    messages: &[Message],
+    semantic_hit: bool,
+) -> bool {
+    // A user message must exist (the semantic key is the last user message).
+    messages.iter().any(|m| m.role == "user")
+        && semantic_hit
+        && !should_bypass_for_execution(mode, messages)
+        && !crate::intelligence::token_cache::last_user_message_is_duplicate(messages)
 }
 
 /// Detect and process multimodal input (repo queries, data: URIs, file:// refs).
@@ -2282,5 +2374,53 @@ mod tests {
         extract_data_uris(&mp, "data:image/png;base64,", &mut contexts).await;
 
         assert!(contexts.is_empty());
+    }
+
+    #[test]
+    fn semantic_skip_requires_hit_and_no_bypass() {
+        let plain = vec![Message {
+            role: "user".to_string(),
+            content: "what is rust?".to_string(),
+        }];
+        // Hit + plain question → skip the expensive observe sub-steps.
+        assert!(semantic_prefetch_should_skip_condition(
+            "chat", &plain, true
+        ));
+        // Miss → never skip.
+        assert!(!semantic_prefetch_should_skip_condition(
+            "chat", &plain, false
+        ));
+        // Execution mode → bypass → never skip.
+        assert!(!semantic_prefetch_should_skip_condition(
+            "edit", &plain, true
+        ));
+        // Execution hint in the user text → bypass → never skip.
+        let exec = vec![Message {
+            role: "user".to_string(),
+            content: "implement a login form".to_string(),
+        }];
+        assert!(!semantic_prefetch_should_skip_condition(
+            "chat", &exec, true
+        ));
+        // Repeated last user message → bypass → never skip.
+        let dup = vec![
+            Message {
+                role: "user".to_string(),
+                content: "what is rust?".to_string(),
+            },
+            Message {
+                role: "user".to_string(),
+                content: "what is rust?".to_string(),
+            },
+        ];
+        assert!(!semantic_prefetch_should_skip_condition("chat", &dup, true));
+        // No user message at all → never skip.
+        let no_user = vec![Message {
+            role: "system".to_string(),
+            content: "context only".to_string(),
+        }];
+        assert!(!semantic_prefetch_should_skip_condition(
+            "chat", &no_user, true
+        ));
     }
 }

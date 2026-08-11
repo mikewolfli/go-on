@@ -2,16 +2,42 @@
 
 ## [Unreleased] - 2026-08-11
 
-### 第 44 轮 — 超级深度/广度扫描 XII：统一架构精炼（2026-08-11，docs/log/log-20260811-2.md）
+### 第 46 轮 — 超级深度/广度扫描 XIV：恒值路径清理与统一链路（2026-08-11，docs/log/log-20260811-4.md）
 
-- **PG 向量维度失配修复（P1）**：`VectorStore::new_with_replica` 建表后 `ALTER TABLE ... embedding TYPE vector(N)` 对齐运行时 provider 维度，消除固定 768 与默认环境 upsert 必失败。
-- **skill CLI 双套统一**：`go-on skill` 改走与服务器一致的持久化 `SkillImportStore`；`skill import` 修复 `github:/url:/local:` 语法（新增 `parse_cli_import_source`，未知格式回退市场按名安装）；list-imported/info/refresh 读取真实数据。
-- **autonomy 主路径缓存回填**：semantic_cache + token_cache 填充移到共享后执行路径，autonomy 成功产出同样填充。
-- **CapabilityBus ToolBus 技能注册表统一**：new_acp_server 注入真实 SkillRegistry，导入技能对 agent_tool_match/tool_bus_skills 可见；**MemoryBus 后端注入时序修复**（移到 wire_server 前，注入真实生效）；**fallback 失败路径记账补齐**（Err 分支同样喂 LivePerformanceFeed/hyper_resilience）。
-- **CORS preflight 双实现统一**（共享 evaluate_cors_preflight，修复通配双头缺陷 + 4 单测）；**MCP SSE 配置化 CORS**（原硬编码 `*` 绕过白名单）；**MCP 头部读取统一**委托 read_http_header；**config 验证门禁对齐与去重**（精确模板匹配）。
-- **死代码/冗余清理**：capability_selector 冗余 reorder、`is_mcp_request` 死分支、`McpServer::new` 收敛为 cfg(test)、CLI `estimate_tokens` 包装与 `len()/4` 统一走共享估算器、`shared/math.rs` allow 收窄、`core/mod.rs` 悬空注释、autonomy 死 ±1 容差、hyper_resilience 默认延迟 100→0 与伪造失败模式移除；**重复实现合并**（copy_dir_recursive、validate_secret_security 收敛到共享实现）；**hub 加固**（头部/正文上限）；**TLS 日志如实化**。
-- **文档数字修正**：README lib 1513→1533、SDK LOC ~4K→~6.9K、工具表 find→search_files；CHANGELOG 与 log-20260810-4 §12 集成测试数全部对齐实测（transport 18、e2e 8、pua 3、openai 6、i18n 1）；request.rs 测试 `len() >= 1` → `is_empty()`。
-- 验证：4 profile + clippy 全目标零警告；lib 1533/0/0；集成套件全通过；vscode tsc / GUI / SDK 干净。
+#### P1 正确性
+
+- **warm 层记忆 TTL 修复**：`From<CanonicalEntry>` 写入 `accessed_at: 0`，使所有 warm 条目立即命中 30 天空闲过滤，低 usefulness 记忆约 10 分钟即被永久删除（设计意图 30 天）。现改为 `now_ts()`；新增回归测试 `test_bridge_entry_survives_first_auto_migrate_cycle`。
+- **CapabilityBus 任务分类激活**：`apply_capability_bus_selection` 硬编码 `TaskType::Other`，使 task-fit 恒 0.60、recent-outcome target 恒 `"Other"`、UCB task 维度恒 `"Other"`。现经权威 `TaskRouter::analyze_task` → `pua::TaskType` 映射分类（5 个测试）。
+- **自适应选择器学习闭环接键**：capability_bus 决策期用 agent 名读 UCB，执行期用 model id 写——两侧值空间永不匹配，排序静默退化为按名排序。执行期现追加 agent 级记录，统一两侧消费者。
+- **会话 token 撤销闭环**：`revoke_session` 现黑名单化任意出示的 token（auto-provision 会话从不入 map，原撤销是空操作）；`logout` 对参数认证与 HTTP `Authorization` 头认证均撤销 token；`cleanup_expired` 清理黑名单。`issue_token`/`revoke_token` 保持 test-only（已注明）。
+
+#### 恒值路径清理（本轮重点）
+
+- **PUA 方法级红线守卫移除**：`check_red_lines(method)` 用自然语言 plan 红线对比 ACP 方法名恒不匹配——假安全信号。真实红线链为工具参数级 `check_tool_call`（tools_pack.rs）。
+- **Rationalization 守卫去恒值**：删除恒 false 的 `is_full_auto` 参数及死分支；`evaluate()` 现返回弱证据状态，harness 调用点传真实置信度（`1.0 - risk`），低置信评审门与 `verify_output` 风险加权生效；计数口径注明（计弱证据触发而非硬阻断）。
+- **mode.rs `AutoDegradePolicy` 字段删除**：`auto_degrade` 恒 false（`new_safeguard` deprecated 零调用），ReadOnly 自动降级档恒不可达——随 `evaluate_degradation` 一并删除；`safeguard_policy` 为唯一权威（>0.95 Block / >0.40 ConfirmRequired / else AllowWithAudit）；SafeGuard 只读工具面已文档化。
+- **`RuntimeConfig.platform_mode` 删除**：全库零消费（governance_pack 的 `platform_mode` 是逐请求 RPC 参数，无关）；配置模板与测试同步更新。
+- **GUI `secret_source` 删除**：keyring/env/file/auto 选择器从不影响行为（密钥恒走 keyring）；UI 现注明密钥仅存系统钥匙串。
+- **vscode 死设置删除**：`go-on.chat.maxHistory/maxTokens/chat.streaming` 与 `go-on.ui.fontSize` 声明+展示但从不读取；从 package.json/设置 UI/locales 移除（18 条死字符串）；启动参数 `--verbose` 移除（CLI 本无此参数）。
+- **GUI autotune `aggressive` 删除**：每请求发送但后端无消费路径。
+- **`AutonomyRound`/`rounds` 删除**：写后即弃的逐轮记录（`retry_count` 恒 0）；报告保留 5 个被消费标量。
+- **`AcpServer.verbose` 删除**：恒 false 零读取；`health_endpoint_ready` 恒 true 注明；`McpClientConfig` 超时经 `mcp.client.connect` 参数暴露；会话通知携带真实 `timeout_secs`。
+- **死调用清理**：`dispatch.rs` 的 `DispatchOutput::Error` 委托单一错误出口 `io::send_error`（修复该路径缺失 `acp.error` 平台上下文注入）；header 认证解析统一到 `extract_header_values`（ACP/MCP 双臂大小写不敏感）；`vector.clear_all` 重置 HNSW 索引（清空后残留命中）；语义缓存后台清理复用 `purge_expired`（expired_count 原被低估）。
+
+#### 部署/文档/三端
+
+- **GUI 配置生成修复（P1）**：`generate_backend_config` 内嵌 UTF-8 BOM（TOML 解析失败）、`[protocol]` 重复（split 保留模板段）、`default_phase="think"` 不在注入 phases 内（校验拒绝）——三处全修；`--validate-config` 端到端验证通过。
+- **k8s kustomization 修复**：`configMapGenerator` 把 ConfigMap YAML 文本当 TOML 内容（不可解析）——删除（configmap.yaml 已是资源）；`.secrets.env` 死键 `server-api-key` 改为 `GO_ON_ENTRY_API_KEY`。
+- **`GO_ON_SERVER_API_KEY` 全面改名 `GO_ON_ENTRY_API_KEY`**：config.simple-server.toml、deploy 脚本/compose、cookbook 三语——旧名无任何代码读取。
+- **文档同步**：SafeGuard 只读工具面（SAFEGUARD_MODE.md/README）、zed.md 模式回落（chat 路径为 `edit`）、workflow-config skills 默认值、design.md 过时 CLI 参数、simple-server sqlite 路径、CHANGELOG.zh-CN 轮次顺序、README 声明数口径。
+
+#### 验证
+
+```
+cargo test --lib → 1549 passed / 0 failed / 0 ignored
+cargo clippy --all-targets -D warnings → 零警告
+4 profile + GUI + vscode tsc → 零错误；集成套件（151 非 chaos 声明）全通过
+```
 
 ### 第 45 轮 — 超级深度/广度扫描 XIII：全功能架构统一（2026-08-11，docs/log/log-20260811-3.md）
 
@@ -33,6 +59,17 @@
 - **部署链路修复**：multi-users 部署改 `GO_ON_PG_CONNECTION_STRING`（原 DB_* 变量代码不读取）；k8s secret 键名与 envFrom 对齐；CI `cargo deny` 补安装步骤；删除随发布包分发的过时 `.github/workflows` 副本与 `.DS_Store`。
 - **文档全面更新**：README/CHANGELOG 数字（lib 1537）、cookbook 三语构建命令（profile 语义）、zed.md 模式推断行为、workflow-config `[skills]` 幽灵段改 `[runtime]` 键、SAFEGUARD_MODE posture 表、storage/路径/日志名等多处对齐代码。
 - 验证：lib 1537/0/0；clippy 全目标零警告；4 profile + GUI + vscode tsc + SDK 零错误；16 集成套件全通过。
+
+### 第 44 轮 — 超级深度/广度扫描 XII：统一架构精炼（2026-08-11，docs/log/log-20260811-2.md）
+
+- **PG 向量维度失配修复（P1）**：`VectorStore::new_with_replica` 建表后 `ALTER TABLE ... embedding TYPE vector(N)` 对齐运行时 provider 维度，消除固定 768 与默认环境 upsert 必失败。
+- **skill CLI 双套统一**：`go-on skill` 改走与服务器一致的持久化 `SkillImportStore`；`skill import` 修复 `github:/url:/local:` 语法（新增 `parse_cli_import_source`，未知格式回退市场按名安装）；list-imported/info/refresh 读取真实数据。
+- **autonomy 主路径缓存回填**：semantic_cache + token_cache 填充移到共享后执行路径，autonomy 成功产出同样填充。
+- **CapabilityBus ToolBus 技能注册表统一**：new_acp_server 注入真实 SkillRegistry，导入技能对 agent_tool_match/tool_bus_skills 可见；**MemoryBus 后端注入时序修复**（移到 wire_server 前，注入真实生效）；**fallback 失败路径记账补齐**（Err 分支同样喂 LivePerformanceFeed/hyper_resilience）。
+- **CORS preflight 双实现统一**（共享 evaluate_cors_preflight，修复通配双头缺陷 + 4 单测）；**MCP SSE 配置化 CORS**（原硬编码 `*` 绕过白名单）；**MCP 头部读取统一**委托 read_http_header；**config 验证门禁对齐与去重**（精确模板匹配）。
+- **死代码/冗余清理**：capability_selector 冗余 reorder、`is_mcp_request` 死分支、`McpServer::new` 收敛为 cfg(test)、CLI `estimate_tokens` 包装与 `len()/4` 统一走共享估算器、`shared/math.rs` allow 收窄、`core/mod.rs` 悬空注释、autonomy 死 ±1 容差、hyper_resilience 默认延迟 100→0 与伪造失败模式移除；**重复实现合并**（copy_dir_recursive、validate_secret_security 收敛到共享实现）；**hub 加固**（头部/正文上限）；**TLS 日志如实化**。
+- **文档数字修正**：README lib 1513→1533、SDK LOC ~4K→~6.9K、工具表 find→search_files；CHANGELOG 与 log-20260810-4 §12 集成测试数全部对齐实测（transport 18、e2e 8、pua 3、openai 6、i18n 1）；request.rs 测试 `len() >= 1` → `is_empty()`。
+- 验证：4 profile + clippy 全目标零警告；lib 1533/0/0；集成套件全通过；vscode tsc / GUI / SDK 干净。
 
 ## [Unreleased] - 2026-08-10
 

@@ -104,7 +104,10 @@ impl Drop for DrainPermit {
 
 impl DrainPermit {
     /// Consume the permit and return the inner semaphore permit.
-    /// The caller is responsible for ensuring the inner permit is eventually dropped.
+    ///
+    /// Unused pub API retained for the drain state machine (BLUE56-C03): no
+    /// call site today, kept so a permit can be unwrapped without notifying
+    /// the drain waiter if that is ever needed.
     pub fn into_inner(mut self) -> tokio::sync::OwnedSemaphorePermit {
         self.permit.take().expect("DrainPermit already consumed")
     }
@@ -442,8 +445,6 @@ pub struct AcpServer {
     pub persistence: PersistenceContext,
     /// Prompt manager for prompt template management
     pub prompt_manager: PromptManager,
-    /// Verbose logging flag
-    pub verbose: bool,
     /// Shutdown notification mechanism
     pub shutdown_notify: Arc<Notify>,
     /// DrainGuard for graceful shutdown
@@ -860,7 +861,6 @@ pub struct ServerBuilder {
     vector_store: Option<Arc<VectorStore>>,
     artifact_ledger: Option<ArtifactLedger>,
     config_path: Option<String>,
-    verbose: bool,
     harness_bus: Option<Arc<HarnessBus>>,
     capability_bus: Option<Arc<CapabilityBus>>,
     provenance_ledger: Option<Arc<ProvenanceLedger>>,
@@ -900,7 +900,6 @@ impl ServerBuilder {
             vector_store: None,
             artifact_ledger: None,
             config_path: None,
-            verbose: false,
             harness_bus: None,
             capability_bus: None,
             provenance_ledger: None,
@@ -1368,7 +1367,6 @@ impl ServerBuilder {
                 artifact_ledger,
             },
             prompt_manager,
-            verbose: self.verbose,
             shutdown_notify: Arc::new(Notify::new()),
             drain_guard: DrainGuard::default(),
             // Share the process-wide registry so the ACP server, ToolBus, and
@@ -1452,8 +1450,14 @@ impl AcpServer {
         // The standard ACP session/request_permission JSON-RPC request (below)
         // is the authoritative approval flow; this notification is a companion
         // that ensures Zed's UI is aware of the pending approval.
-        self.emit_permission_request_notification(session_id, &message, tool_name, tool_args)
-            .await;
+        self.emit_permission_request_notification(
+            session_id,
+            &message,
+            timeout_secs,
+            tool_name,
+            tool_args,
+        )
+        .await;
 
         // Build options using the PermissionOption schema (serde camelCase)
         let options = vec![
@@ -1553,6 +1557,7 @@ impl AcpServer {
         &self,
         session_id: &str,
         message: &str,
+        timeout_secs: u64,
         _tool_name: &str,
         _tool_args: &Value,
     ) {
@@ -1572,7 +1577,7 @@ impl AcpServer {
                         PermissionOptionKind::RejectOnce,
                     ),
                 ],
-                timeout_secs: None,
+                timeout_secs: Some(timeout_secs),
                 meta: None,
             }),
         );

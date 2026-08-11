@@ -331,6 +331,11 @@ impl FlowManager {
                 || lower.contains("generate")
                 || lower.contains("implement"),
             min_context_window: if complexity >= 4 { Some(4096) } else { None },
+            // max_cost_cents is always None: the criteria are derived solely
+            // from task complexity/description (there is no cost-cap config
+            // field to wire, and adding one is out of scope here), so the
+            // ModelSelector cost filter never excludes a model. Wired cost-cap
+            // configuration would be the natural follow-up.
             max_cost_cents: None,
             prefer_speed: lower.contains("quick") || lower.contains("fast"),
         }

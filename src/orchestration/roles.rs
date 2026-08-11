@@ -150,6 +150,12 @@ pub struct RoleSpecification {
 /// - [`role_registry()`] provides runtime access to dynamic role definitions
 /// - [`role_registry_keywords_for()`] resolves keywords from the registry
 /// - Custom roles in the registry take priority over built-in specifications
+///
+/// NOTE: the static `RoleSpecifications` catalog is retained as a public API
+/// surface / future role-routing extension point. Its only consumer,
+/// `TaskRouter::get_role_specs`, was removed as dead code (zero callers), so
+/// these constructors currently have no in-repo caller — they are kept
+/// intentionally, not resurrected by accident.
 pub struct RoleSpecifications;
 impl RoleSpecifications {
     /// Returns the `planner` role specification.

@@ -8,8 +8,6 @@
  */
 
 import * as fs from "fs/promises";
-import * as path from "path";
-import * as os from "os";
 import * as vscode from "vscode";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { Logger } from "./logger";
@@ -169,13 +167,10 @@ class ConfigManager {
   }
 
   /**
-   * Initialize configuration from file or create default
+   * Initialize configuration from the given config file path, or create a
+   * default config when the file does not exist yet.
    */
-  async initialize(configPath?: string): Promise<void> {
-    if (!configPath) {
-      configPath = await this.getDefaultConfigPath();
-    }
-
+  async initialize(configPath: string): Promise<void> {
     this.configPath = configPath;
 
     try {
@@ -185,23 +180,6 @@ class ConfigManager {
       log.warn("Config file not found, creating default:", err);
       this.createDefaultConfig();
     }
-  }
-
-  /**
-   * Get default configuration path
-   */
-  private async getDefaultConfigPath(): Promise<string> {
-    const homeDir = os.homedir();
-    const configDir = path.join(homeDir, ".go-on");
-
-    try {
-      await fs.mkdir(configDir, { recursive: true });
-    } catch (err) {
-      log.warn("mkdir failed:", err);
-      return path.join(homeDir, "config.toml");
-    }
-
-    return path.join(configDir, "config.toml");
   }
 
   /**

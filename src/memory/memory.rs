@@ -1,8 +1,9 @@
 //! Memory policy layer for go-on (Phase 2/3)
 //!
-//! These structures are intentional framework definitions for Phase 0-9 architecture.
-//! Memory classes and policies define how artifacts are retained and promoted,
-//! to be integrated into the execution flow once promotion logic is wired.
+//! Memory classes and policies define how artifacts are retained and promoted;
+//! the in-memory class promotion (`MemoryStore::promote`) is wired through
+//! `bridge_promote` (src/memory/memory_bridge.rs), which is invoked by the
+//! background maintenance task (src/acp/background.rs).
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -25,6 +26,12 @@ pub struct MemoryEntry {
     pub content: String,
     pub timestamp: String,
     pub usefulness: f32,
+    /// Age in days of the entry's content.
+    ///
+    /// NOTE: currently every production write site sets this to `0` — it is a
+    /// Phase-2 extension reserved for future content-aging policies. GC is
+    /// actually driven by `usefulness` (see `MemoryPolicy::should_retain`),
+    /// not by staleness.
     pub staleness: u32,
     /// Optional user_id for multi-user isolation.
     pub user_id: Option<String>,
@@ -268,6 +275,12 @@ impl MemoryStore {
     /// - Observation  (usefulness ≥ 0.75, staleness = 0) → Episodic
     /// - Episodic     (usefulness ≥ 0.80)                → Semantic
     /// - Semantic     (usefulness ≥ 0.90)                → ProjectState
+    ///
+    /// NOTE: the Semantic → ProjectState branch (≥ 0.90) currently has no
+    /// producer — the highest `usefulness` any production write site assigns is
+    /// 0.8 (see chat.rs / exec_pack/task.rs; reflect uses 0.5, agent insight
+    /// 0.7/0.3). The threshold is kept as the designed promotion rule for when
+    /// higher-confidence producers exist; do not lower it speculatively.
     pub fn promote(&mut self) -> MemoryPromotionReport {
         let mut to_promote: Vec<(String, MemoryClass, MemoryClass)> = Vec::new();
 

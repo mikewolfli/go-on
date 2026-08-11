@@ -18,7 +18,7 @@ services:
       - ../../config/config.simple-server.toml:/opt/go-on/config.toml:ro
     environment:
       - RUST_LOG=warn
-      - GO_ON_SERVER_API_KEY=${GO_ON_SERVER_API_KEY:-change-me}
+      - GO_ON_ENTRY_API_KEY=${GO_ON_ENTRY_API_KEY:-change-me}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

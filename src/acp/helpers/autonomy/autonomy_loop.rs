@@ -89,7 +89,6 @@ pub struct AutonomyLoopReport {
     pub total_rounds: usize,
     pub total_tools: usize,
     pub final_phase: AutonomyPhase,
-    pub rounds: Vec<AutonomyRound>,
     pub total_duration_ms: u64,
     pub stop_reason: String,
 }
@@ -102,22 +101,6 @@ pub enum AutonomyPhase {
     Finalizing,
     Completed,
     Failed,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AutonomyRound {
-    pub round_index: usize,
-    pub phase: AutonomyPhase,
-    pub tools_executed: Vec<String>,
-    pub planner_guided: bool,
-    pub duration_ms: u64,
-    pub error: Option<String>,
-    pub round_start_offset_ms: u64,
-    pub retry_count: usize,
-    pub round_stop_reason: String,
-    pub agent_switched: bool,
-    pub agent_switch_reason: Option<String>,
-    pub trace: Vec<String>,
 }
 
 /// Result of the autonomy loop execution
@@ -155,13 +138,13 @@ pub async fn run_autonomy_loop(
 
     let mut response = String::new();
     let mut reasoning = String::new();
-    let mut rounds: Vec<AutonomyRound> = Vec::new();
     let mut actual_rounds: usize = 0;
+    let mut total_tools_executed: usize = 0;
+    let mut last_round_had_tools: bool = false;
     let mut any_tool_executed_successfully = false;
     let max_iterations = config.max_iterations.max(1);
 
     for iteration in 0..max_iterations {
-        let round_start = Instant::now();
         let mut tool_calls: Vec<(String, String)> = Vec::new();
 
         // $/cancel_request support: abort between rounds when the client
@@ -345,31 +328,6 @@ pub async fn run_autonomy_loop(
             ));
         }
         let _ = chat_task.await;
-        let round_duration_ms = round_start.elapsed().as_millis() as u64;
-
-        // Track this round
-        let tool_names: Vec<String> = tool_calls.iter().map(|(n, _)| n.clone()).collect();
-        rounds.push(AutonomyRound {
-            round_index: iteration,
-            phase: if tool_calls.is_empty() {
-                AutonomyPhase::Completed
-            } else {
-                AutonomyPhase::Executing
-            },
-            tools_executed: tool_names.clone(),
-            planner_guided: false,
-            duration_ms: round_duration_ms,
-            error: None,
-            round_start_offset_ms: round_start
-                .checked_duration_since(start)
-                .unwrap_or(std::time::Duration::from_secs(0))
-                .as_millis() as u64,
-            retry_count: 0,
-            round_stop_reason: "completed".to_string(),
-            agent_switched: false,
-            agent_switch_reason: None,
-            trace: Vec::new(),
-        });
 
         // ── Execute tool calls ───────────────────────────────────────
         if tool_calls.is_empty() {
@@ -461,6 +419,10 @@ pub async fn run_autonomy_loop(
         if !tool_calls.is_empty() {
             actual_rounds += 1;
         }
+        // `total_tools` mirrors the removed per-round `tools_executed` vector:
+        // it counts the tool calls requested in each round.
+        total_tools_executed += tool_calls.len();
+        last_round_had_tools = !tool_calls.is_empty();
     }
 
     let total_duration_ms = start.elapsed().as_millis() as u64;
@@ -479,9 +441,8 @@ pub async fn run_autonomy_loop(
     // Post-loop summary: if tools were executed in the last round, the
     // agent may not have produced a final text response. Do one more call
     // asking for a summary so the user always sees a final answer.
-    let total_tools = rounds.iter().map(|r| r.tools_executed.len()).sum();
+    let total_tools = total_tools_executed;
     let any_tool_executed_successfully_value = any_tool_executed_successfully;
-    let last_round_had_tools = rounds.last().is_some_and(|r| !r.tools_executed.is_empty());
     let mut final_response = response;
     // Skip summary if all tools failed — the failure context is more
     // useful to the user than an LLM-summarized version of the same errors.
@@ -535,7 +496,6 @@ pub async fn run_autonomy_loop(
             total_rounds: actual_rounds,
             total_tools,
             final_phase: AutonomyPhase::Completed,
-            rounds,
             total_duration_ms,
             stop_reason: if all_tools_failed {
                 "all_tools_failed".to_string()
@@ -656,7 +616,6 @@ mod tests {
             total_rounds: 3,
             total_tools: 10,
             final_phase: AutonomyPhase::Completed,
-            rounds: vec![],
             total_duration_ms: 5000,
             stop_reason: "completed".to_string(),
         };
@@ -670,7 +629,6 @@ mod tests {
             total_rounds: 0,
             total_tools: 0,
             final_phase: AutonomyPhase::Planning,
-            rounds: vec![],
             total_duration_ms: 0,
             stop_reason: "initial".to_string(),
         };
@@ -688,7 +646,6 @@ mod tests {
                 total_rounds: 0,
                 total_tools: 0,
                 final_phase: AutonomyPhase::Failed,
-                rounds: vec![],
                 total_duration_ms: 0,
                 stop_reason: "no_response".to_string(),
             },
@@ -699,31 +656,11 @@ mod tests {
     }
 
     #[test]
-    fn round_constructs_with_minimal_fields() {
-        let round_record = AutonomyRound {
-            round_index: 1,
-            phase: AutonomyPhase::Executing,
-            tools_executed: vec!["read_file".to_string()],
-            planner_guided: false,
-            duration_ms: 100,
-            error: None,
-            round_start_offset_ms: 10,
-            retry_count: 0,
-            round_stop_reason: "completed".to_string(),
-            agent_switched: false,
-            agent_switch_reason: None,
-            trace: vec![],
-        };
-        assert_eq!(round_record.round_index, 1);
-    }
-
-    #[test]
     fn contract_snapshot_includes_key_metrics() {
         let report = AutonomyLoopReport {
             total_rounds: 2,
             total_tools: 5,
             final_phase: AutonomyPhase::Completed,
-            rounds: vec![],
             total_duration_ms: 3000,
             stop_reason: "completed".to_string(),
         };

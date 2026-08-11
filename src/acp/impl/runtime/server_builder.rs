@@ -364,7 +364,6 @@ pub async fn new_acp_server(
     server.cache_deps.autotune_state_path = autotune_state_path;
     server.config_path = config_path;
     server.runtime_config = runtime_config;
-    server.verbose = false;
     server.governance_deps.harness_bus = Some(harness_bus);
     server.governance_deps.capability_bus = Some(capability_bus);
     server.governance_deps.provenance_ledger = Some(provenance_ledger);

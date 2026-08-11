@@ -41,7 +41,7 @@ mode = "acp_http"  # 服务器部署的 HTTP 模式
 acp_http_bind_addr = "0.0.0.0:8090"  # 绑定到所有接口
 production_strict = true
 entry_auth_enabled = true
-entry_auth_api_key_env = "GO_ON_SERVER_API_KEY"
+entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 1000
 entry_rate_limit_burst = 200
 
@@ -97,7 +97,7 @@ Type=simple
 User=go-on
 Group=go-on
 WorkingDirectory=/opt/go-on
-Environment="GO_ON_SERVER_API_KEY=your-api-key-here"
+Environment="GO_ON_ENTRY_API_KEY=your-api-key-here"
 Environment="RUST_LOG=info"
 ExecStart=/opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
 Restart=on-failure
@@ -163,7 +163,7 @@ sudo journalctl -u go-on -f
 sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
 
 # 带环境变量
-GO_ON_SERVER_API_KEY="your-key" sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
+GO_ON_ENTRY_API_KEY="your-key" sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
 ```
 
 ### 健康和监控
@@ -277,7 +277,7 @@ df -h /var/lib/go-on
 ### API 密钥管理
 ```bash
 # 在环境中设置 API 密钥
-export GO_ON_SERVER_API_KEY="secure-random-key-here"
+export GO_ON_ENTRY_API_KEY="secure-random-key-here"
 
 # 或使用密钥环
 keyring set go-on server-api-key
@@ -298,7 +298,7 @@ CORS 与入口认证在 `[runtime]` 中配置：
 ```toml
 [runtime]
 entry_auth_enabled = true
-entry_auth_api_key_env = "GO_ON_SERVER_API_KEY"
+entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 cors_allowed_origins = ["https://your-domain.com"]
 ```
 

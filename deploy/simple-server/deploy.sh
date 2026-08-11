@@ -63,7 +63,7 @@ fi
 if [ ! -f "${INSTALL_DIR}/backend/environment" ]; then
   echo "ERROR: Environment file not found at ${INSTALL_DIR}/backend/environment"
   echo "Create it manually with the required variables:"
-  echo "  GO_ON_SERVER_API_KEY=<your-api-key>"
+  echo "  GO_ON_ENTRY_API_KEY=<your-api-key>"
   exit 1
 else
   echo "Environment file exists — keeping existing."

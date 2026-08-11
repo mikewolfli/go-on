@@ -91,8 +91,9 @@ fn parse_tool_list(result: Value) -> Vec<McpClientTool> {
 pub struct McpClientConfig {
     /// Per-request timeout (default 60s).
     pub request_timeout: Duration,
-    /// Maximum protocol-version handshake time (default 10s).
-    #[doc(hidden)]
+    /// Maximum protocol-version handshake time (default 10s). Exposed to
+    /// `mcp.client.connect` callers via the optional `init_timeout_ms` param
+    /// (see `build_client_config` in `mcp_client_pack.rs`).
     pub init_timeout: Duration,
 }
 

@@ -77,7 +77,7 @@ cargo run -- --protocol-mode mcp_stdio
 ## 核心功能
 
 ### 智能体编排
-- **5 种对话模式** — Ask（流式对话）、Plan（仅生成计划大纲）、Edit（迭代编辑+高风险审查）、SafeGuard（风险评分自动降级）、FullAuto（全自动+记忆+验证）
+- **5 种对话模式** — Ask（流式对话）、Plan（仅生成计划大纲）、Edit（迭代编辑+高风险审查）、SafeGuard（风险评分门控+人工确认）、FullAuto（全自动+记忆+验证）
 - **自治循环** — 规划 → 执行 → 反思 → 重规划，迭代次数根据复杂度自适应调整
 - **子代理监控** — GUI 中通过 SSE 面板实时显示子代理执行和命令输出
 - **DAG 任务执行** — Kahn 拓扑排序、依赖边、并行组执行、循环检测
@@ -275,7 +275,7 @@ npm run compile
 | 内置工具数量 | 60+ |
 | AI 供应商数量 | 37 |
 | 技能市场数量 | 34 |
-| 单元测试数量 | ~1.7K（1537 lib + 151 集成声明，见下方验证状态）|
+| 单元测试数量 | ~1.7K（1623 lib + 151 集成声明，见下方验证状态）|
 | 三语国际化覆盖 | en / zh-CN / zh-TW（约 95%）|
 
 ## 构建配置
@@ -305,6 +305,8 @@ cargo build --no-default-features --features full
 | `full` | ✅ **零警告** | ✅ **全部通过** |
 
 所有 4 种构建配置零 clippy 警告通过。最近一次完整 `cargo test --all-targets` 运行全部通过、零失败（最新计数见 `CHANGELOG.md` 最新一节）。GUI 和 VS Code 插件同样零错误编译通过。
+
+上方测试数为声明口径：`src/` 下的 `#[test]` / `#[tokio::test...]` 属性为 lib 声明数；`tests/` 下（含 `tests/structural/` 子模块）为集成声明数（不含 `chaos-testing` 特性门控的 `chaos_drill` 套件）。
 
 ---
 

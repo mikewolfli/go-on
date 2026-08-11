@@ -67,6 +67,16 @@ impl OrchestrationCouncil {
     /// (quorum/consensus.rs) never ejected anyone and the reputation
     /// voting-power boost (agent_selector.rs, `total_votes >= 3`) never
     /// engaged.
+    ///
+    /// Current status: production does NOT call this method. The only
+    /// deliberation path that reaches the council (`council_deliberation.rs`,
+    /// `run_council_route_deliberation`) casts self-endorsement ballots and
+    /// deliberately skips `record_outcome` — recording outcomes there would
+    /// let each member's own prior reputation ranking manufacture accuracy
+    /// (a self-reinforcing pseudo-signal). Reputation therefore stays at its
+    /// seeded state and the voting-power boost / auto-ejection remain dormant
+    /// until a real, non-self-endorsement ballot path exists. Kept as the
+    /// correct hook for that future path.
     pub fn record_outcome(&self, proposal_id: &str, winning_option: Option<&str>) {
         let votes = self.votes.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("council votes lock poisoned, recovering");

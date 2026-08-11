@@ -61,6 +61,11 @@ pub struct TokenIntrospectResult {
 pub struct SessionManagerInner {
     /// Active sessions keyed by token string.
     pub sessions: HashMap<String, UserSession>,
+    /// Revocation blacklist: token string → its original `expires_at_ms`.
+    /// Revoked tokens are rejected by `validate_token` even when no matching
+    /// entry exists in `sessions` — auto-provisioned tokens never enter the
+    /// map, so a plain map removal would be a silent no-op for them.
+    pub revoked: HashMap<String, i64>,
     /// HMAC secret used for token signing and verification.
     pub token_secret: String,
 }
@@ -100,6 +105,12 @@ impl From<&RuntimeConfig> for AuthConfig {
             user_auth_enabled: cfg.user_auth_enabled,
             user_auth_token_secret: secret,
             user_auth_token_ttl_seconds: cfg.user_auth_token_ttl_seconds,
+            // Deliberately constant `true`: production has no token-issuing
+            // endpoint (`issue_token` is test-only), so auto-provision is
+            // what lets externally pre-signed tokens (per the documented
+            // `user_id:hmac:expires_at_ms` format) authenticate with
+            // role=user. To disable, construct `AuthConfig` directly instead
+            // of via `From<&RuntimeConfig>`.
             user_auth_auto_provision: true,
         }
     }
@@ -108,6 +119,20 @@ impl From<&RuntimeConfig> for AuthConfig {
 // ---------------------------------------------------------------------------
 // Session manager
 // ---------------------------------------------------------------------------
+
+/// Parse the expiry (epoch milliseconds) out of a signed token string
+/// (`user_id:base64_hmac:expires_at_ms`). Returns `None` for malformed tokens
+/// (mirrors the shape checks in `validate_token`).
+fn parse_token_expiry(token: &str) -> Option<i64> {
+    let mut parts = token.split(':');
+    parts.next()?; // user_id
+    parts.next()?; // signature
+    let expires = parts.next()?;
+    if parts.next().is_some() {
+        return None; // more than the expected 3 parts
+    }
+    expires.parse().ok()
+}
 
 /// Manages user sessions: token issuance, validation, revocation, and
 /// periodic cleanup of expired entries.
@@ -124,6 +149,7 @@ impl SessionManager {
     pub fn new(token_secret: String) -> Self {
         let inner = SessionManagerInner {
             sessions: HashMap::new(),
+            revoked: HashMap::new(),
             token_secret,
         };
         Self {
@@ -137,6 +163,7 @@ impl SessionManager {
         let secret = auth_cfg.user_auth_token_secret.clone();
         let inner = SessionManagerInner {
             sessions: HashMap::new(),
+            revoked: HashMap::new(),
             token_secret: secret,
         };
         Self {
@@ -221,20 +248,45 @@ impl SessionManager {
 
     /// Revoke **all** sessions belonging to a user.
     ///
+    /// Every revoked token is also recorded on the revocation blacklist (see
+    /// [`Self::revoke_session`]).
+    ///
     /// Returns `true` if at least one session was removed.
     pub fn revoke_token(&self, user_id: &str) -> bool {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let before = inner.sessions.len();
-        inner.sessions.retain(|_, s| s.user_id != user_id);
+        // Collect revoked entries first to avoid borrowing `inner` mutably
+        // while iterating its `sessions` field.
+        let revoked: Vec<(String, i64)> = inner
+            .sessions
+            .iter()
+            .filter(|(_, s)| s.user_id == user_id)
+            .map(|(token, s)| (token.clone(), s.expires_at))
+            .collect();
+        for (token, expires_at) in revoked {
+            inner.revoked.insert(token.clone(), expires_at);
+            inner.sessions.remove(&token);
+        }
         inner.sessions.len() < before
     }
 
     /// Revoke a single session identified by its token string.
     ///
-    /// Returns `true` if the session existed and was removed.
+    /// The token is recorded on a revocation blacklist so validation rejects
+    /// it even when no matching `sessions` entry exists — auto-provisioned
+    /// tokens never enter the map, so a plain map removal would be a silent
+    /// no-op for them.
+    ///
+    /// Returns `true` whenever the revocation was recorded, even if the token
+    /// was not present in the sessions map.
     pub fn revoke_session(&self, token: &str) -> bool {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        inner.sessions.remove(token).is_some()
+        let expires_at = parse_token_expiry(token)
+            .or_else(|| inner.sessions.get(token).map(|s| s.expires_at))
+            .unwrap_or(0);
+        inner.revoked.insert(token.to_string(), expires_at);
+        inner.sessions.remove(token);
+        true
     }
 
     /// Validate a token by parsing its components, verifying the HMAC
@@ -274,9 +326,18 @@ impl SessionManager {
             };
         }
 
-        // Verify HMAC signature with constant-time comparison to prevent
-        // timing side-channel attacks on token validation.
+        // Reject tokens on the revocation blacklist (`revoke_session` /
+        // `revoke_token`). Checked before HMAC verification: blacklisted
+        // tokens are rejected unconditionally, and the lookup is cheaper
+        // than re-verifying the signature.
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        if inner.revoked.contains_key(token) {
+            return TokenIntrospectResult {
+                valid: false,
+                session: None,
+                reason: Some("token revoked".into()),
+            };
+        }
         let secret = &inner.token_secret;
         let payload = format!("{}:{}", user_id, expires_at_str);
         let expected_sig = hmac_sha256_b64(secret.as_bytes(), payload.as_bytes());
@@ -333,61 +394,55 @@ impl SessionManager {
     /// 1. Bearer token (`Authorization: Bearer <token>`)
     /// 2. API Key (`X-API-Key: <key>` or `x-api-key: <key>`)
     /// 3. Session cookie (`Cookie: session=<token>`)
+    ///
+    /// Header-name matching is case-insensitive via the shared
+    /// `runtime::protocol::extract_header_values` parser (same helper as the
+    /// entry-auth guard), so `AUTHORIZATION:`/`Authorization:`/`authorization:`
+    /// are all recognized.
     pub fn extract_user_from_request(&self, headers: &str) -> Option<UserSession> {
-        // Collect all potential tokens from headers
+        use crate::acp::r#impl::runtime::protocol::extract_header_values;
+
+        // Collect all potential tokens from headers.
         let mut tokens: Vec<String> = Vec::new();
 
-        for line in headers.lines() {
-            let trimmed = line.trim();
+        // Method 1: Bearer token.
+        for auth in extract_header_values(headers, "authorization") {
+            let (scheme, rest) = auth
+                .split_once(char::is_whitespace)
+                .unwrap_or(("", auth.as_str()));
+            if scheme.eq_ignore_ascii_case("bearer") {
+                let token = rest.trim();
+                if !token.is_empty() {
+                    tokens.push(token.to_string());
+                }
+            }
+        }
 
-            // Method 1: Bearer token
-            if let Some(token) = trimmed
-                .strip_prefix("Authorization:")
-                .or_else(|| trimmed.strip_prefix("authorization:"))
-            {
-                let token = token.trim();
-                if let Some(bearer_token) = token
-                    .strip_prefix("Bearer ")
-                    .or_else(|| token.strip_prefix("bearer "))
+        // Method 2: API Key header.
+        for key in extract_header_values(headers, "x-api-key") {
+            let api_key = key.trim();
+            if !api_key.is_empty() {
+                tokens.push(api_key.to_string());
+            }
+        }
+
+        // Method 3: Session cookie.
+        for cookie in extract_header_values(headers, "cookie") {
+            for cookie_part in cookie.split(';') {
+                let kv = cookie_part.trim();
+                if let Some(session_val) = kv
+                    .strip_prefix("session=")
+                    .or_else(|| kv.strip_prefix("Session="))
                 {
-                    tokens.push(bearer_token.to_string());
-                    continue;
-                }
-            }
-
-            // Method 2: API Key header
-            if let Some(key_val) = trimmed
-                .strip_prefix("X-API-Key:")
-                .or_else(|| trimmed.strip_prefix("x-api-key:"))
-            {
-                let api_key = key_val.trim().to_string();
-                if !api_key.is_empty() {
-                    tokens.push(api_key);
-                    continue;
-                }
-            }
-
-            // Method 3: Session cookie
-            if let Some(cookie_val) = trimmed
-                .strip_prefix("Cookie:")
-                .or_else(|| trimmed.strip_prefix("cookie:"))
-            {
-                for cookie_part in cookie_val.split(';') {
-                    let kv = cookie_part.trim();
-                    if let Some(session_val) = kv
-                        .strip_prefix("session=")
-                        .or_else(|| kv.strip_prefix("Session="))
-                    {
-                        if !session_val.is_empty() {
-                            tokens.push(session_val.to_string());
-                            break;
-                        }
+                    if !session_val.is_empty() {
+                        tokens.push(session_val.to_string());
+                        break;
                     }
                 }
             }
         }
 
-        // Try each token in order until one authenticates successfully
+        // Try each token in order until one authenticates successfully.
         for token in &tokens {
             let result = self.authenticate(token);
             if result.valid {
@@ -398,12 +453,14 @@ impl SessionManager {
         None
     }
 
-    /// Remove all sessions that have expired.
+    /// Remove all sessions that have expired, and prune revocation
+    /// blacklist entries whose original expiry has passed.
     pub fn cleanup_expired(&self) -> usize {
         let now = now_ms();
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let before = inner.sessions.len();
         inner.sessions.retain(|_, s| s.expires_at > now);
+        inner.revoked.retain(|_, expires_at| *expires_at > now);
         before - inner.sessions.len()
     }
 
@@ -614,14 +671,76 @@ mod tests {
         let token = mgr
             .issue_token("grace", &["user"], None, 3600)
             .expect("should issue token for grace");
-        assert!(mgr.revoke_session(&token), "should remove the session");
+        assert!(mgr.revoke_session(&token), "should record the revocation");
+        // Revocation is recorded unconditionally (even for tokens no longer
+        // in the sessions map), so re-revoking still reports `true`.
         assert!(
-            !mgr.revoke_session(&token),
-            "second removal should return false"
+            mgr.revoke_session(&token),
+            "revocation is recorded regardless of map membership"
         );
 
         let inner = mgr.inner.read().expect("should acquire read lock");
         assert!(!inner.sessions.contains_key(&token));
+        assert!(inner.revoked.contains_key(&token));
+        drop(inner);
+
+        // The revoked token must now fail validation.
+        let result = mgr.validate_token(&token);
+        assert!(!result.valid, "revoked token should be rejected");
+        assert_eq!(result.reason.unwrap_or_default(), "token revoked");
+    }
+
+    // ------------------------------------------------------------------
+    // Revocation blacklist (P1 token lifecycle)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_revoked_auto_provisioned_token_rejected() {
+        let mgr = test_manager();
+
+        // Simulate an externally pre-signed token (auto-provision path): the
+        // token never enters the `sessions` map, so revocation must land on
+        // the blacklist for validation to reject it.
+        let token = mgr
+            .build_token("mallory", now_ms() + 3_600_000)
+            .expect("should build token");
+        assert!(
+            mgr.revoke_session(&token),
+            "revoking a non-cached token still records the revocation"
+        );
+
+        let result = mgr.authenticate(&token);
+        assert!(!result.valid, "revoked token must not authenticate");
+        assert!(result
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("revoked"));
+    }
+
+    #[test]
+    fn test_cleanup_prunes_expired_revoked_entries() {
+        let mgr = test_manager();
+
+        // 1-second TTL so the blacklist entry expires quickly.
+        let token = mgr
+            .issue_token("nadia", &["user"], None, 1)
+            .expect("should issue token");
+        assert!(mgr.revoke_session(&token));
+
+        // Still within TTL: the revocation must hold.
+        let result = mgr.validate_token(&token);
+        assert!(!result.valid, "revoked token should be rejected");
+        assert_eq!(result.reason.unwrap_or_default(), "token revoked");
+
+        thread::sleep(Duration::from_millis(1100));
+        let _removed = mgr.cleanup_expired();
+
+        let inner = mgr.inner.read().expect("should acquire read lock");
+        assert!(
+            !inner.revoked.contains_key(&token),
+            "expired blacklist entries should be pruned"
+        );
     }
 
     // ------------------------------------------------------------------

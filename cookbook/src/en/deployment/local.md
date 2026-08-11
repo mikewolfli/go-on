@@ -25,24 +25,28 @@ Local Mode Storage:
 ## Configuration
 
 ### Default Configuration
-Local mode uses `config/config.toml` as the default configuration; the block
-below mirrors its current contents (paths use the `sqlite3/` subdirectory and
-the protocol mode is `adaptive`):
+Local mode uses `config/config.toml` as the default configuration. The block
+below is a trimmed excerpt of the top-level, `[cache]`, `[vector]`, `[runtime]`,
+and OpenTelemetry keys (paths use the `sqlite3/` subdirectory and the protocol
+mode is `adaptive`); `[agents]`, `[flow]`, `[phases.*]`, and `[startup_context]`
+are omitted for brevity — see `config/config.toml` for the full file:
 
 ```toml
-# config/config.toml (local default)
+# config/config.toml (local default; trimmed excerpt)
 schema_version = "1.0.0"
 default_phase = "think"
 model_selection_mode = "adaptive"
 
-[protocol]
-mode = "adaptive"
+# Root-level governance flags (via #[serde(flatten)])
+governance_enabled = true
+governance_policy_mode = "advisory"
 
 [cache]
 enabled = true
 path = "sqlite3/acp_cache.sqlite3"
 default_ttl_seconds = 1800
 max_entries = 2000
+persist_enabled = true
 
 [vector]
 enabled = true
@@ -58,23 +62,35 @@ summary_trigger_messages = 4
 summary_max_chars = 800
 
 [runtime]
+deployment_target = "local-dev"
 acp_http_bind_addr = "127.0.0.1:8090"
 maintenance_interval_seconds = 60
 health_interval_seconds = 120
 shutdown_drain_seconds = 30
 entry_auth_enabled = false
+entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 240
 entry_rate_limit_burst = 60
+production_strict = false
 i18n_default_language = "en-US"
-governance_enabled = true
-governance_policy_mode = "advisory"
 skills_enabled = true
+skills_import_enabled = false
+skills_allowed_sources = ["local:*"]
+skills_require_sha256 = true
+skills_allow_floating_ref = false
 skills_cache_dir = "skills_cache"
 
 # OpenTelemetry
 otel_enabled = true
 otel_exporter = "otlp"
 otel_endpoint = "http://localhost:4317"
+otel_service_name = "go-on-local"
+otel_sample_ratio = 1.0
+trace_slow_top_n = 20
+evolution_enabled = false
+
+[protocol]
+mode = "adaptive"
 ```
 
 ### Feature Flags

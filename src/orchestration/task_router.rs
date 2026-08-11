@@ -8,9 +8,8 @@
 //! automatically-selected based on task characteristics.
 
 use crate::pua::{build_enforcement_plan, PuaEnforcementPlan};
-use crate::roles::{role_registry, AgentRole, RoleSpecification, RoleSpecifications};
+use crate::roles::AgentRole;
 use serde::{Deserialize, Serialize};
-use tracing;
 
 /// Task characteristics extracted from request
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,65 +303,6 @@ impl TaskRouter {
             recommended_safeguards,
             pua_enforcement,
         }
-    }
-
-    /// Get role specifications for the selected roles
-    pub fn get_role_specs(roles: &[AgentRole]) -> Vec<RoleSpecification> {
-        roles
-            .iter()
-            .map(|role| match role {
-                AgentRole::Planner => RoleSpecifications::planner(),
-                AgentRole::Researcher => RoleSpecifications::researcher(),
-                AgentRole::Coder => RoleSpecifications::coder(),
-                AgentRole::Tester => RoleSpecifications::tester(),
-                AgentRole::Reviewer => RoleSpecifications::reviewer(),
-                AgentRole::Custom(name) => {
-                    // Try RoleRegistry first; fall back to default coder spec.
-                    // If the registry hasn't been installed yet, fall through to
-                    // the default directly.
-                    if let Some(registry) = role_registry() {
-                        match registry.read() {
-                            Ok(guard) => {
-                                if let Some(def) = guard.get(name) {
-                                    RoleSpecification {
-                                        role: AgentRole::Custom(name.clone()),
-                                        tier: "primary".to_string(),
-                                        allowed_tools: def.allowed_tools.clone(),
-                                        max_tool_calls: def.max_tool_calls,
-                                        token_budget: def.token_budget,
-                                        timeout_seconds: def.timeout_seconds,
-                                    }
-                                } else {
-                                    RoleSpecifications::coder()
-                                }
-                            }
-                            Err(poisoned) => {
-                                tracing::warn!(
-                                    "RoleRegistry lock is poisoned; recovering inner data for custom role '{}'",
-                                    name
-                                );
-                                // Recover the inner guard – the data is still usable.
-                                let guard = poisoned.into_inner();
-                                if let Some(def) = guard.get(name) {
-                                    RoleSpecification {
-                                        role: AgentRole::Custom(name.clone()),
-                                        tier: "primary".to_string(),
-                                        allowed_tools: def.allowed_tools.clone(),
-                                        max_tool_calls: def.max_tool_calls,
-                                        token_budget: def.token_budget,
-                                        timeout_seconds: def.timeout_seconds,
-                                    }
-                                } else {
-                                    RoleSpecifications::coder()
-                                }
-                            }
-                        }
-                    } else {
-                        RoleSpecifications::coder()
-                    }
-                }
-            })
-            .collect()
     }
 
     // ==================== Private Helper Methods ====================

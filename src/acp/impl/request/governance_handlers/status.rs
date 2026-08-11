@@ -132,6 +132,10 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
     .all(|path| std::path::Path::new(path).exists());
     let cloud_native_profile = json!({
         "k8s_manifests_present": k8s_manifests_present,
+        // Constant true: no real health probe is performed here — the /health
+        // endpoint is served by the MCP/ACP HTTP transports, which are
+        // process-level constructs not owned by AcpServer, so there is no
+        // cheap "http server running" state to consult. Reserved field.
         "health_endpoint_ready": true,
         "health_path": "/health",
         "mtls_enabled": server.runtime_config.mtls_enabled,
@@ -1279,6 +1283,27 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
         recommendations.push("Governance baseline is within expected parameters");
     }
 
+    // Real SelfRationalizationGuard counters, read from the HarnessBus
+    // evaluator (the guard is constructed together with the bus). The previous
+    // values were proxy semantics — `pua_learning.len()` (PUA feedback records,
+    // not guard events) and `recent_failed` (failed PUA records) — and reported
+    // numbers unrelated to the guard's actual trigger counts.
+    let (reexamine_triggered_count, weak_evidence_blocked_count) = server
+        .governance_deps
+        .harness_bus
+        .as_ref()
+        .map(|hb| {
+            let guard = hb.evaluator.guard.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("[harness_bus] lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            (
+                guard.counters.reexamine_triggered_count,
+                guard.counters.weak_evidence_blocked_count,
+            )
+        })
+        .unwrap_or((0, 0));
+
     Ok(json!({
         "ok": true,
         "governance": {
@@ -1363,8 +1388,8 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
             "self_rationalization_guard": {
                 "ready": compliance_audit_metadata_ready,
                 "self_rationalization_guard_profile": {
-                    "reexamine_triggered_count": pua_learning.len(),
-                    "weak_evidence_blocked_count": recent_failed,
+                    "reexamine_triggered_count": reexamine_triggered_count,
+                    "weak_evidence_blocked_count": weak_evidence_blocked_count,
                 },
             },
             "startup_context_loader": startup_context_profile,

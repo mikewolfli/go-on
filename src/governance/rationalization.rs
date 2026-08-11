@@ -2,13 +2,21 @@
 //!
 //! S4: Self-Rationalization Guard
 //!
-//! Detects low-confidence outputs with weak evidence and flags them for re-examination.
-//! In full_auto mode, blocks and triggers a single re-question cycle (token-budget controlled).
+//! Detects low-confidence outputs with weak evidence and flags them for
+//! re-examination. Weak-evidence detection: when the caller-supplied confidence
+//! is below [`SelfRationalizationGuard::confidence_threshold`] and the
+//! annotation carries no evidence references, the guard flags the assumptions
+//! and returns `true` — the caller then decides whether to block the output or
+//! weight it down.
 //!
 //! # Status
-//! Fully wired. `SelfRationalizationGuard` is actively called from four locations:
-//! `PolicyEvaluator` (P1-11), `HarnessBus`, `init_intelligence_hub` in the intelligence hub,
-//! and `RationalizationGuardVoter` in the voting subsystem.
+//! Fully wired. `SelfRationalizationGuard::evaluate()` is actively called from
+//! three locations: `PolicyEvaluator::evaluate` (step 6 of the pre-route
+//! composite evaluation) and `PolicyEvaluator::verify_output` (P1-11), both in
+//! `src/governance/harness_bus/evaluator.rs`, plus `rationalize_decision` in
+//! the intelligence hub (`src/intelligence/hub.rs`).
+//! (`RationalizationGuardVoter` in the voting subsystem only reads
+//! `confidence_threshold` and does not call `evaluate`.)
 
 use serde::{Deserialize, Serialize};
 
@@ -57,12 +65,15 @@ impl SelfRationalizationGuard {
     }
 
     /// Evaluate annotation at the given confidence level.
-    /// Returns true if the output should be blocked (full_auto re-question).
+    ///
+    /// Returns `true` when weak evidence was detected (confidence below the
+    /// threshold with no evidence refs); the caller decides whether to block
+    /// the output or weight it down. Mutates the annotation in place:
+    /// weak-evidence flags are populated and `reexamine_triggered` is set.
     pub fn evaluate(
         &mut self,
         annotation: &mut RationalizationAnnotation,
         confidence: f32,
-        is_full_auto: bool,
     ) -> bool {
         // Flag assumptions without evidence support
         if confidence < self.confidence_threshold && annotation.evidence_refs.is_empty() {
@@ -83,14 +94,19 @@ impl SelfRationalizationGuard {
             return false;
         }
 
-        if is_full_auto {
-            annotation.reexamine_triggered = true;
-            self.counters.reexamine_triggered_count += 1;
-            self.counters.weak_evidence_blocked_count += 1;
-            return true;
-        }
-
-        false
+        // Weak evidence detected: record the trigger and tell the caller the
+        // output should be intercepted / weighted down. (The former
+        // `is_full_auto` parameter was removed — every production call site
+        // passed `false`, so the branch was dead and evaluate() always
+        // returned false. Blocking vs. weighting is now the caller's call.)
+        //
+        // NOTE on the counters: both count *weak-evidence trigger events*, not
+        // hard blocks — the caller may only weight the output down (e.g.
+        // `verify_output` risk +0.2) instead of blocking it.
+        annotation.reexamine_triggered = true;
+        self.counters.reexamine_triggered_count += 1;
+        self.counters.weak_evidence_blocked_count += 1;
+        true
     }
 
     pub fn governance_profile(&self, enabled: bool) -> serde_json::Value {

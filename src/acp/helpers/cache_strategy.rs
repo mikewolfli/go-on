@@ -114,12 +114,24 @@ impl CacheStrategy {
 // ── Backward-compatible wrappers used by process_chat_request ──────────
 
 pub(crate) fn should_bypass_for_execution(mode: &str, messages: &[Message]) -> bool {
-    let text: String = messages
+    // Scope the hint scan to USER messages only. Injected system/metadata
+    // content — startup context (whose summary contains a literal
+    // "**Build:** <commands>" line), skill instructions, vector/memory recall
+    // — is context, not user intent. Scanning it made the execution hints
+    // match on virtually every request in a detected project (e.g. the word
+    // "build" in the startup summary), which permanently bypassed the token
+    // & semantic caches in production. User messages carry the intent, so
+    // scoping the scan to them is strictly more accurate: cache hits that
+    // were previously suppressed by metadata now serve, while genuine
+    // execution requests (mode in the exec set, or execution hints in the
+    // user text) still bypass.
+    let user_text: String = messages
         .iter()
+        .filter(|m| m.role == "user")
         .map(|m| m.content.as_str())
         .collect::<Vec<_>>()
         .join(" ");
-    CacheStrategy::should_bypass(mode, &text)
+    CacheStrategy::should_bypass(mode, &user_text)
 }
 
 pub(crate) fn store_async(
@@ -225,6 +237,44 @@ mod tests {
     fn should_not_bypass_for_informational_queries() {
         assert!(!CacheStrategy::should_bypass("chat", "what is the weather"));
         assert!(!CacheStrategy::should_bypass("chat", "explain recursion"));
+    }
+
+    #[test]
+    fn should_bypass_for_execution_scans_user_messages_only() {
+        // Injected system/metadata (e.g. the startup-context "**Build:**"
+        // line) must NOT trigger the execution-like bypass — it is context,
+        // not intent. Previously this permanently disabled the caches in
+        // detected projects.
+        let with_metadata = vec![
+            crate::agent::Message {
+                role: "system".to_string(),
+                content: "[startup context]\n**Build:** cargo build, cargo test".to_string(),
+            },
+            crate::agent::Message {
+                role: "user".to_string(),
+                content: "what does this README say?".to_string(),
+            },
+        ];
+        assert!(
+            !should_bypass_for_execution("chat", &with_metadata),
+            "system metadata must not trigger the execution bypass"
+        );
+
+        // …but a user message carrying execution intent still bypasses.
+        let exec_intent = vec![
+            crate::agent::Message {
+                role: "system".to_string(),
+                content: "[startup context]\n**Build:** cargo build".to_string(),
+            },
+            crate::agent::Message {
+                role: "user".to_string(),
+                content: "implement a login form".to_string(),
+            },
+        ];
+        assert!(
+            should_bypass_for_execution("chat", &exec_intent),
+            "user execution intent must still bypass"
+        );
     }
 
     #[test]

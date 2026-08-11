@@ -82,8 +82,8 @@ FullAuto   (50)    ▅ Maximum - fully automatic, no approvals needed
 | **Approval at Rollback** | ✅ Yes | ❌ No |
 | **Auto Read Files** | ✅ Yes | ✅ Yes |
 | **Auto Search Code** | ✅ Yes | ✅ Yes |
-| **Auto Apply Patches** | ✅ Yes | ✅ Yes |
-| **Auto Run Tests** | ✅ Yes | ✅ Yes |
+| **Auto Apply Patches** | ❌ No (read-only tool surface by default; `allowed_tools()` returns `read_only_tools()`, enforced in the CLI path) | ✅ Yes |
+| **Auto Run Tests** | ❌ No (same read-only surface) | ✅ Yes |
 | **Scope** | Restricted | Full |
 | **Best For** | Safety-conscious automation | Complete trust scenarios |
 
@@ -95,7 +95,7 @@ Approval postures below are the defaults from `mode.rs::default_posture_for`
 
 | Feature | Ask | Plan | Edit | FullAuto | SafeGuard |
 |---------|-----|------|------|----------|-----------|
-| Auto Execution | No | No (read-only) | No | Yes | Yes |
+| Auto Execution | No | No (read-only) | No | Yes | Yes (read-only tool surface; mutations require approval) |
 | Approval Posture | auto | never (read-only) | suggest | auto | suggest |
 | Max Tool Calls | 0 | 3 | 20 | 50 | 30 |
 | Risk Detection | N/A | N/A | Basic | None | Advanced |

@@ -279,7 +279,13 @@ impl PolicyEvaluator {
                 poisoned.into_inner()
             });
             let mut annotation = RationalizationAnnotation::default();
-            guard.evaluate(&mut annotation, ctx.risk_score as f32, false)
+            // Semantic fix: the guard's `confidence` input was fed `risk_score`
+            // directly, inverting the meaning — low-risk tasks (low score) fell
+            // below the 0.6 threshold and got blocked, while high-risk tasks
+            // passed. Confidence is the complement of risk: high risk ⇒ low
+            // confidence ⇒ weak-evidence flag fires (the "low confidence check"
+            // the guard is documented to be).
+            guard.evaluate(&mut annotation, 1.0 - ctx.risk_score as f32)
         };
         if guard_blocked {
             self.rationalization_block_occurred
@@ -631,7 +637,13 @@ impl PolicyEvaluator {
                 poisoned.into_inner()
             });
             let mut annotation = RationalizationAnnotation::default();
-            let low_confidence = guard.evaluate(&mut annotation, risk_score as f32, false);
+            // Semantic fix: `risk_score` was passed as `confidence`, so a
+            // quality=true output (risk 0.0) read as confidence 0.0 and was
+            // always flagged as weak evidence, while quality=false outputs
+            // (risk 0.5) landed exactly on the 0.6 boundary. Confidence is the
+            // complement of risk, so 1 - risk: good outputs pass, bad outputs
+            // (risk 0.5 ⇒ confidence 0.5 < 0.6) get the weak-evidence warning.
+            let low_confidence = guard.evaluate(&mut annotation, 1.0 - risk_score as f32);
             if low_confidence {
                 risk_score = f64::min(risk_score + 0.2, 1.0);
                 evidence.push("low_confidence_warning: guard flagged weak evidence".to_string());

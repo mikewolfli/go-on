@@ -94,7 +94,10 @@ pub struct SemanticResponseCache {
     config: SemanticCacheConfig,
     total_hits: AtomicU64,
     total_misses: AtomicU64,
-    expired_count: AtomicU64,
+    // Arc so the background cleanup task shares the counter with the live
+    // cache and keeps `expired_count` accurate (purge logic is shared with
+    // `purge_expired` via `purge_expired_entries`).
+    expired_count: Arc<AtomicU64>,
 }
 
 impl SemanticResponseCache {
@@ -104,7 +107,7 @@ impl SemanticResponseCache {
             config,
             total_hits: AtomicU64::new(0),
             total_misses: AtomicU64::new(0),
-            expired_count: AtomicU64::new(0),
+            expired_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -252,21 +255,7 @@ impl SemanticResponseCache {
 
     /// Remove all expired entries and return the number removed.
     pub fn purge_expired(&self) -> usize {
-        let now = Instant::now();
-        let mut guard = self
-            .entries
-            .write()
-            .expect("SemanticCache entries poisoned");
-        let mut removed = 0usize;
-        guard.retain(|_, bucket| {
-            let before = bucket.len();
-            bucket.retain(|e| now.duration_since(e.created_at) < e.ttl);
-            removed += before - bucket.len();
-            !bucket.is_empty()
-        });
-        self.expired_count
-            .fetch_add(removed as u64, Ordering::Relaxed);
-        removed
+        purge_expired_entries(&self.entries, &self.expired_count)
     }
 
     /// Total number of live (non-expired) entries.
@@ -322,25 +311,26 @@ impl SemanticResponseCache {
         let token_clone = token.clone();
         let interval = self.config.background_cleanup_interval;
 
-        // Clone the Arc so the background task shares the same entries map.
+        // Clone the Arcs so the background task shares the same entries map and
+        // counter (the task runs `purge_expired` on the live cache).
         let entries = self.entries.clone();
+        let expired_count = self.expired_count.clone();
 
         tokio::spawn(async move {
             let mut interval_timer = tokio::time::interval(interval);
             loop {
                 tokio::select! {
                     _ = interval_timer.tick() => {
-                        let cache = entries.clone();
+                        let entries = entries.clone();
+                        let expired_count = expired_count.clone();
                         // Use spawn_blocking to avoid blocking the async runtime
-                        // with the std::sync::RwLock write lock.
+                        // with the std::sync::RwLock write lock. Reuses the
+                        // exact same purge logic as `purge_expired()` (single
+                        // implementation) so the background cleanup also keeps
+                        // `expired_count` accurate — the old inline retain
+                        // copy silently dropped the expired accounting.
                         tokio::task::spawn_blocking(move || {
-                            let now = Instant::now();
-                            if let Ok(mut guard) = cache.write() {
-                                for bucket in guard.values_mut() {
-                                    bucket.retain(|e| now.duration_since(e.created_at) < e.ttl);
-                                }
-                                guard.retain(|_, bucket| !bucket.is_empty());
-                            }
+                            purge_expired_entries(&entries, &expired_count);
                         })
                         .await
                         .ok();
@@ -356,6 +346,26 @@ impl SemanticResponseCache {
         // or the process exits (no stop method is exposed).
         token
     }
+}
+
+/// Shared purge implementation used by both `purge_expired()` and the
+/// background cleanup task: removes expired entries from `entries` and accounts
+/// for them in `expired_count`. Returns the number removed.
+fn purge_expired_entries(
+    entries: &RwLock<HashMap<u64, Vec<CacheEntry>>>,
+    expired_count: &AtomicU64,
+) -> usize {
+    let now = Instant::now();
+    let mut guard = entries.write().expect("SemanticCache entries poisoned");
+    let mut removed = 0usize;
+    guard.retain(|_, bucket| {
+        let before = bucket.len();
+        bucket.retain(|e| now.duration_since(e.created_at) < e.ttl);
+        removed += before - bucket.len();
+        !bucket.is_empty()
+    });
+    expired_count.fetch_add(removed as u64, Ordering::Relaxed);
+    removed
 }
 
 #[derive(Debug, Clone, Serialize)]

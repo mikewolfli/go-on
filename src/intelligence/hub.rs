@@ -470,17 +470,27 @@ pub async fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (
     // Delphi-debate proposal and the rationalization threshold below (they
     // previously maintained two separate keyword sets that disagreed).
     //
-    // RISK-KEYWORD CROSS-REFERENCE (F8): this table is one of three
-    // overlapping keyword sources in the codebase:
-    //   1. this table (rationalization guard / Delphi-debate risk level),
+    // RISK-KEYWORD CROSS-REFERENCE (F8): evaluated — there are six overlapping
+    // keyword sources in the codebase and their semantics are mutually
+    // incompatible (ratio / additive / boolean / weighted-max), so they are NOT
+    // merged; forcing a merge would change behavior:
+    //   1. this table (rationalization guard / Delphi-debate risk level) —
+    //      ratio: matched-keyword count / table size, plain `contains`;
     //   2. `ModeRuntime::compute_risk_score` (src/orchestration/mode.rs) —
-    //      additive scoring with word-boundary matching,
+    //      additive scoring (0.10/0.20/0.30) with word-boundary matching;
     //   3. `TaskRouter::analyze_task().has_safety_concerns`
-    //      (src/orchestration/task_router.rs) — boolean flag.
-    // They intentionally differ in semantics (ratio vs additive vs boolean),
-    // so they are NOT yet merged; keep the tables in sync when adding a risk
-    // keyword. Consolidation direction: extract a single `TaskRiskClassifier`
-    // that both the rationalization guard and mode degradation consume.
+    //      (src/orchestration/task_router.rs) — single boolean flag;
+    //   4. `extract_plan_from_response` (src/orchestration/plan_output.rs) —
+    //      keyword→weight pairs combined with `max()`;
+    //   5. voters (src/intelligence/voter_impls.rs) — per-voter boolean
+    //      presence sets (CapabilityBusVoter security/performance,
+    //      LocalVoter proposal/risk/positive);
+    //   6. `AdversarialVerifier::verify` Security bias
+    //      (src/intelligence/verification.rs) — per-finding anti-pattern
+    //      detectors, not a scoring table.
+    // Unified typed classifier is the consolidation direction, but evaluation
+    // verdict: benefit medium, risk medium — the debt is kept. Until then, keep
+    // the tables in sync when adding a risk keyword.
     let risk_keywords = [
         "delete", "remove", "exec", "shell", "rm", "sudo", "admin", "override", "bypass", "secret",
         "token", "password", "key", "cert", "database", "drop", "truncate", "alter", "grant",
@@ -579,7 +589,10 @@ pub async fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (
         reexamine_triggered: false,
     };
 
-    let blocked = guard.evaluate(&mut annotation, adjusted_confidence as f32, false);
+    // adjusted_confidence is a real confidence score (complement-adjusted for
+    // risk), so it is passed as-is; the removed trailing `false` was the dead
+    // `is_full_auto` parameter of the old evaluate() signature.
+    let blocked = guard.evaluate(&mut annotation, adjusted_confidence as f32);
 
     if blocked || adjusted_confidence < dynamic_threshold {
         let reasons = vec![
@@ -647,7 +660,6 @@ pub fn record_audit_entry(entry: AuditLogEntry) {
 ///
 /// let entry = AuditEntryBuilder::new("task-001", "chat", "allow")
 ///     .agent("agent-a")
-///     .tool("read_file")
 ///     .inputs(serde_json::json!({"input": "test"}))
 ///     .confidence(0.95)
 ///     .build();
@@ -657,15 +669,9 @@ pub struct AuditEntryBuilder {
     phase: String,
     decision: String,
     agent: Option<String>,
-    tool: Option<String>,
     inputs: serde_json::Value,
-    outputs: Option<serde_json::Value>,
     error: Option<String>,
     confidence: Option<f32>,
-    data_classification: Option<String>,
-    compliance_tags: Vec<String>,
-    retention_policy: Option<String>,
-    correlation_id: Option<String>,
 }
 
 impl AuditEntryBuilder {
@@ -676,15 +682,9 @@ impl AuditEntryBuilder {
             phase: phase.to_string(),
             decision: decision.to_string(),
             agent: None,
-            tool: None,
             inputs: serde_json::Value::Null,
-            outputs: None,
             error: None,
             confidence: None,
-            data_classification: None,
-            compliance_tags: vec![],
-            retention_policy: None,
-            correlation_id: None,
         }
     }
 
@@ -725,18 +725,21 @@ impl AuditEntryBuilder {
             task_id: self.task_id,
             phase: self.phase,
             agent: self.agent,
-            tool: self.tool,
+            // tool / outputs / data_classification / compliance_tags /
+            // retention_policy / correlation_id are always None/empty here:
+            // the builder never had setters for them (dead fields removed), and
+            // they are reserved for a future audit-extension pass. `AuditLogEntry`
+            // still carries them, so they are emitted as None / empty vec.
+            tool: None,
             decision: self.decision,
             inputs: serde_json::to_value(self.inputs).unwrap_or_default(),
-            outputs: self
-                .outputs
-                .map(|o| serde_json::to_value(o).unwrap_or_default()),
+            outputs: None,
             error: self.error,
             confidence: self.confidence,
-            data_classification: self.data_classification,
-            compliance_tags: self.compliance_tags,
-            retention_policy: self.retention_policy,
-            correlation_id: self.correlation_id,
+            data_classification: None,
+            compliance_tags: vec![],
+            retention_policy: None,
+            correlation_id: None,
         }
     }
 }

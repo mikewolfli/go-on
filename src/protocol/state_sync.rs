@@ -103,7 +103,6 @@ pub fn subscribe() -> broadcast::Receiver<StateSyncEvent> {
     BROADCASTER.subscribe()
 }
 
-/// Number of active subscribers currently listening.
 #[cfg(test)]
 mod tests {
     use super::*;

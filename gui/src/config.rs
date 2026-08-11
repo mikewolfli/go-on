@@ -86,7 +86,6 @@ impl Default for UiStabilityConfig {
 pub struct EnterpriseConfig {
     pub active_environment: String,
     pub environments: Vec<EnvironmentPreset>,
-    pub secret_source: String,
     pub import_path: String,
     pub export_path: String,
 }
@@ -115,7 +114,6 @@ impl Default for EnterpriseConfig {
                     backend_url: "http://127.0.0.1:29090".to_string(),
                 },
             ],
-            secret_source: "keyring".to_string(),
             import_path: "gui_config.import.json".to_string(),
             export_path: "gui_config.export.json".to_string(),
         }

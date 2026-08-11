@@ -2,6 +2,43 @@
 
 ## [Unreleased] - 2026-08-11
 
+### Round 46 — Super-Deep/Broad Scan XIV: Constant-Path Cleanup & Unified Chains (2026-08-11, docs/log/log-20260811-4.md)
+
+#### P1 correctness
+
+- **Warm-tier memory TTL fixed**: `From<CanonicalEntry>` wrote `accessed_at: 0`, so every warm entry matched the 30-day idle filter immediately and low-usefulness memories were deleted ~10 minutes after creation (intended: 30 days). Now stamped with `now_ts()`; regression test added (`test_bridge_entry_survives_first_auto_migrate_cycle`).
+- **CapabilityBus task classification activated**: `apply_capability_bus_selection` hardcoded `TaskType::Other`, freezing task-fit at 0.60, the recent-outcome target at `"Other"` and the UCB task dimension at `"Other"`. Now classified via the authoritative `TaskRouter::analyze_task` → `pua::TaskType` mapping (5 tests).
+- **Adaptive-selector learning loop keyed**: the capability-bus decision-time ranking read UCB scores keyed by agent name while the exec path recorded keyed by model id — the two value spaces never matched and ranking silently degraded to alphabetical. The exec path now also records an agent-keyed outcome, unifying both consumers.
+- **Session token revocation completed**: `revoke_session` now blacklists any presented token (auto-provisioned sessions never entered the map, so revocation was a no-op); `logout` revokes the presented token from both param auth and HTTP `Authorization`-header auth; `cleanup_expired` prunes the blacklist. `issue_token`/`revoke_token` remain test-only (documented).
+
+#### Constant-path cleanup (this round's focus)
+
+- **PUA method-level red-line guard removed**: `check_red_lines(method)` compared natural-language plan red-lines against ACP method names and could never match — a false safety signal. The live red-line enforcement is `check_tool_call` on tool arguments (tools_pack.rs).
+- **Rationalization guard de-constanted**: removed the always-`false` `is_full_auto` parameter and its dead branch; `evaluate()` now returns the weak-evidence state and the harness call sites pass real confidence (`1.0 - risk`), making the low-confidence review gate and the `verify_output` risk boost live. Counter naming clarified (counts weak-evidence triggers, not hard blocks).
+- **`AutoDegradePolicy` field removed from mode.rs**: `auto_degrade` was always `false` (`new_safeguard` was deprecated/unused), so the ReadOnly auto-degradation tier was unreachable — removed along with `evaluate_degradation`; `safeguard_policy` is now the single source (Block > 0.95 / ConfirmRequired > 0.40 / AllowWithAudit). SafeGuard's read-only tool surface is documented.
+- **`RuntimeConfig.platform_mode` removed**: never consumed by any code (the `governance_pack` `platform_mode` is a per-request RPC param, unrelated); config templates and tests updated.
+- **GUI `secret_source` removed**: the keyring/env/file/auto selector never affected behavior (keys always come from keyring); UI now states keys live only in the OS keyring.
+- **vscode dead settings removed**: `go-on.chat.maxHistory/maxTokens/chat.streaming` and `go-on.ui.fontSize` were declared+displayed but never read; removed from package.json/settings UI/locales (18 dead strings). `--verbose` removed from the addon launch args (the CLI never had the flag).
+- **GUI autotune `aggressive` removed**: sent on every request but consumed by no backend path.
+- **`AutonomyRound`/`rounds` removed**: write-only per-round records with an always-0 `retry_count`; the report keeps the 5 consumed scalars.
+- **`AcpServer.verbose` removed**: always false, zero readers. `health_endpoint_ready` hardcoded-true documented. `McpClientConfig` timeouts exposed via `mcp.client.connect` params. Session notification now carries the real `timeout_secs`.
+- **Dead-call cleanup**: `dispatch.rs` `DispatchOutput::Error` now delegates to the single error choke point (`io::send_error`), fixing a missing `acp.error` platform-context injection on that path; header auth parsing unified into `extract_header_values` (case-insensitive on both ACP/MCP arms); `vector.clear_all` resets the HNSW index (stale hits after clear); semantic-cache background cleanup reuses `purge_expired` (expired_count was undercounted).
+
+#### Deploy / docs / three-ends
+
+- **GUI config generation fixed (P1)**: `generate_backend_config` embedded a UTF-8 BOM (TOML parse failure), duplicated `[protocol]` (split kept the template section), and left `default_phase="think"` outside the injected phases (validator rejection). All three fixed; verified end-to-end with `--validate-config`.
+- **k8s kustomization fixed**: the `configMapGenerator` mapped the ConfigMap YAML as the TOML content (unparseable) — removed (configmap.yaml is already a resource); `.secrets.env` dead `server-api-key` key replaced with `GO_ON_ENTRY_API_KEY`.
+- **`GO_ON_SERVER_API_KEY` fully renamed to `GO_ON_ENTRY_API_KEY`** across config.simple-server.toml, deploy scripts/compose, cookbook (3 languages) — the old name matched no code path.
+- **Docs synchronized**: SafeGuard read-only tool surface (SAFEGUARD_MODE.md/README), zed.md mode fallback (`edit` on the chat path), workflow-config skills defaults, design.md stale CLI args, simple-server sqlite paths, CHANGELOG.zh-CN round ordering, declaration-count口径 in README.
+
+#### Verification
+
+```
+cargo test --lib → 1549 passed / 0 failed / 0 ignored
+cargo clippy --all-targets -D warnings → zero warnings
+4 profiles + GUI + vscode tsc → zero errors; integration suites (151 non-chaos declarations) all pass
+```
+
 ### Round 45 — Super-Deep/Broad Scan XIII: Full-Architecture Unification (2026-08-11, docs/log/log-20260811-3.md)
 
 #### P1 correctness

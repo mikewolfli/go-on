@@ -441,9 +441,6 @@
         "mcp_http": "Force MCP over HTTP"
       }
     },
-    "chatMaxHistory": {
-      "description": "Maximum number of chat messages to keep in history"
-    },
     "chatModel": {
       "description": "Default AI model/provider to use for chat",
       "enumDescriptions": {
@@ -468,12 +465,6 @@
     },
     "chatTemperature": {
       "description": "Temperature for chat responses (0.0 = deterministic, 2.0 = very random)"
-    },
-    "chatMaxTokens": {
-      "description": "Maximum tokens for chat responses"
-    },
-    "chatStreaming": {
-      "description": "Enable streaming responses for real-time chat"
     },
     "cacheEnabled": {
       "description": "Enable response caching"
@@ -554,12 +545,9 @@
   },
   "chat": {
     "chat": "Chat",
-    "chatMaxHistory": "Max Chat History",
     "chatModel": "Chat Model",
     "chatTemperature": "Temperature",
     "chatTimeout": "Timeout (seconds)",
-    "chatMaxTokens": "Max Tokens",
-    "chatStreaming": "Streaming",
     "inputPlaceholder": "Type your message here...",
     "sendMessage": "Send",
     "attachFiles": "Attach files",

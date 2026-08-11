@@ -427,6 +427,12 @@ pub(crate) async fn evaluate_pre_chat_gates(
     chat_params: &mut ChatParams,
 ) -> Result<PreChatGate> {
     // ── Mode normalization: reject/coerce unrecognized modes ───────────
+    // NOTE: this is the chat-request path. Direct mode-runtime resolution
+    // (`ModeKind::from` / `resolve_mode_runtime_with_posture` in
+    // src/orchestration/mode.rs) falls back to `Ask` for unknown strings —
+    // the two layers deliberately differ (chat coerces to the default
+    // interactive mode `edit`; runtime resolution defaults to the safest
+    // read-only mode `ask`).
     let mode_lower = chat_params.mode.trim().to_ascii_lowercase();
     match mode_lower.as_str() {
         "ask" | "plan" | "edit" | "agent" | "full_auto" | "safeguard" | "safe_guard"

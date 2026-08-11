@@ -982,6 +982,18 @@ async fn execute_single_subtask(
                 run_result.is_ok(),
                 Some(&model_context_features(task.as_str(), duration_ms)),
             );
+            // Agent-level record: the capability_bus decide path reads UCB
+            // scores keyed on the *agent name* (decide.rs passes the candidate
+            // name as model_id), while the record above keys on the real
+            // model_id. Without this line the two value spaces never meet —
+            // every per-agent read stayed "unseen" and the adaptive agent
+            // ranking silently degraded to name order. `record_result` writes
+            // the global key (`<agent_name>::`), which the per-context query
+            // falls back to when no per-context metrics exist
+            // (adaptive_selector.rs ucb_score_for_model_in_context). Note
+            // total_observations now advances by 2 per run; the exploration
+            // term's effect is negligible.
+            selector.record_result(agent_name, run_result.is_ok());
         }
         let _ = context.outcome_tx.send(OutcomeEvent::AgentOutcome {
             phase_name: phase_name.to_string(),

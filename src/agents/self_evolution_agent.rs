@@ -11,7 +11,6 @@ use crate::intelligence::model_selector::{
 };
 use crate::orchestration::self_evolution::sandbox::CodePatch;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
@@ -189,8 +188,6 @@ impl From<std::io::Error> for SelfEvolutionAgentError {
 pub struct SelfEvolutionAgent {
     /// Adaptive model selector with static fallback for choosing the right LLM.
     adaptive_selector: AdaptiveModelSelector,
-    /// Agent registry reference for resolving available agents/models.
-    agent_registry: HashMap<String, String>,
     /// Cached RULES content loaded at initialization.
     rules_prompts: Vec<String>,
     /// Project root path for resolving RULES/ and target paths.
@@ -206,7 +203,6 @@ impl std::fmt::Debug for SelfEvolutionAgent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SelfEvolutionAgent")
             .field("adaptive_selector", &self.adaptive_selector)
-            .field("agent_registry", &self.agent_registry)
             .field("rules_prompts", &self.rules_prompts)
             .field("project_root", &self.project_root)
             .field("available_models", &self.available_models)
@@ -243,11 +239,6 @@ impl SelfEvolutionAgent {
     ) -> Self {
         let rules_prompts = Self::load_rules(&project_root).await;
 
-        let mut agent_registry = HashMap::new();
-        agent_registry.insert("deepseek".to_string(), "deepseek-chat".to_string());
-        agent_registry.insert("claude".to_string(), "claude-sonnet-4".to_string());
-        agent_registry.insert("gpt".to_string(), "gpt-4o".to_string());
-
         info!(
             rules_count = rules_prompts.len(),
             models = available_models.len(),
@@ -258,7 +249,6 @@ impl SelfEvolutionAgent {
             adaptive_selector: AdaptiveModelSelector::with_static_strategy(
                 ModelSelectionStrategy::Balanced,
             ),
-            agent_registry,
             rules_prompts,
             project_root,
             available_models,
@@ -633,12 +623,6 @@ impl SelfEvolutionAgent {
     #[inline]
     pub fn rules_prompts(&self) -> &[String] {
         &self.rules_prompts
-    }
-
-    /// Get the agent registry.
-    #[inline]
-    pub fn agent_registry(&self) -> &HashMap<String, String> {
-        &self.agent_registry
     }
 
     /// Select the best model for a given task type.

@@ -1,9 +1,12 @@
 //! Model selection and cost/latency estimation.
 //!
-//! Provides the model-selection primitives used by the routing layer:
-//! task-driven model selection (`select_model_for_task`), semantic model
-//! matching (`select_model_semantic`), and the cost / latency / capability
-//! estimates that feed selection strategies.
+//! Despite living at `src/orchestration/orchestrator.rs`, this module is NOT
+//! the orchestration pipeline driver — the main chat orchestration chain lives
+//! in `acp/impl/chat_phases.rs` / `orchestration/flow.rs`. This module's real
+//! responsibility is the model-selection layer: task-driven model selection
+//! (`select_model_for_task`), semantic model matching
+//! (`select_model_semantic`), and the cost / latency / capability estimates
+//! that feed selection strategies.
 //!
 //! Phase 10+: Model selection integration for automatic model discovery and selection.
 //! BLUE44: HotFailover + LivePerformanceFeed + SemanticCapabilityMatcher integration.

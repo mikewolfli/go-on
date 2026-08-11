@@ -71,8 +71,7 @@ go-on 为智能体编排、治理和生产操作提供了全面的 API 接口。
 export GO_ON_ENTRY_API_KEY="your-api-key"
 
 # 服务器模式（必需）
-export GO_ON_SERVER_API_KEY="server-key"
-export GO_ON_ENTRY_API_KEY="entry-key"
+export GO_ON_ENTRY_API_KEY="server-key"
 ```
 
 API 密钥通过 `X-Api-Key` 或 `X-Go-On-Key` HTTP 头发送。认证根据运行时配置 `entry_auth_enabled` 强制执行。

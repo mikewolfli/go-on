@@ -441,9 +441,6 @@
         "mcp_http": "强制 MCP over HTTP"
       }
     },
-    "chatMaxHistory": {
-      "description": "聊天历史中保留的最大消息数"
-    },
     "chatModel": {
       "description": "用于聊天的默认 AI 模型/提供商",
       "enumDescriptions": {
@@ -468,12 +465,6 @@
     },
     "chatTemperature": {
       "description": "聊天回复的温度（0.0 = 确定性，2.0 = 非常随机）"
-    },
-    "chatMaxTokens": {
-      "description": "聊天回复的最大令牌数"
-    },
-    "chatStreaming": {
-      "description": "启用实时聊天的流式响应"
     },
     "cacheEnabled": {
       "description": "启用响应缓存"
@@ -554,12 +545,9 @@
   },
   "chat": {
     "chat": "聊天",
-    "chatMaxHistory": "最大聊天历史",
     "chatModel": "聊天模型",
     "chatTemperature": "温度",
     "chatTimeout": "超时（秒）",
-    "chatMaxTokens": "最大令牌数",
-    "chatStreaming": "流式传输",
     "inputPlaceholder": "在此输入您的消息...",
     "sendMessage": "发送",
     "attachFiles": "附加文件",

@@ -53,7 +53,17 @@ impl OrchestrationCouncil {
     /// wrapped in `Arc<Mutex<>>` (e.g. from `CapabilityBus::new`).
     ///
     /// The check runs every 300 seconds (5 minutes) by default.
+    ///
+    /// Status: reputation learning is intentionally NOT fed by self-votes
+    /// (see `council_deliberation.rs` — every ballot is a self-endorsement,
+    /// so `record_outcome` is never called in production). As a consequence
+    /// this 300s loop currently idles: member `total_votes` never advances
+    /// past its seeded value, so `auto_eject_low_performers` never ejects.
     pub fn start_auto_ejection(council: Arc<Mutex<Self>>) {
+        tracing::warn!(
+            "council reputation learning is intentionally not fed by self-votes; \
+             reputation weighting and auto-ejection are inactive by design (see docs/log)"
+        );
         let interval_secs = {
             let guard = council.lock().unwrap_or_else(|e| e.into_inner());
             let cfg = &guard.config;

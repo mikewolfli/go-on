@@ -441,11 +441,8 @@
         "mcp_http": "強制 MCP over HTTP"
       }
     },
-    "chatMaxHistory": {
-      "description": "聊天歷史中保留的最大訊息數"
-    },
     "chatModel": {
-      "description": "用於聊天的預設 AI 模型/提供者",
+      "description": "用於聊天的預設 AI 模型/提供商",
       "enumDescriptions": {
         "auto": "根據設定自動選擇",
         "copilot": "GitHub Copilot（本地）",
@@ -469,14 +466,8 @@
     "chatTemperature": {
       "description": "聊天回覆的溫度（0.0 = 確定性，2.0 = 非常隨機）"
     },
-    "chatMaxTokens": {
-      "description": "聊天回覆的最大令牌數"
-    },
-    "chatStreaming": {
-      "description": "啟用即時聊天的串流回覆"
-    },
     "cacheEnabled": {
-      "description": "啟用回覆快取"
+      "description": "啟用回應快取"
     },
     "vectorEnabled": {
       "description": "啟用向量記憶以提供上下文"
@@ -554,12 +545,9 @@
   },
   "chat": {
     "chat": "聊天",
-    "chatMaxHistory": "最大聊天記錄",
     "chatModel": "聊天模型",
     "chatTemperature": "溫度",
     "chatTimeout": "逾時（秒）",
-    "chatMaxTokens": "最大令牌數",
-    "chatStreaming": "串流傳輸",
     "inputPlaceholder": "在此輸入您的訊息...",
     "sendMessage": "發送",
     "attachFiles": "附加檔案",

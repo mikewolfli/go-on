@@ -60,9 +60,9 @@ pub use code_repo_analyzer::REPO_PREFIX;
 /// Maximum allowed size for image payloads (10 MB).
 ///
 /// `#[allow(dead_code)]`: documented public size contract of the library
-/// crate (referenced by rustdoc and by the GUI's inline-attachment limit);
-/// the binary crate's private `mod multimodal` compilation unit does not
-/// reference them, so rustc flags them there — they are not dead code.
+/// crate (referenced by rustdoc); the binary crate's private `mod multimodal`
+/// compilation unit does not reference them, so rustc flags them there —
+/// they are public API constants, not dead code.
 #[allow(dead_code)]
 pub const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024;
 /// Maximum allowed size for audio payloads (25 MB).

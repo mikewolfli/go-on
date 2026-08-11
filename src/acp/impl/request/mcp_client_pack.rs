@@ -5,16 +5,38 @@
 //! call them — the missing client direction.
 //!
 //! Retained methods (minimal usable surface, per BLUE72 audit A):
-//! - `mcp.client.connect` — connect `{ "transport": "stdio"|"http", "client_id", "program"|"base_url", "args"? }`
+//! - `mcp.client.connect` — connect `{ "transport": "stdio"|"http", "client_id", "program"|"base_url", "args"?, "timeout_ms"?, "init_timeout_ms"? }`
+//!   (`timeout_ms`/`init_timeout_ms` are optional millisecond overrides for
+//!   the per-request and initialize-handshake timeouts)
 //! - `mcp.client.list`    — list connected client ids
 //! - `mcp.client.call`    — call a tool `{ "client_id", "tool", "arguments" }`
 
 use anyhow::Result;
 use serde_json::{json, Value};
+use std::time::Duration;
 
 use crate::mcp::client::{
     global_mcp_client_registry, McpClientConfig, McpClientHandle, McpHttpClient, McpStdioClient,
 };
+
+/// Build the [`McpClientConfig`] for a `mcp.client.connect` request.
+///
+/// Reads the optional `timeout_ms` (per-request timeout) and
+/// `init_timeout_ms` (initialize-handshake timeout) params; both default to
+/// the [`McpClientConfig::default`] values when absent.
+fn build_client_config(params: &Value) -> McpClientConfig {
+    let defaults = McpClientConfig::default();
+    let timeout_ms = params.get("timeout_ms").and_then(Value::as_u64);
+    let init_timeout_ms = params.get("init_timeout_ms").and_then(Value::as_u64);
+    McpClientConfig {
+        request_timeout: Duration::from_millis(
+            timeout_ms.unwrap_or(defaults.request_timeout.as_millis() as u64),
+        ),
+        init_timeout: Duration::from_millis(
+            init_timeout_ms.unwrap_or(defaults.init_timeout.as_millis() as u64),
+        ),
+    }
+}
 
 /// `mcp.client.connect` — establish a connection to an external MCP server.
 pub async fn mcp_client_connect_payload(params: Value) -> Result<Value> {
@@ -27,7 +49,7 @@ pub async fn mcp_client_connect_payload(params: Value) -> Result<Value> {
         .and_then(Value::as_str)
         .unwrap_or("http");
 
-    let config = McpClientConfig::default();
+    let config = build_client_config(&params);
 
     let client = match transport {
         "stdio" => {
@@ -147,5 +169,36 @@ pub async fn mcp_client_call_payload(params: Value) -> Result<Value> {
             let _ = registry.unregister(client_id).await;
             Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn build_client_config_defaults_when_params_missing() {
+        let config = build_client_config(&json!({}));
+        assert_eq!(config.request_timeout, Duration::from_millis(60_000));
+        assert_eq!(config.init_timeout, Duration::from_millis(10_000));
+    }
+
+    #[test]
+    fn build_client_config_reads_timeout_params() {
+        let config = build_client_config(&json!({
+            "timeout_ms": 123_456,
+            "init_timeout_ms": 7_500,
+        }));
+        assert_eq!(config.request_timeout, Duration::from_millis(123_456));
+        assert_eq!(config.init_timeout, Duration::from_millis(7_500));
+    }
+
+    #[test]
+    fn build_client_config_keeps_defaults_for_missing_field() {
+        // Only one override supplied: the other timeout stays at its default.
+        let config = build_client_config(&json!({ "timeout_ms": 5_000 }));
+        assert_eq!(config.request_timeout, Duration::from_millis(5_000));
+        assert_eq!(config.init_timeout, Duration::from_millis(10_000));
     }
 }

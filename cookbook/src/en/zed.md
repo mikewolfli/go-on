@@ -155,7 +155,8 @@ ACP `chat` request has a `mode` field in its params. When Zed does not send a
 mode (or sends an empty one), the backend **infers** the mode from the message
 content (`infer_optimal_mode` — e.g. a question → `ask`, a code change request →
 `edit`) rather than hardcoding one value. Unrecognized explicit modes are
-forced to `edit`.
+coerced to `edit` with a warning (`evaluate_pre_chat_gates` in
+`src/acp/impl/chat.rs`).
 
 ### Mode behavior
 

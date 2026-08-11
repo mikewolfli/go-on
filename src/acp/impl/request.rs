@@ -567,30 +567,18 @@ pub async fn handle_request(
         }
     };
 
-    if let Err(violation) = pua_engine.check_red_lines(method.as_ref()) {
-        let task_context = build_task_context();
-        return send_error(
-            server,
-            request.id,
-            AcpErrorCode::PuaViolation as i32,
-            tf(
-                "error.request.pua_red_line_violation",
-                &[("detail", &violation.detail)],
-            ),
-            Some(json!({
-                "type": "pua_violation",
-                "kind": format!("{:?}", violation.kind),
-                "method": method.as_ref(),
-                "detail": violation.detail,
-                "quality_compass": DynamicQualityCompass::default()
-                    .get_checks(&task_context)
-                    .into_iter()
-                    .map(|check| check.description)
-                    .collect::<Vec<_>>(),
-            })),
-        )
-        .await;
-    }
+    // NOTE: The former `pua_engine.check_red_lines(method)` guard was removed
+    // — it was a dead check that could never fire. `check_red_lines` compares
+    // the PUA plan's natural-language red lines ("Close the loop with
+    // executable proof…") with `eq_ignore_ascii_case` against the ACP method
+    // name ("task.execute"), which never matches, so it always passed while
+    // giving the appearance of enforcement. The real PUA red-line enforcement
+    // happens in the tool execution path: `execute_tool_call`
+    // (src/acp/impl/request/tools_pack.rs:554) calls
+    // `harness_bus.validate_action` → `PolicyEvaluator::check_tool_call`, which
+    // substring-matches the configured `GovernancePolicy.red_lines` against the
+    // serialized tool arguments.
+
     if let Some(stage) = infer_pua_stage(method.as_ref()) {
         let task_context = build_task_context();
         let completed_actions = extract_pua_completed_actions(&request.params, method.as_ref());
@@ -918,11 +906,35 @@ pub async fn handle_request(
                     .await
                 }
                 "logout" => {
+                    // HTTP clients authenticate via the `Authorization` header
+                    // (not params), so pull the presented token from the headers
+                    // when params don't carry `bearer_token` — otherwise the
+                    // revocation below would silently no-op for header auth.
+                    let mut params = request.params.unwrap_or_default();
+                    if !params.get("bearer_token").is_some_and(|v| {
+                        v.as_str().is_some_and(|s| !s.is_empty())
+                    }) {
+                        if let Some(headers) = http_headers {
+                            use crate::acp::r#impl::runtime::protocol::extract_header_values;
+                            if let Some(auth) =
+                                extract_header_values(headers, "authorization").into_iter().next()
+                            {
+                                let (scheme, rest) = auth
+                                    .split_once(char::is_whitespace)
+                                    .unwrap_or(("", auth.as_str()));
+                                if scheme.eq_ignore_ascii_case("bearer")
+                                    && !rest.trim().is_empty()
+                                {
+                                    params["bearer_token"] =
+                                        serde_json::Value::String(rest.trim().to_string());
+                                }
+                            }
+                        }
+                    }
                     crate::acp::r#impl::io::respond(
                         server,
                         request_id,
-                        protocol_pack::logout_payload(server, request.params.unwrap_or_default())
-                            .await,
+                        protocol_pack::logout_payload(server, params).await,
                     )
                     .await
                 }

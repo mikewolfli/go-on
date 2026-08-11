@@ -251,10 +251,6 @@ export function getSettingsHtml(
                     <div class="setting-group">
                         <h3>💬 Chat Settings</h3>
                         <div class="setting-item">
-                            <label for="maxHistory">Max Chat History:</label>
-                            <input type="number" id="maxHistory" min="1" max="1000" data-setting="go-on.chat.maxHistory">
-                        </div>
-                        <div class="setting-item">
                             <label for="model">Default Model:</label>
                             <select id="model" data-setting="go-on.chat.model">
                                 <option value="auto">Auto</option>
@@ -269,16 +265,6 @@ export function getSettingsHtml(
                         <div class="setting-item">
                             <label for="temperature">Temperature:</label>
                             <input type="number" id="temperature" min="0" max="2" step="0.1" data-setting="go-on.chat.temperature">
-                        </div>
-                        <div class="setting-item">
-                            <label for="maxTokens">Max Tokens:</label>
-                            <input type="number" id="maxTokens" min="1" max="32768" data-setting="go-on.chat.maxTokens">
-                        </div>
-                        <div class="setting-item">
-                            <label>
-                                <input type="checkbox" id="streaming" data-setting="go-on.chat.streaming">
-                                Enable streaming responses
-                            </label>
                         </div>
                     </div>
 
@@ -299,14 +285,6 @@ export function getSettingsHtml(
                         <div class="setting-item">
                             <label for="healthInterval">Health Check Interval (seconds):</label>
                             <input type="number" id="healthInterval" min="30" max="3600" data-setting="go-on.health.interval">
-                        </div>
-                    </div>
-
-                    <div class="setting-group">
-                        <h3>🎨 UI Settings</h3>
-                        <div class="setting-item">
-                            <label for="fontSize">Font Size:</label>
-                            <input type="number" id="fontSize" min="8" max="24" data-setting="go-on.ui.fontSize">
                         </div>
                     </div>
 

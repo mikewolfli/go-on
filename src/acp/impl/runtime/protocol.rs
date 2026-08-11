@@ -63,12 +63,27 @@ pub(crate) fn extract_content_length(headers: &str) -> Option<usize> {
 
 /// Extract the value of a named header from raw HTTP headers.
 pub(crate) fn extract_header_value(headers: &str, header_name: &str) -> Option<String> {
-    headers.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        if name.trim().eq_ignore_ascii_case(header_name) {
-            Some(value.trim().to_string())
-        } else {
-            None
-        }
-    })
+    extract_header_values(headers, header_name)
+        .into_iter()
+        .next()
+}
+
+/// Extract all values of a named header (case-insensitive name match).
+///
+/// Single source of raw HTTP header parsing — used by the session auth
+/// (`SessionManager::extract_user_from_request`) and the entry auth guard
+/// (`extract_entry_token`), so header name casing is handled identically on
+/// both ACP and MCP HTTP arms.
+pub(crate) fn extract_header_values(headers: &str, header_name: &str) -> Vec<String> {
+    headers
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.trim().eq_ignore_ascii_case(header_name) {
+                Some(value.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
 }

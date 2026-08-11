@@ -165,7 +165,7 @@ npm run compile
 1. Install the extension — it activates automatically on VS Code startup (`onStartupFinished`).
 2. Open the Go-On Chat view from the activity bar or command palette (`go-on.openChat`).
 3. On first use, the extension will:
-   - Auto-create a config file at `~/.go-on/config.toml`
+   - Auto-create a config file at `./config.toml` in the workspace root (or the path set in `go-on.configPath`)
    - Prompt to download the go-on runtime or select a local binary
    - Guide you through provider API key setup
 4. Set `go-on.executablePath` and `go-on.configPath` in settings if you have a custom runtime.

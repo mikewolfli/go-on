@@ -27,6 +27,50 @@ use crate::mcp::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpServer};
 use crate::security::mtls::MtlsAcceptor;
 use crate::tool::ToolRegistry;
 
+/// Shared HTTP body-size cap (10 MB) for the ACP and MCP HTTP transports.
+///
+/// The ACP runtime keeps a same-valued local copy in
+/// `src/acp/impl/runtime/http.rs` (outside this module's edit scope); keep
+/// the two values in sync until that copy can reference this one.
+pub const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
+
+/// Unified predicate for notification responses (JSON-RPC 2.0 §notifications).
+///
+/// A response whose `id` is `None` (never had an id) or carries the
+/// `id: Value::Null` sentinel (used by `notifications/initialized`) is a
+/// notification and must not be sent back to the client. Single shared
+/// implementation for all four stdio/HTTP filter sites.
+fn is_notification_response(resp: &JsonRpcResponse) -> bool {
+    resp.id.is_none() || resp.id == Some(serde_json::Value::Null)
+}
+
+/// Build a JSON-RPC error response with platform-profile injection.
+///
+/// Shared by the parse-error and handler-error paths in the HTTP transport
+/// (previously three inline copies). The only things that differ between
+/// those copies — the error `code`, `message`, profile-injection `data_key`
+/// and the response `id` — are the parameters.
+fn mcp_error_response(
+    code: i32,
+    message: String,
+    data_key: &str,
+    id: Option<serde_json::Value>,
+) -> JsonRpcResponse {
+    JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        result: None,
+        error: Some(JsonRpcError {
+            code,
+            message,
+            data: Some(inject_platform_profiles_if_absent(
+                serde_json::json!({}),
+                data_key,
+            )),
+        }),
+        id,
+    }
+}
+
 /// MCP Server with stdio transport
 pub struct McpStdioServer {
     mcp_server: Arc<McpServer>,
@@ -109,9 +153,7 @@ impl McpStdioServer {
                                             Ok(resp) => {
                                                 // Notifications (id=null or id=Value::Null sentinel)
                                                 // don't produce a response per JSON-RPC 2.0.
-                                                if resp.id.is_none()
-                                                    || resp.id == Some(serde_json::Value::Null)
-                                                {
+                                                if is_notification_response(&resp) {
                                                     None
                                                 } else {
                                                     Some(resp)
@@ -178,9 +220,7 @@ impl McpStdioServer {
                                         Ok(resp) => {
                                             // MCP notifications (JSON-RPC with id=null or id=Value::Null
                                                 // sentinel) must not produce any response per JSON-RPC 2.0 spec.
-                                                if resp.id.is_none()
-                                                    || resp.id == Some(serde_json::Value::Null)
-                                                {
+                                                if is_notification_response(&resp) {
                                                 continue;
                                             }
                                             let mut stdout = stdout.lock().await;
@@ -676,7 +716,8 @@ async fn handle_http_connection(
 
     // ── Content-Length validation (before any auth processing) ────────
     // Check Content-Length before allocating buffers to prevent OOM.
-    const MAX_BODY_SIZE: usize = 10 * 1024 * 1024; // 10MB
+    // Cap is the module-level `MAX_BODY_SIZE` (10 MB), the same value the
+    // ACP HTTP runtime enforces (its local copy lives in http.rs).
     let content_length =
         crate::acp::r#impl::runtime::protocol::extract_content_length(header_part).unwrap_or(0);
     // ── CORS headers (computed once, reused by every error/response path) ──
@@ -945,21 +986,15 @@ async fn handle_http_connection(
                     "MCP HTTP: JSON-RPC batch parse error from {} {}: {}",
                     method, path, parse_error
                 );
-                let error_data =
-                    inject_platform_profiles_if_absent(serde_json::json!({}), "mcp.parse_error");
-                let error_response = JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    result: None,
-                    error: Some(crate::mcp::JsonRpcError {
-                        code: crate::mcp::error_codes::PARSE_ERROR,
-                        message: tf(
-                            "error.http_parse_error",
-                            &[("error", &parse_error.to_string())],
-                        ),
-                        data: Some(error_data),
-                    }),
-                    id: None,
-                };
+                let error_response = mcp_error_response(
+                    crate::mcp::error_codes::PARSE_ERROR,
+                    tf(
+                        "error.http_parse_error",
+                        &[("error", &parse_error.to_string())],
+                    ),
+                    "mcp.parse_error",
+                    None,
+                );
                 write_http_json_response(
                     socket,
                     200,
@@ -1005,7 +1040,7 @@ async fn handle_http_connection(
         // produce a response entry. The `Some(Value::Null)` sentinel used by
         // notifications/initialized must also be filtered here, matching the
         // stdio transport (id is None OR the null sentinel).
-        .filter(|resp| resp.id.is_some() && resp.id != Some(serde_json::Value::Null))
+        .filter(|resp| !is_notification_response(resp))
         .collect::<Vec<_>>();
 
         debug!(
@@ -1026,21 +1061,15 @@ async fn handle_http_connection(
                 "MCP HTTP: JSON-RPC parse error from {} {}: {}",
                 method, path, parse_error
             );
-            let error_data =
-                inject_platform_profiles_if_absent(serde_json::json!({}), "mcp.parse_error");
-            let error_response = JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                result: None,
-                error: Some(crate::mcp::JsonRpcError {
-                    code: crate::mcp::error_codes::PARSE_ERROR,
-                    message: tf(
-                        "error.http_parse_error",
-                        &[("error", &parse_error.to_string())],
-                    ),
-                    data: Some(error_data),
-                }),
-                id: None,
-            };
+            let error_response = mcp_error_response(
+                crate::mcp::error_codes::PARSE_ERROR,
+                tf(
+                    "error.http_parse_error",
+                    &[("error", &parse_error.to_string())],
+                ),
+                "mcp.parse_error",
+                None,
+            );
             write_http_json_response(
                 socket,
                 200,
@@ -1064,18 +1093,12 @@ async fn handle_http_connection(
             // the error code mapped by `error_code_for` (same shape as the
             // parse-error branch) instead of propagating the Err, which would
             // drop the connection without a response.
-            let error_data =
-                inject_platform_profiles_if_absent(serde_json::json!({}), "mcp.handler_error");
-            let error_response = JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                result: None,
-                error: Some(JsonRpcError {
-                    code: crate::mcp::error_code_for(&e),
-                    message: format!("{}", e),
-                    data: Some(error_data),
-                }),
-                id: req_id,
-            };
+            let error_response = mcp_error_response(
+                crate::mcp::error_code_for(&e),
+                format!("{}", e),
+                "mcp.handler_error",
+                req_id,
+            );
             write_http_json_response(
                 socket,
                 200,
@@ -1092,7 +1115,7 @@ async fn handle_http_connection(
     // any response per JSON-RPC 2.0 spec (§notifications). The
     // `Some(Value::Null)` sentinel used by notifications/initialized must
     // be treated the same way as id=None, matching the stdio transport.
-    if response.id.is_none() || response.id == Some(serde_json::Value::Null) {
+    if is_notification_response(&response) {
         // Must still send some HTTP response to satisfy the TCP layer,
         // but it should be a 202 Accepted with no body.
         let empty_body = serde_json::Value::Null;

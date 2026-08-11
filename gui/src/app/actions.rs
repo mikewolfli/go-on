@@ -672,10 +672,17 @@ global_max_inflight = 64
 
         // `config/config.toml` is the single source of truth for backend
         // defaults. The GUI compiles it in, keeps everything up to (excluding)
-        // the `[agents]` section (agents/flow/phases are generated dynamically
-        // below), and injects the GUI's protocol mode + bind address.
+        // the `[protocol]` section (agents/flow/phases are generated
+        // dynamically below), and injects the GUI's protocol mode + bind
+        // address.
         let base = include_str!("../../../config/config.toml");
-        let static_part = base.split("\n[agents]").next().unwrap_or(base);
+        // Strip the UTF-8 BOM if present — config/config.toml ships with one,
+        // and embedding it verbatim makes the generated TOML fail to parse.
+        let base = base.strip_prefix('\u{feff}').unwrap_or(base);
+        // Split before `[protocol]` so the template's own `mode` key is not
+        // duplicated by the injected `[protocol]` section below (the template's
+        // `[agents]`/`[flow]`/`[phases.*]` are replaced entirely).
+        let static_part = base.split("\n[protocol]").next().unwrap_or(base);
         let static_part = replace_toml_line(
             static_part,
             "acp_http_bind_addr",
@@ -690,6 +697,10 @@ global_max_inflight = 64
             config.protocol_mode,
             agent_section
         );
+        // The template's `default_phase = "think"` does not match the GUI's
+        // generated phase set (planning/coding/review/delivery); align it so
+        // backend config validation accepts the generated file.
+        let toml = replace_toml_line(&toml, "default_phase", "default_phase = \"planning\"");
 
         // Atomic write: write to temp file, then rename
         match tempfile::NamedTempFile::new_in(path.parent().unwrap_or(std::path::Path::new("."))) {

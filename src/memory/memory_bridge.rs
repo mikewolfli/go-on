@@ -57,7 +57,13 @@ impl From<CanonicalEntry> for PersistenceEntry {
             class: format!("{:?}", entry.class),
             content: entry.content,
             created_at,
-            accessed_at: 0,
+            // FIX(P1): accessed_at was hardcoded to 0, so every bridged entry
+            // became a permanent warm-TTL candidate (`iterate_expiring` filters
+            // `accessed_at <= now - 30d`, and 0 always satisfies that), and
+            // `auto_migrate` deleted low-usefulness warm entries within ~10
+            // minutes instead of after the intended 30 idle days. Stamp the
+            // write time instead so TTL eligibility starts at ingestion.
+            accessed_at: crate::shared::timestamps::now_ts(),
             usefulness: entry.usefulness,
             embedding: None,
             access_count: 1,
@@ -205,6 +211,57 @@ mod tests {
         assert_eq!(
             report.promoted_count, 1,
             "expected 1 promotion (Observation→Episodic)"
+        );
+    }
+
+    /// Regression (P1): bridge-stored entries must not look TTL-expired on the
+    /// very next `auto_migrate` cycle.
+    ///
+    /// The `From<CanonicalEntry> for PersistenceEntry` conversion used to stamp
+    /// `accessed_at: 0`, which trivially satisfies the warm-tier expiring query
+    /// (`accessed_at <= now - warm_ttl_secs`), so `auto_migrate` treated every
+    /// bridged entry as a 30-day-idle TTL candidate on its first cycle and
+    /// permanently deleted low-usefulness warm entries within ~10 minutes.
+    #[tokio::test]
+    async fn test_bridge_entry_survives_first_auto_migrate_cycle() {
+        let store = Mutex::new(MemoryStore::new(MemoryPolicy::default()));
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let db_path = tmp.path().join("warm.db");
+        let cold_path = tmp.path().join("cold");
+        let persistence =
+            MemoryPersistence::new(&db_path, &cold_path, None).expect("create MemoryPersistence");
+
+        // 1. A low-usefulness (0.5) warm-eligible entry written via the bridge
+        //    (below the warm→cold threshold 0.6, so it would be *evicted* if it
+        //    ever became a TTL candidate).
+        let canonical = make_canonical("bridge-ttl-test", MemoryClass::Observation, 0.5);
+        bridge_store(&store, &persistence, canonical)
+            .await
+            .expect("bridge_store should succeed");
+
+        // 2. Promote hot → warm through the same From conversion the bridge
+        //    uses, then immediately run auto_migrate (the 5-minute cycle).
+        let p_entry: PersistenceEntry =
+            make_canonical("bridge-ttl-test", MemoryClass::Observation, 0.5).into();
+        persistence
+            .promote_to_warm(p_entry)
+            .await
+            .expect("promote_to_warm should succeed");
+        let report = persistence
+            .auto_migrate()
+            .await
+            .expect("auto_migrate should succeed");
+
+        // 3. With a real accessed_at the entry is NOT a warm-TTL candidate
+        //    (30 idle days have not elapsed) — it must not be evicted. The old
+        //    `accessed_at: 0` made evicted_warm == 1 on the first cycle.
+        assert_eq!(
+            report.evicted_warm, 0,
+            "freshly bridged warm entry must not be evicted as TTL-expired (report={report:?})"
+        );
+        assert_eq!(
+            report.promoted_warm_to_cold, 0,
+            "freshly bridged warm entry must not be promoted to cold (report={report:?})"
         );
     }
 
