@@ -85,6 +85,7 @@ fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
             return;
         }
     };
+    let mut conn = conn;
 
     if let Err(e) = conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS faults (
@@ -123,6 +124,17 @@ fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
         return;
     }
 
+    // Wrap the full clear+rewrite in one transaction: previously every DELETE
+    // and INSERT autocommitted individually (N fsyncs per 10s cycle). A single
+    // transaction batches the writes into one commit.
+    let tx = match conn.transaction() {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::warn!("FaultToleranceEngine: failed to begin transaction: {}", e);
+            return;
+        }
+    };
+
     // Clear existing data for idempotent save
     for table in &[
         "faults",
@@ -130,7 +142,7 @@ fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
         "isolation_groups",
         "heartbeat_records",
     ] {
-        if let Err(e) = conn.execute(&format!("DELETE FROM {}", table), []) {
+        if let Err(e) = tx.execute(&format!("DELETE FROM {}", table), []) {
             tracing::warn!(
                 "FaultToleranceEngine: failed to clear table {}: {}",
                 table,
@@ -141,7 +153,7 @@ fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
 
     // Insert faults
     for fault in snapshot.faults.values() {
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "INSERT INTO faults (id, node_id, fault_type, severity, description, detected_ms, resolved_ms, recovered)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
@@ -174,7 +186,7 @@ fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
                 continue;
             }
         };
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "INSERT INTO recovery_plans (plan_id, node_id, actions, state, created_ms, completed_ms, result)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
@@ -206,7 +218,7 @@ fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
                 continue;
             }
         };
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "INSERT INTO isolation_groups (group_id, nodes, isolation_level, created_ms)
              VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![
@@ -226,7 +238,7 @@ fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
 
     // Insert heartbeat records
     for hb in snapshot.heartbeats.values() {
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "INSERT OR REPLACE INTO heartbeat_records (node_id, last_heartbeat_ms, missed_beats, status)
              VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![
@@ -240,6 +252,10 @@ fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
                 "FaultToleranceEngine: failed to insert heartbeat {}: {}", hb.node_id, e
             );
         }
+    }
+
+    if let Err(e) = tx.commit() {
+        tracing::warn!("FaultToleranceEngine: failed to commit state: {}", e);
     }
 
     tracing::info!(
@@ -756,16 +772,32 @@ impl FaultToleranceEngine {
                     // Run consistency check after activation
                     let check = self.post_recovery_consistency_check(&plan.plan_id).await;
                     if check.passed {
-                        let _ = self
+                        if let Err(e) = self
                             .complete_recovery_plan(&plan.plan_id, "recovery_actions_completed")
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(
+                                target: "fault_tolerance",
+                                "failed to complete recovery plan '{}': {}",
+                                plan.plan_id,
+                                e
+                            );
+                        }
                     } else {
                         tracing::warn!(
                             "consistency check after activation of plan '{}': {}",
                             plan.plan_id,
                             check.details
                         );
-                        let _ = self.fail_recovery_plan(&plan.plan_id, &check.details).await;
+                        if let Err(e) = self.fail_recovery_plan(&plan.plan_id, &check.details).await
+                        {
+                            tracing::warn!(
+                                target: "fault_tolerance",
+                                "failed to mark recovery plan '{}' failed: {}",
+                                plan.plan_id,
+                                e
+                            );
+                        }
                     }
                     Some(check)
                 }

@@ -12,7 +12,9 @@
 //! probing would break them — these are config isolation, not drift:
 //!   - `cli/chat.rs` and `main/server.rs`: SSE streams need a long timeout
 //!     (300s / 120s) and `http1_only()` (avoids DeepSeek HTTP/2 stream reset).
-//!   - `tool/extended/http.rs`: `redirect(10)` + no timeout (tool semantics).
+//!   - `tool/extended/http.rs`: validated redirect policy + no timeout (tool
+//!     semantics; `web_scrape` / `rss_read` reuse its blocking client so their
+//!     redirect hops are re-validated against the URL policy too).
 //!   - `runtime_pack.rs`: proxy-probing GitHub client (env-key cached).
 //!   - `skill_market.rs` / `skill_import.rs`: dedicated timeouts/UAs.
 //!   - `crates/go-on-web-search` and the GUI build their own per-crate clients.

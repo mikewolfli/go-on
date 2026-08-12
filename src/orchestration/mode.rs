@@ -1137,41 +1137,87 @@ impl ModeRuntime for GenericModeRuntime {
     }
 }
 
+// ── Shared mode tool-policy helpers ────────────────────────────────────────
+// The CLI chat path and the ACP chat path must enforce the SAME tool policy
+// per mode. Previously the ACP path had none (Ask mode executed tools, Plan
+// mode could run write tools, and the per-agent "truncating" cap was log-only)
+// while the CLI applied `filter_tool_calls_by_mode`. These two helpers are the
+// single shared implementation.
+
+/// Resolve the tool policy for a mode kind: allowed tools + max tool calls.
+/// Mirrors `GenericModeRuntime::allowed_tools`/`max_tool_calls` with the
+/// in-repo SafeGuard default (`AutoDegradePolicy::ReadOnly`).
+pub fn policy_for_kind(kind: &ModeKind) -> (Vec<String>, usize) {
+    let allowed: Vec<String> = match kind {
+        ModeKind::Ask => return (Vec::new(), 0),
+        ModeKind::Plan => plan_tools().into_iter().map(String::from).collect(),
+        ModeKind::Edit | ModeKind::FullAuto => {
+            all_exec_tools().into_iter().map(String::from).collect()
+        }
+        ModeKind::SafeGuard => read_only_tools().into_iter().map(String::from).collect(),
+    };
+    let max_calls = match kind {
+        ModeKind::Ask => 0,
+        ModeKind::Plan => 3,
+        ModeKind::Edit => 20,
+        ModeKind::FullAuto => 50,
+        ModeKind::SafeGuard => 30,
+    };
+    (allowed, max_calls)
+}
+
+/// Filter tool calls by the mode's policy (allowed tools + max calls).
+/// Returns the kept calls and the names that were dropped (either not in the
+/// mode's allowed set or beyond the max-call cap).
+pub fn filter_tool_calls_by_policy(
+    tool_calls: &[(String, String)],
+    kind: &ModeKind,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let (allowed, max_calls) = policy_for_kind(kind);
+    let mut kept: Vec<(String, String)> = Vec::new();
+    let mut blocked: Vec<String> = Vec::new();
+    for (name, args) in tool_calls {
+        if kept.len() >= max_calls || !allowed.contains(name) {
+            blocked.push(name.clone());
+            continue;
+        }
+        kept.push((name.clone(), args.clone()));
+    }
+    (kept, blocked)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_mode_kind_variants_exist() {
-        // Verify all expected variants can be constructed.
-        let ask = ModeKind::Ask;
-        let edit = ModeKind::Edit;
-        let full_auto = ModeKind::FullAuto;
-        let safe_guard = ModeKind::SafeGuard;
-
-        // Equality checks.
-        assert_eq!(ask, ModeKind::Ask);
-        assert_eq!(edit, ModeKind::Edit);
-        assert_eq!(full_auto, ModeKind::FullAuto);
-        assert_eq!(safe_guard, ModeKind::SafeGuard);
-        assert_ne!(ask, edit);
+    fn test_policy_for_kind_ask_has_no_tools() {
+        let (allowed, max_calls) = policy_for_kind(&ModeKind::Ask);
+        assert!(allowed.is_empty());
+        assert_eq!(max_calls, 0);
     }
 
     #[test]
-    fn test_mode_kind_debug_format() {
-        let debug_str = format!("{:?}", ModeKind::FullAuto);
-        assert!(debug_str.contains("FullAuto"));
+    fn test_policy_for_kind_plan_is_read_only() {
+        let (allowed, _max) = policy_for_kind(&ModeKind::Plan);
+        assert!(allowed.contains(&"read_file".to_string()));
+        assert!(!allowed.contains(&"write_file".to_string()));
     }
 
     #[test]
-    fn test_auto_degrade_policy_default() {
-        let policy = AutoDegradePolicy::default();
-        assert_eq!(policy, AutoDegradePolicy::ReadOnly);
-
-        // All variants should be constructable.
-        let _block = AutoDegradePolicy::Block;
-        let _read_only = AutoDegradePolicy::ReadOnly;
-        let _allow = AutoDegradePolicy::AllowWithAudit;
-        let _confirm = AutoDegradePolicy::ConfirmRequired;
+    fn test_filter_tool_calls_by_policy_caps_and_blocks() {
+        let calls = vec![
+            ("read_file".to_string(), "{}".to_string()),
+            ("write_file".to_string(), "{}".to_string()),
+            ("shell_exec".to_string(), "{}".to_string()),
+        ];
+        // Plan mode: write_file/shell_exec are not in the allowed set.
+        let (kept, blocked) = filter_tool_calls_by_policy(&calls, &ModeKind::Plan);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(blocked.len(), 2);
+        // Ask mode: everything is blocked (max_calls = 0).
+        let (kept, blocked) = filter_tool_calls_by_policy(&calls, &ModeKind::Ask);
+        assert!(kept.is_empty());
+        assert_eq!(blocked.len(), 3);
     }
 }

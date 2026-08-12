@@ -22,6 +22,11 @@ pub(crate) async fn run_followup_after_tool_observation(
     let sender = crate::agent::StreamingSender::from(sender);
     let task = tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
 
+    // Drain the token stream. Deliberately does NOT await the task here: the
+    // handle stays owned by this function so the task can be aborted if the
+    // timeout fires (previously a timeout dropped the collect future and the
+    // JoinHandle with it — without abort, the orphaned `agent.chat` kept
+    // running and burning tokens until the provider call ended naturally).
     let collect = async move {
         let mut response = String::new();
         let mut reasoning = String::new();
@@ -44,24 +49,34 @@ pub(crate) async fn run_followup_after_tool_observation(
             }
         }
 
-        match task.await {
-            Ok(Ok(())) => Ok::<(String, String, Option<String>), anyhow::Error>((
-                response,
-                reasoning,
-                selected_model,
-            )),
-            Ok(Err(err)) => Err(err.into()),
-            Err(join_err) => Err(anyhow::anyhow!("agent follow-up task panicked: {join_err}")),
-        }
+        (response, reasoning, selected_model)
     };
 
-    run_with_optional_timeout(timeout_duration, collect, |duration| {
+    // `run_with_optional_timeout` expects a `Result`-returning future.
+    let collect = async move { Ok::<_, anyhow::Error>(collect.await) };
+
+    let collected = run_with_optional_timeout(timeout_duration, collect, |duration| {
         anyhow::anyhow!(
             "agent follow-up timed out after {}s",
             duration.as_secs().max(1)
         )
     })
-    .await
+    .await;
+
+    // The timeout cut the collection short while the agent task may still be
+    // streaming — abort it so the orphaned LLM call stops instead of running
+    // to its natural end.
+    if collected.is_err() {
+        task.abort();
+    }
+    let (response, reasoning, selected_model) = collected?;
+
+    // Await the agent task to propagate its own errors / panics.
+    match task.await {
+        Ok(Ok(())) => Ok((response, reasoning, selected_model)),
+        Ok(Err(err)) => Err(err.into()),
+        Err(join_err) => Err(anyhow::anyhow!("agent follow-up task panicked: {join_err}")),
+    }
 }
 
 pub(crate) fn terminal_chat_contract_snapshot(

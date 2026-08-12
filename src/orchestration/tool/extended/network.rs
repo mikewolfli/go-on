@@ -104,8 +104,11 @@ impl Tool for PingTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing required field: host"))?;
 
-        let count = input.payload["count"].as_u64().unwrap_or(4);
-        let timeout_ms = input.payload["timeout_ms"].as_u64().unwrap_or(10_000);
+        let count = input.payload["count"].as_u64().unwrap_or(4).clamp(1, 20);
+        let timeout_ms = input.payload["timeout_ms"]
+            .as_u64()
+            .unwrap_or(10_000)
+            .clamp(1_000, 120_000);
 
         debug!(host = %host, count = %count, timeout_ms = %timeout_ms, "tool: executing ping");
 

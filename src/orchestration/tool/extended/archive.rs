@@ -323,8 +323,10 @@ fn inspect_tar_impl<R: Read>(reader: R, path: &Path) -> Result<Vec<ArchiveEntry>
 const MAX_ARCHIVE_ENTRIES: usize = 10_000;
 
 /// Max total decompressed bytes an `archive_extract` call will write (zip/tar):
-/// disk-fill protection, aligned with the gzip decompression cap.
-const MAX_ARCHIVE_EXTRACT_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
+/// disk-fill protection, aligned with the shared 1 GiB input guard
+/// (`exec_common::MAX_TOOL_FILE_READ_BYTES` — single source for the value).
+const MAX_ARCHIVE_EXTRACT_BYTES: u64 =
+    crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES as u64;
 
 fn extract_zip(path: &Path, output_dir: &Path, filter: Option<&str>) -> Result<usize> {
     let file = fs::File::open(path)

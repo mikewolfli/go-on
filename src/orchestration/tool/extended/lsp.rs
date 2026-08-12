@@ -916,8 +916,13 @@ impl Tool for ApplyCodeActionTool {
 
         match action {
             "add_import" => {
-                let content = fs::read_to_string(&file_path)
-                    .context("failed to read source file for import addition")?;
+                let content = String::from_utf8_lossy(
+                    &crate::orchestration::tool::exec_common::read_file_capped(
+                        &file_path,
+                        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+                    )?,
+                )
+                .into_owned();
                 let new_content = add_import_to_file(&content, detail, &file_path)?;
                 fs::write(&file_path, &new_content)
                     .context("failed to write file after import addition")?;
@@ -948,8 +953,13 @@ impl Tool for ApplyCodeActionTool {
                         "fix_lint requires a non-empty 'detail' (lint name, e.g. 'dead_code')"
                     ));
                 }
-                let content = fs::read_to_string(&file_path)
-                    .context("failed to read source file for lint fix")?;
+                let content = String::from_utf8_lossy(
+                    &crate::orchestration::tool::exec_common::read_file_capped(
+                        &file_path,
+                        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+                    )?,
+                )
+                .into_owned();
                 let new_content = add_lint_allow(&content, detail, line_usize, &file_path)?;
                 fs::write(&file_path, &new_content)
                     .context("failed to write file after lint fix")?;

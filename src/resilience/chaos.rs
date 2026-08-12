@@ -27,11 +27,13 @@ use tracing::{info, warn};
 ///
 /// Different fault types have fundamentally different recovery characteristics:
 /// - Network faults (timeout, partition) often resolve with retry/backoff
-/// - Disk faults tend to be more persistent
+/// Disk faults tend to be more persistent
 /// - Data corruption is hardest to recover from
 ///
-/// These rates are deterministic (not random) so that the same fault type
-/// always produces the same recovery profile in repeated runs.
+/// These rates are deterministic — a fault type whose rate is `< 0.5` always
+/// recovers in a drill; `>= 0.5` never does. [`ChaosEngine::run_drills`]
+/// applies this fixed threshold, so the same fault type always produces the
+/// same recovery outcome in repeated runs (no coin flips).
 pub fn recovery_failure_rate_for_fault(fault_type: FaultType) -> f64 {
     match fault_type {
         FaultType::Crash => 0.80,
@@ -201,11 +203,11 @@ impl ChaosEngine {
         for injection in &scenario.injections {
             let triggered = self.check_fault(&injection.target_tool).is_some();
             let recovery_success = if triggered {
-                // Deterministic recovery model: success varies by fault type
-                // instead of a random coin flip. Network faults have different
-                // recovery characteristics than disk faults.
-                let success =
-                    fastrand::f64() > recovery_failure_rate_for_fault(injection.fault_type);
+                // Deterministic recovery model: a fault type with failure rate
+                // below 0.5 always recovers; at or above 0.5 it never does.
+                // (The previous `fastrand::f64() > rate` coin flip made every
+                // drill run non-reproducible and the drill tests flaky.)
+                let success = recovery_failure_rate_for_fault(injection.fault_type) < 0.5;
                 // Yield so the async runtime can progress
                 tokio::task::yield_now().await;
                 success
@@ -276,7 +278,10 @@ impl ChaosEngine {
                 continue;
             }
 
-            // Check probability using fastrand for deterministic randomness
+            // Check probability using fastrand (runtime injection path only —
+            // `run_drills` uses this to decide whether an injection fires; the
+            // recovery outcome itself is deterministic, see
+            // `recovery_failure_rate_for_fault`).
             if injection.probability < 1.0 && fastrand::f64() > injection.probability {
                 continue;
             }

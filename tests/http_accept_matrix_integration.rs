@@ -305,10 +305,20 @@ fn http_servers_reject_malformed_requests_without_crash() {
     let mut acp = HttpProcess::spawn("acp_http");
     acp.wait_ready(Duration::from_secs(30));
 
-    // 无 Host 头的畸形 GET
-    let _resp = raw_http_request(&acp.bind_addr, "GET / HTTP/1.1\r\n\r\n");
-    // 无效方法
-    let _resp2 = raw_http_request(&acp.bind_addr, "FOOBAR /x HTTP/1.1\r\nHost: x\r\n\r\n");
+    // 无 Host 头的畸形 GET + 无效方法：服务器不应崩溃，且必须拒绝
+    // (4xx/5xx) 或关闭连接——不得静默接受。此前两个响应被直接丢弃，
+    // "reject" 部分从未被验证。
+    let resp = raw_http_request(&acp.bind_addr, "GET / HTTP/1.1\r\n\r\n");
+    let resp2 = raw_http_request(&acp.bind_addr, "FOOBAR /x HTTP/1.1\r\nHost: x\r\n\r\n");
+    for (label, r) in [("missing-host GET", resp), ("invalid-method", resp2)] {
+        let rejected =
+            r.starts_with("HTTP/1.1 4") || r.starts_with("HTTP/1.1 5") || r.trim().is_empty();
+        assert!(
+            rejected,
+            "{label} must be rejected (4xx/5xx or connection close), got: {}",
+            &r[..r.len().min(120)]
+        );
+    }
 
     // 服务器仍应存活并响应 /health
     let health = raw_http_request(

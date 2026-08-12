@@ -54,6 +54,30 @@ impl Tool for GitTool {
             }
         }
 
+        // `stash` is write-capable (pop/apply/drop/clear mutate the stash),
+        // so only its read-only subcommands are permitted: `list` and `show`.
+        // Other subcommands take no state-mutating arguments after the
+        // subcommand itself (status/log/diff/show are read-only).
+        if subcommand == "stash" {
+            // `stash list`/`stash show` are the only read-only stash ops.
+            let read_only = matches!(
+                args.first().map(String::as_str),
+                None | Some("list") | Some("show")
+            );
+            if !read_only {
+                anyhow::bail!(
+                    "{}",
+                    tf(
+                        "error.command_not_allowed",
+                        &[(
+                            "command",
+                            &format!("stash {}", args.first().map(String::as_str).unwrap_or(""))
+                        )]
+                    )
+                );
+            }
+        }
+
         let current_dir = sanitize_path(input, directory)?;
 
         let mut command = Command::new("git");

@@ -57,16 +57,11 @@ pub use code_repo_analyzer::REPO_PREFIX;
 /// Represents a multimodal input payload that can be routed to an appropriate
 /// processor (document parser, ASR pipeline, vision model, etc.).
 ///
-/// Maximum allowed size for image payloads (10 MB).
-///
-/// `#[allow(dead_code)]`: documented public size contract of the library
-/// crate (referenced by rustdoc); the binary crate's private `mod multimodal`
-/// compilation unit does not reference them, so rustc flags them there —
-/// they are public API constants, not dead code.
-#[allow(dead_code)]
+/// Maximum allowed size for image payloads (10 MB). Enforced by the chat
+/// pipeline's inline-`data:`-URI and `file://` extraction paths.
 pub const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024;
-/// Maximum allowed size for audio payloads (25 MB).
-#[allow(dead_code)]
+/// Maximum allowed size for audio payloads (25 MB). Enforced by the chat
+/// pipeline's inline-`data:`-URI and `file://` extraction paths.
 pub const MAX_AUDIO_SIZE: usize = 25 * 1024 * 1024;
 
 /// ## Variants

@@ -23,7 +23,7 @@ use tracing::{error, info};
 use crate::acp::r#impl::io::send_error;
 use crate::acp::r#impl::request::handle_request;
 use crate::acp::server::AcpServer;
-use crate::acp::transport::{set_current_transport, StdioTransport};
+use crate::acp::transport::StdioTransport;
 use crate::agent::AgentRegistry;
 use crate::flow::FlowManager;
 use crate::rpc_protocol::{JsonRpcRequest, JsonRpcResponse};
@@ -89,10 +89,18 @@ pub(crate) async fn tcp_write_timeout(
 /// The synchronous work before entering the stdin loop is minimal:
 /// build AcpServer + initialize_cache (~30-100ms spawned_blocking).
 pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
-    // Set global transport to StdioTransport for all output from this process.
-    // Uses `let _ =` to ignore AlreadySetErr, which can happen in tests where
-    // the transport was already set indirectly.
-    set_current_transport(Arc::new(StdioTransport));
+    // Run the whole stdio loop inside a transport scope: StdioTransport is
+    // this task's transport and every spawned per-request task inherits it.
+    // Task-local scoping replaces the process-wide global, which concurrent
+    // HTTP requests could overwrite (cross-request response contamination).
+    crate::acp::transport::with_transport(
+        Arc::new(StdioTransport) as Arc<dyn crate::acp::transport::Transport>,
+        async move { run_acp_server_inner(server).await },
+    )
+    .await
+}
+
+async fn run_acp_server_inner(server: Arc<AcpServer>) -> Result<()> {
     crate::acp::server::set_current_acp_server(Arc::clone(&server));
 
     info!("ACP server starting");

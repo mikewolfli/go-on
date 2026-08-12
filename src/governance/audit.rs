@@ -159,11 +159,18 @@ impl ThreadSafeAuditLog {
         // Create the parent directory once at construction so the per-record
         // append path doesn't need to stat/scan it on every write.
         if let Some(parent) = log_path.parent() {
-            let _ = fs::create_dir_all(parent);
+            if let Err(e) = fs::create_dir_all(parent) {
+                tracing::warn!(
+                    "audit: failed to create log directory {}: {}",
+                    parent.display(),
+                    e
+                );
+            }
         }
         // Spawn a dedicated writer thread that owns all NDJSON file I/O. The
         // request hot path (`record`) only pushes to the in-memory buffer and
-        // sends the entry over an unbounded channel — no synchronous disk write.
+        // sends the entry over a bounded channel (4096, `sync_channel`) — no
+        // synchronous disk write; on overflow the entry is dropped and counted.
         // The same thread also owns the hash-chain append, so the log line and
         // its chain entry are written in exact order by a single producer.
         let (tx, rx) = std::sync::mpsc::sync_channel::<AuditWriterMsg>(4096);

@@ -54,6 +54,7 @@ pub async fn session_new_payload(server: &AcpServer, params: Value) -> Result<Va
 
     let config_options_init = HashMap::new();
     {
+        super::make_room_for_session(session_id.as_str()).await;
         let mut state = super::acp_session_state().write().await;
         state.insert(
             session_id.clone(),
@@ -588,6 +589,7 @@ pub async fn session_set_mode_payload(server: &AcpServer, params: Value) -> Resu
     let mode_id = super::normalize_acp_mode(params.get("modeId").and_then(Value::as_str));
     if !session_id.is_empty() {
         {
+            super::make_room_for_session(session_id).await;
             let mut state = super::acp_session_state().write().await;
             let entry = state.entry(session_id.to_string()).or_default();
             entry.mode = mode_id.clone();
@@ -625,6 +627,7 @@ pub async fn session_resume_payload(server: &AcpServer, params: Value) -> Result
         .map(ToString::to_string);
 
     let (current_mode, _additional_dirs) = if !session_id.is_empty() {
+        super::make_room_for_session(session_id).await;
         let mut state = super::acp_session_state().write().await;
         let entry = state.entry(session_id.to_string()).or_default();
         if let Some(ref new_cwd) = cwd {

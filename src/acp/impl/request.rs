@@ -2485,90 +2485,88 @@ mod tests {
         // normalize bare MCP methods (`ping` -> `mcp.ping`) while keeping
         // `initialize` on ACP semantics.
         use crate::acp::server::ServerBuilder;
-        use crate::acp::transport::{
-            clear_current_transport, set_current_transport, RpcBufferTransport,
-        };
+        use crate::acp::transport::{with_transport, RpcBufferTransport};
         use std::sync::Arc;
 
         let buffer = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let transport = Arc::new(RpcBufferTransport::new(buffer.clone()));
-        clear_current_transport();
-        set_current_transport(transport.clone() as Arc<dyn crate::acp::transport::Transport>);
 
         let mut server = ServerBuilder::new().build();
         // Adaptive (Auto) dispatch mode is the default when protocol_mode is
         // unset; pin it explicitly so the test does not depend on defaults.
         server.runtime_config.protocol_mode = Some("adaptive".to_string());
 
-        // Bare `ping` must produce the mcp.ping result, not MethodNotFound.
-        super::handle_request(
-            &server,
-            crate::rpc_protocol::JsonRpcRequest {
-                jsonrpc: "2.0".to_string(),
-                method: "ping".to_string(),
-                params: Some(json!({})),
-                id: Some(json!(1)),
-            },
-            None,
-        )
-        .await
-        .expect("handle_request must complete");
-        let ping_resp = transport
-            .last_response()
-            .await
-            .expect("dispatch must emit a JSON-RPC response");
-        assert_eq!(ping_resp["id"], json!(1));
-        assert!(
-            ping_resp.get("error").is_none(),
-            "bare ping in Auto mode must not be MethodNotFound, got: {ping_resp}"
-        );
-        assert!(
-            ping_resp.get("result").is_some(),
-            "bare ping in Auto mode must produce the mcp.ping result, got: {ping_resp}"
-        );
+        with_transport(
+            transport.clone() as Arc<dyn crate::acp::transport::Transport>,
+            async {
+                // Bare `ping` must produce the mcp.ping result, not MethodNotFound.
+                super::handle_request(
+                    &server,
+                    crate::rpc_protocol::JsonRpcRequest {
+                        jsonrpc: "2.0".to_string(),
+                        method: "ping".to_string(),
+                        params: Some(json!({})),
+                        id: Some(json!(1)),
+                    },
+                    None,
+                )
+                .await
+                .expect("handle_request must complete");
+                let ping_resp = transport
+                    .last_response()
+                    .await
+                    .expect("dispatch must emit a JSON-RPC response");
+                assert_eq!(ping_resp["id"], json!(1));
+                assert!(
+                    ping_resp.get("error").is_none(),
+                    "bare ping in Auto mode must not be MethodNotFound, got: {ping_resp}"
+                );
+                assert!(
+                    ping_resp.get("result").is_some(),
+                    "bare ping in Auto mode must produce the mcp.ping result, got: {ping_resp}"
+                );
 
-        // Bare `notifications/initialized` is an MCP notification — it must be
-        // recognized (normalized to mcp.notifications_initialized) and produce
-        // no response, rather than falling into MethodNotFound.
-        clear_current_transport();
-        set_current_transport(transport.clone() as Arc<dyn crate::acp::transport::Transport>);
-        super::handle_request(
-            &server,
-            crate::rpc_protocol::JsonRpcRequest {
-                jsonrpc: "2.0".to_string(),
-                method: "notifications/initialized".to_string(),
-                params: Some(json!({})),
-                id: None,
-            },
-            None,
-        )
-        .await
-        .expect("handle_request must complete");
-        assert!(
-            !buffer.lock().await.is_empty(),
-            "dispatch must have written the notification path output"
-        );
+                // Bare `notifications/initialized` is an MCP notification — it must be
+                // recognized (normalized to mcp.notifications_initialized) and produce
+                // no response, rather than falling into MethodNotFound.
+                super::handle_request(
+                    &server,
+                    crate::rpc_protocol::JsonRpcRequest {
+                        jsonrpc: "2.0".to_string(),
+                        method: "notifications/initialized".to_string(),
+                        params: Some(json!({})),
+                        id: None,
+                    },
+                    None,
+                )
+                .await
+                .expect("handle_request must complete");
+                assert!(
+                    !buffer.lock().await.is_empty(),
+                    "dispatch must have written the notification path output"
+                );
 
-        // Negative control: a genuinely unknown method is still MethodNotFound.
-        super::handle_request(
-            &server,
-            crate::rpc_protocol::JsonRpcRequest {
-                jsonrpc: "2.0".to_string(),
-                method: "no.such.method".to_string(),
-                params: Some(json!({})),
-                id: Some(json!(2)),
+                // Negative control: a genuinely unknown method is still MethodNotFound.
+                super::handle_request(
+                    &server,
+                    crate::rpc_protocol::JsonRpcRequest {
+                        jsonrpc: "2.0".to_string(),
+                        method: "no.such.method".to_string(),
+                        params: Some(json!({})),
+                        id: Some(json!(2)),
+                    },
+                    None,
+                )
+                .await
+                .expect("handle_request must complete");
+                let unknown_resp = transport
+                    .last_response()
+                    .await
+                    .expect("dispatch must emit a JSON-RPC response");
+                assert_eq!(unknown_resp["error"]["code"], json!(-32601));
             },
-            None,
         )
-        .await
-        .expect("handle_request must complete");
-        let unknown_resp = transport
-            .last_response()
-            .await
-            .expect("dispatch must emit a JSON-RPC response");
-        assert_eq!(unknown_resp["error"]["code"], json!(-32601));
-
-        clear_current_transport();
+        .await;
     }
 
     #[tokio::test]
@@ -2582,38 +2580,40 @@ mod tests {
         // registry (the semantics of the native MCP arm's
         // `mark_cancelled_request`), and produce no JSON-RPC response.
         use crate::acp::server::ServerBuilder;
-        use crate::acp::transport::{
-            clear_current_transport, set_current_transport, RpcBufferTransport,
-        };
+        use crate::acp::transport::{with_transport, RpcBufferTransport};
         use std::sync::Arc;
 
         let buffer = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let transport = Arc::new(RpcBufferTransport::new(buffer.clone()));
-        clear_current_transport();
-        set_current_transport(transport.clone() as Arc<dyn crate::acp::transport::Transport>);
 
         let mut server = ServerBuilder::new().build();
         server.runtime_config.protocol_mode = Some("adaptive".to_string());
 
-        super::handle_request(
-            &server,
-            crate::rpc_protocol::JsonRpcRequest {
-                jsonrpc: "2.0".to_string(),
-                method: "notifications/cancelled".to_string(),
-                params: Some(json!({ "requestId": 77 })),
-                id: None,
-            },
-            None,
-        )
-        .await
-        .expect("handle_request must complete");
+        with_transport(
+            transport.clone() as Arc<dyn crate::acp::transport::Transport>,
+            async {
+                super::handle_request(
+                    &server,
+                    crate::rpc_protocol::JsonRpcRequest {
+                        jsonrpc: "2.0".to_string(),
+                        method: "notifications/cancelled".to_string(),
+                        params: Some(json!({ "requestId": 77 })),
+                        id: None,
+                    },
+                    None,
+                )
+                .await
+                .expect("handle_request must complete");
 
-        // Id-less notifications never produce a response — in particular no
-        // MethodNotFound error may be emitted for the recognized method.
-        assert!(
-            transport.last_response().await.is_none(),
-            "notifications/cancelled must not emit a response"
-        );
+                // Id-less notifications never produce a response — in particular no
+                // MethodNotFound error may be emitted for the recognized method.
+                assert!(
+                    transport.last_response().await.is_none(),
+                    "notifications/cancelled must not emit a response"
+                );
+            },
+        )
+        .await;
         // The cancellation mark must be applied to the shared registry so an
         // in-flight request with this id aborts early.
         assert!(
@@ -2622,8 +2622,6 @@ mod tests {
         );
         // Consume the mark so a later request reusing id 77 is not cancelled.
         super::protocol_pack::clear_acp_request_cancelled("77");
-
-        clear_current_transport();
     }
 
     #[test]

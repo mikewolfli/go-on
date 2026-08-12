@@ -24,8 +24,14 @@ impl Tool for JsonlReadTool {
         let max_lines = input.payload["max_lines"].as_u64().unwrap_or(1000) as usize;
 
         let validated = sanitize_path(input, path)?;
-        let content = fs::read_to_string(&validated)
-            .with_context(|| format!("failed to read JSONL: {}", validated.display()))?;
+        // Byte cap (input-side OOM guard, same limit as read_file): a
+        // model-picked 10GB JSONL must not be fully buffered.
+        let content =
+            String::from_utf8_lossy(&crate::orchestration::tool::exec_common::read_file_capped(
+                &validated,
+                crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+            )?)
+            .into_owned();
 
         let mut records = Vec::new();
         let mut parse_errors = 0u64;

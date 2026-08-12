@@ -17,19 +17,15 @@ mod chaos_drill_tests {
 
         let result = engine.run_drills(&scenario).await;
 
-        assert!(
-            result.passed,
-            "Network resilience drill failed: {} / {} recoveries failed",
-            result.failed_recoveries, result.total_injections
-        );
+        // Deterministic recovery model (failure rate >= 0.5 never recovers):
+        // NetworkTimeout (0.85) and RateLimit (0.60) fail, NetworkPartition
+        // (0.20) recovers — stable across runs.
         assert_eq!(result.total_injections, 3);
-        // Use threshold-based assertion to account for random failure rate.
-        // With 3 injections and the configured probability, at least 2/3
-        // recoveries should succeed in practice.
+        assert_eq!(result.successful_recoveries, 1);
+        assert_eq!(result.failed_recoveries, 2);
         assert!(
-            result.successful_recoveries >= 2,
-            "At least 2/3 recoveries should succeed, got {}",
-            result.successful_recoveries,
+            !result.passed,
+            "hard-to-recover faults must not report passed"
         );
     }
 
@@ -40,9 +36,12 @@ mod chaos_drill_tests {
 
         let result = engine.run_drills(&scenario).await;
 
-        assert!(result.passed, "Storage resilience drill failed");
+        // FileIOError (0.70), PartialWrite (0.75), DataCorruption (0.50) all
+        // have failure rates >= 0.5 — none recover under the deterministic
+        // model.
         assert_eq!(result.total_injections, 3);
-        assert_eq!(result.successful_recoveries, 3);
+        assert_eq!(result.successful_recoveries, 0);
+        assert_eq!(result.failed_recoveries, 3);
     }
 
     #[tokio::test]
@@ -100,10 +99,14 @@ mod chaos_drill_tests {
 
         let result = engine.run_drills(&scenario).await;
 
-        assert!(result.passed);
+        // AuthFailure (0.50) is at the recovery threshold — it does not
+        // recover. The drill still echoes the declared expected recovery
+        // action (the simulation contract).
+        assert!(!result.passed);
         assert_eq!(
             result.injection_results[0].recovery_action,
             Some("reroute".to_string())
         );
+        assert!(!result.injection_results[0].recovery_success);
     }
 }

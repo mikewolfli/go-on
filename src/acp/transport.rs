@@ -4,22 +4,24 @@
 //! trait, making transport dispatch visible in function signatures and
 //! extensible to new transports (WebSocket, Unix socket).
 //!
-/// # Architecture
-///
-/// Three implementations exist:
-/// - `StdioTransport` — writes JSON-RPC to tokio::stdout (no buffer)
-/// - `RpcBufferTransport` — writes JSON-RPC to Arc<Mutex<Vec<u8>>> (HTTP RPC)
-/// - `SseTransport` — writes SSE events to TcpStream (HTTP SSE/streaming)
-///
-/// # Global Transport
-///
-/// A global `CURRENT_TRANSPORT` (OnceLock<Arc<dyn Transport>>) is set during
-/// server startup (stdio mode) or per-request (HTTP RPC mode). When set, it
-/// takes priority over the legacy `RPC_BUFFER` task-local and stdout fallback.
+//! # Architecture
+//!
+//! Three implementations exist:
+//! - `StdioTransport` — writes JSON-RPC to tokio::stdout (no buffer)
+//! - `RpcBufferTransport` — writes JSON-RPC to Arc<Mutex<Vec<u8>>> (HTTP RPC)
+//! - `SseTransport` — writes SSE events to TcpStream (HTTP SSE/streaming)
+//!
+//! # Current Transport
+//!
+//! The current transport is a *task-local* (`with_transport`), set during
+//! server startup (stdio mode) or per-request (HTTP RPC/SSE mode). When set,
+//! it takes priority over the stdout fallback. Task-local scoping means
+//! concurrent HTTP requests each write through their own transport — the
+//! previous process-wide global was overwritten by concurrent connections,
+//! crossing responses between requests.
 use anyhow::Result;
 use serde_json::Value;
 use std::sync::Arc;
-use std::sync::RwLock;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
@@ -125,38 +127,32 @@ impl Transport for SseTransport {
     }
 }
 
-// ── Global current transport ──────────────────────────────────────────────────
+// ── Task-local current transport ────────────────────────────────────────────
 
-/// Global current transport for ACP server output.
-///
-/// Set during server startup (stdio mode) or per-request (HTTP RPC/SSE mode).
-/// Uses RwLock rather than OnceLock so it can be replaced during test setup
-/// and when switching between stdio/HTTP/SSE modes.
-static CURRENT_TRANSPORT: RwLock<Option<Arc<dyn Transport>>> = RwLock::new(None);
-
-/// Set the global transport for JSON-RPC output.
-/// Replaces any previously set transport.
-pub(crate) fn set_current_transport(transport: Arc<dyn Transport>) {
-    if let Ok(mut guard) = CURRENT_TRANSPORT.write() {
-        *guard = Some(transport);
-    }
+// Task-local current transport for ACP server output.
+//
+// Previously a process-wide global (`RwLock<Option<Arc<dyn Transport>>>`)
+// which concurrent HTTP connections overwrote: request A's session/update or
+// permission writes landed in request B's buffer/socket (responses crossed
+// between requests), and `clear_current_transport()` after one request could
+// clear the transport a concurrent request had just set. Task-local storage
+// is per-task and propagates to `tokio::spawn`ed subtasks, so every request
+// writes through its own transport for its whole lifetime.
+tokio::task_local! {
+    static CURRENT_TRANSPORT: Arc<dyn Transport>;
 }
 
-/// Clear the global transport.
-///
-/// Must be called after per-request HTTP/SSE handling completes: the
-/// `SseTransport` holds an `Arc` to the request's socket, so keeping it in
-/// the global would pin the TCP connection open indefinitely.
-pub(crate) fn clear_current_transport() {
-    if let Ok(mut guard) = CURRENT_TRANSPORT.write() {
-        *guard = None;
-    }
+/// Run `fut` with `transport` as the current transport for this task (and any
+/// tasks it spawns). The value is scoped to the returned future: when it
+/// completes, the task-local is cleared automatically (no explicit clear).
+pub(crate) async fn with_transport<T, F>(transport: Arc<dyn Transport>, fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    CURRENT_TRANSPORT.scope(transport, fut).await
 }
 
-/// Get the current global transport, if any.
+/// Get the current task's transport, if any.
 pub(crate) fn get_current_transport() -> Option<Arc<dyn Transport>> {
-    CURRENT_TRANSPORT
-        .read()
-        .ok()
-        .and_then(|guard| guard.clone())
+    CURRENT_TRANSPORT.try_with(|t| t.clone()).ok()
 }

@@ -136,8 +136,10 @@ impl Tool for CompressTool {
 ///
 /// The compressed input can be tiny while decompressing to gigabytes; an
 /// unbounded `read_to_end` would OOM the process before the tool ever writes
-/// the result to disk. 1 GiB comfortably covers legitimate archives.
-pub(crate) const MAX_DECOMPRESSED_TOOL_BYTES: usize = 1024 * 1024 * 1024;
+/// the result to disk. Single source for the 1 GiB value:
+/// `exec_common::MAX_TOOL_FILE_READ_BYTES` (the shared input-side OOM guard).
+pub(crate) const MAX_DECOMPRESSED_TOOL_BYTES: usize =
+    crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES;
 
 /// Shared gzip decompression helper used by both `decompress` and the archive
 /// extraction path so the two entry points cannot drift.

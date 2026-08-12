@@ -291,29 +291,43 @@ async fn tool_governance_pre_check() {
         Arc::new(Mutex::new(SelfRationalizationGuard::new(0.95))),
     );
 
-    // Verify the evaluator can be constructed and called without panic
-    // (the specific verdict depends on default governance policy)
+    // Verify the evaluator produces differentiated verdicts. The exact policy
+    // depends on the default governance config (a low-risk generic task is
+    // Reviewed for low confidence by the rationalization guard), but the
+    // security property that matters: a high-risk SecurityPatch task must NOT
+    // be silently allowed. Previously the match had empty arms for every
+    // variant and the second verdict was discarded — the test proved only
+    // "does not panic".
     let ctx = TaskContext {
         task_type: go_on::governance::pua::TaskType::Other,
         file_count: 1,
         risk_score: 0.2,
     };
     let verdict = evaluator.evaluate(&ctx);
-    // The evaluator should produce SOME verdict (not panic)
-    match &verdict {
-        go_on::governance::harness_bus::PolicyVerdict::Allow
-        | go_on::governance::harness_bus::PolicyVerdict::Review(_)
-        | go_on::governance::harness_bus::PolicyVerdict::Deny(_)
-        | go_on::governance::harness_bus::PolicyVerdict::Escalate(_) => {}
-    }
-
-    // A high-risk task should not crash either
     let high_risk_ctx = TaskContext {
         task_type: go_on::governance::pua::TaskType::SecurityPatch,
         file_count: 10,
         risk_score: 0.85,
     };
-    let _verdict = evaluator.evaluate(&high_risk_ctx);
+    let high_verdict = evaluator.evaluate(&high_risk_ctx);
+
+    use go_on::governance::harness_bus::PolicyVerdict;
+    assert!(
+        !matches!(high_verdict, PolicyVerdict::Allow),
+        "SecurityPatch/0.85 task must not be allowed, got: {high_verdict:?}"
+    );
+    // The high-risk verdict must be at least as restrictive as the low-risk
+    // one (the risk-aware policy must never loosen for a riskier task).
+    let severity = |v: &PolicyVerdict| match v {
+        PolicyVerdict::Allow => 0,
+        PolicyVerdict::Review(_) => 1,
+        PolicyVerdict::Deny(_) => 2,
+        PolicyVerdict::Escalate(_) => 3,
+    };
+    assert!(
+        severity(&high_verdict) >= severity(&verdict),
+        "high-risk verdict must be at least as restrictive as low-risk (low={verdict:?}, high={high_verdict:?})"
+    );
 }
 
 // ── Skill: registry_lists_and_executes_skills ──────────────────────────────

@@ -321,13 +321,20 @@ pub async fn run_autonomy_loop(
         }
 
         // $/cancel_request support: abort the whole loop (not just the current
-        // round) on cancellation, and do not wait for the spawned agent task.
+        // round) on cancellation. Abort the in-flight agent chat task first —
+        // previously the JoinHandle was dropped here without abort, so the
+        // orphaned LLM call kept streaming into a dropped channel.
         if crate::acp::r#impl::request::protocol_pack::current_request_cancelled() {
+            chat_task.abort();
             return Err(crate::acp::r#impl::request::protocol_pack::log_and_cancel(
                 "autonomy_loop",
             ));
         }
-        let _ = chat_task.await;
+        // Await the chat task, surfacing panics/errors instead of silently
+        // continuing with a possibly-partial tool_calls list.
+        if let Err(e) = chat_task.await {
+            tracing::warn!("autonomy_loop: agent chat task failed: {e}");
+        }
 
         // ── Execute tool calls ───────────────────────────────────────
         if tool_calls.is_empty() {
@@ -350,6 +357,28 @@ pub async fn run_autonomy_loop(
                 actual_rounds += 1; // Tools were called this round
             }
             break; // Max iterations reached
+        }
+
+        // ── Enforce the mode's tool policy (allowed tools + max calls) ──
+        // Shared with the CLI chat path (`filter_tool_calls_by_policy` in
+        // orchestration/mode.rs). Previously the ACP path bypassed the mode
+        // policy entirely: Ask mode executed tools, Plan mode could run write
+        // tools, and the per-agent cap was not enforced.
+        let mode_kind = crate::orchestration::mode::ModeKind::from(config.operation_mode.as_str());
+        let (tool_calls, blocked) =
+            crate::orchestration::mode::filter_tool_calls_by_policy(&tool_calls, &mode_kind);
+        if !blocked.is_empty() {
+            tracing::warn!(
+                "autonomy_loop: mode {:?} blocked {} tool call(s): {:?}",
+                mode_kind,
+                blocked.len(),
+                blocked
+            );
+        }
+        if tool_calls.is_empty() {
+            // The mode policy blocked every tool call — nothing to execute.
+            actual_rounds += 1;
+            break;
         }
 
         // ── Execute all tool calls concurrently via unified executor ──

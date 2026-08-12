@@ -324,6 +324,16 @@ async fn execute_single_tool(
             }
         }
 
+        // Wire the ACP session's work directory as the path-sandbox base.
+        // Previously `allowed_base_dir` was always None on the server paths, so
+        // `sanitize_path`/`sanitize_path_for_write` skipped the base-dir check
+        // and read_file could access any path on the machine. The session
+        // `cwd`/`work_dirs` from `session/new` is the intended sandbox root.
+        let allowed_base_dir = if let Some(ref sid) = config.acp_session_id {
+            crate::acp::r#impl::request::protocol_pack::session_base_dir(sid).await
+        } else {
+            None
+        };
         let input = ToolInput {
             task_id: format!("autonomy-{}-{}", iteration, tool_name),
             phase: "execute".to_string(),
@@ -332,7 +342,7 @@ async fn execute_single_tool(
             constraints: None,
             evidence: None,
             payload: parsed_args.clone(),
-            allowed_base_dir: None,
+            allowed_base_dir,
         };
 
         // ── Pre-execute hooks (unified async chain) ──────────────────
@@ -368,12 +378,50 @@ async fn execute_single_tool(
             0
         };
 
+        // Enforce the per-tool timeout budget from the capability profile.
+        // Previously `timeout_budget_ms` was registered for every tool but
+        // never read by the unified executor (only the CLI path honored it), so
+        // a hung tool (e.g. `docker exec sleep 10000`) could block the
+        // autonomy loop and response indefinitely.
+        let timeout_budget = tool_registry
+            .profile(&tool_name)
+            .map(|p| p.timeout_budget_ms)
+            .unwrap_or(0);
+
         let (output, success) = {
             let mut tool_result: Option<ToolOutput> = None;
             let mut last_error: Option<String> = None;
             let mut attempt: usize = 0;
             loop {
-                match run_tool_with_fallback(tool_registry, &tool_name, &input).await {
+                let run_result = if timeout_budget > 0 {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_millis(timeout_budget),
+                        run_tool_with_fallback(tool_registry, &tool_name, &input),
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(_) => {
+                            // Timeout fires — abandon this attempt (the
+                            // underlying spawn_blocking task, if any, keeps
+                            // running until it finishes; the response no
+                            // longer waits on it). Do not retry: a hung tool
+                            // will hang again.
+                            tracing::warn!(
+                                tool = %tool_name,
+                                timeout_ms = timeout_budget,
+                                "tool execution timed out (profile timeout budget)"
+                            );
+                            last_error = Some(format!(
+                                "tool '{tool_name}' timed out after {timeout_budget}ms (profile timeout budget)"
+                            ));
+                            break;
+                        }
+                    }
+                } else {
+                    run_tool_with_fallback(tool_registry, &tool_name, &input).await
+                };
+                match run_result {
                     Ok(out) => {
                         tool_result = Some(out);
                         break;
@@ -497,8 +545,12 @@ async fn execute_single_tool(
 }
 
 /// Format a tool's output for the consolidated response string.
+///
+/// Success is judged by `output.success` — the tool's real outcome — to stay
+/// consistent with the notification/circuit-breaker paths (a tool that ran
+/// but returned `error: Some(..)` with `success: true` must not show ✅).
 fn format_tool_output_for_response(tool_name: &str, output: &ToolOutput) -> String {
-    let success = output.error.is_none();
+    let success = output.success;
     let status_icon = if success { "✅" } else { "❌" };
 
     let body_content = if success {

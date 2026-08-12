@@ -483,13 +483,14 @@ impl TriggerSource for DiagnosticTriggerSource {
 pub struct PubsubTriggerSource {
     /// Name of this source.
     name: String,
-    /// Receiver end of the mpsc channel.
-    rx: tokio::sync::Mutex<mpsc::UnboundedReceiver<EvolutionTrigger>>,
+    /// Receiver end of the mpsc channel (bounded: the bridge's
+    /// `TRIGGER_QUEUE_CAPACITY` bounds queue growth when the loop backs up).
+    rx: tokio::sync::Mutex<mpsc::Receiver<EvolutionTrigger>>,
 }
 
 impl PubsubTriggerSource {
     /// Create a new pubsub trigger source.
-    pub fn new(name: String, rx: mpsc::UnboundedReceiver<EvolutionTrigger>) -> Self {
+    pub fn new(name: String, rx: mpsc::Receiver<EvolutionTrigger>) -> Self {
         Self {
             name,
             rx: tokio::sync::Mutex::new(rx),

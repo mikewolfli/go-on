@@ -104,7 +104,7 @@ skills_cache_dir = "skills_cache"
 
 # ── Governance ────────────────────────────────────────────────────────
 governance_enabled = true
-governance_policy_mode = "enforce"
+governance_policy_mode = "active"
 
 # ── i18n ───────────────────────────────────────────────────────────────
 i18n_default_language = "en-US"

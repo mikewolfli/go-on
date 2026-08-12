@@ -481,69 +481,26 @@ fn init_metrics(config: &TelemetryConfig) -> anyhow::Result<()> {
 
 /// Initialize distributed tracing using OpenTelemetry OTLP.
 ///
-/// Requires an OTLP-compatible endpoint (e.g., Jaeger, Grafana Tempo, Datadog Agent).
-/// If the endpoint is not configured via `OTEL_EXPORTER_OTLP_ENDPOINT` environment
-/// variable, tracing is initialized but logs a warning.
+/// Delegates to the config-driven [`init_otel_export`] (the single OTLP
+/// tracer-provider construction — the previous env-driven copy of the
+/// builder chain here could drift from the production path). Requires an
+/// OTLP-compatible endpoint (e.g., Jaeger, Grafana Tempo, Datadog Agent),
+/// taken from `OTEL_EXPORTER_OTLP_ENDPOINT` (matching the env fallback that
+/// `init_otel_export` already applies).
 fn init_tracing(config: &TelemetryConfig) -> anyhow::Result<()> {
-    use opentelemetry::global;
-    use opentelemetry::KeyValue;
-    use opentelemetry_otlp::WithExportConfig;
-    use opentelemetry_sdk::resource::Resource;
-    // TracerProvider is constructed via SdkTracerProvider::builder()
-
-    use tracing::warn;
-
-    // ── Guard: avoid re-initializing the global tracer provider ───────
-    // `telemetry.rs::init_otel_provider` may have already called
-    // `global::set_tracer_provider()`. Check before setting again to
-    // prevent the second call from silently replacing the first.
     if TRACER_INITIALIZED.load(Ordering::Acquire) {
-        info!(
+        tracing::info!(
             "OpenTelemetry tracer provider already initialized; \
              skipping re-initialization"
         );
         return Ok(());
     }
-
-    // Check if an OTLP endpoint is configured
-    let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
-
-    if let Some(endpoint) = otlp_endpoint {
-        let resource = Resource::builder()
-            .with_attribute(KeyValue::new("service.name", config.service_name.clone()))
-            .with_attribute(KeyValue::new(
-                "service.version",
-                config.service_version.clone(),
-            ))
-            .build();
-
-        let exporter = opentelemetry_otlp::SpanExporter::builder()
-            .with_tonic()
-            .with_endpoint(&endpoint)
-            .build()
-            .map_err(|e| anyhow::anyhow!("failed to build OTLP span exporter: {}", e))?;
-
-        let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
-            .with_resource(resource)
-            .with_batch_exporter(exporter)
-            .build();
-
-        global::set_tracer_provider(tracer_provider);
-        TRACER_INITIALIZED.store(true, Ordering::Release);
-
-        info!(
-            service_name = config.service_name,
-            otlp_endpoint = endpoint,
-            "OpenTelemetry tracing initialized with OTLP exporter"
-        );
-    } else {
-        warn!(
-            "distributed tracing is enabled but OTEL_EXPORTER_OTLP_ENDPOINT is not set; \
-             traces will not be exported. Set the environment variable or disable tracing."
-        );
-    }
-
-    Ok(())
+    init_otel_export(
+        "otlp",
+        std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok().as_deref(),
+        &config.service_name,
+        1.0,
+    )
 }
 
 // ── TelemetryRuntime (migrated from telemetry.rs) ────────────────────────

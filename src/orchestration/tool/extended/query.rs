@@ -121,8 +121,13 @@ impl Tool for JsonQueryTool {
             "tool: json_query reading file"
         );
 
-        let content = std::fs::read_to_string(&file_path)
-            .with_context(|| format!("failed to read JSON file '{}'", file_path.display()))?;
+        // Byte cap (input-side OOM guard, same limit as read_file).
+        let content =
+            String::from_utf8_lossy(&crate::orchestration::tool::exec_common::read_file_capped(
+                &file_path,
+                crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+            )?)
+            .into_owned();
 
         let parsed: Value = serde_json::from_str(&content)
             .with_context(|| format!("failed to parse JSON from '{}'", file_path.display()))?;

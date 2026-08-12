@@ -89,18 +89,17 @@ pub fn verify_request(
     body: &[u8],
     signature: &RequestSignature,
 ) -> Result<bool, SigningError> {
-    // 1. Replay protection: check timestamp clock skew
+    // 1. Replay protection: check timestamp clock skew. Computed in i128 so an
+    // extreme timestamp difference cannot wrap the i64 subtraction (which, at
+    // i64::MIN, would also make `.abs()` panic in debug builds) and bypass the
+    // skew check.
     let now_ms = crate::shared::timestamps::now_ts_ms_u64();
-    let skew_ms = if now_ms > signature.timestamp_ms {
-        (now_ms - signature.timestamp_ms) as i64
-    } else {
-        -((signature.timestamp_ms - now_ms) as i64)
-    };
+    let skew_ms = now_ms as i128 - signature.timestamp_ms as i128;
 
-    if skew_ms.abs() > MAX_CLOCK_SKEW_MS as i64 {
+    if skew_ms.abs() > MAX_CLOCK_SKEW_MS as i128 {
         return Err(SigningError::ReplayDetected {
             ts: signature.timestamp_ms,
-            skew_ms,
+            skew_ms: skew_ms.clamp(i64::MIN as i128, i64::MAX as i128) as i64,
         });
     }
 

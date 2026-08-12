@@ -57,6 +57,21 @@ pub async fn mcp_client_connect_payload(params: Value) -> Result<Value> {
                 .get("program")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("stdio transport requires 'program'"))?;
+            // Defense-in-depth for arbitrary program spawning: require an
+            // absolute path (no implicit PATH lookup of a bare name) and
+            // reject path traversal / shell metacharacters / control bytes.
+            if !std::path::Path::new(program).is_absolute() {
+                anyhow::bail!(
+                    "mcp.client stdio 'program' must be an absolute path (got '{program}')"
+                );
+            }
+            if program.contains("..")
+                || program
+                    .chars()
+                    .any(|c| matches!(c, ';' | '|' | '&' | '$' | '`' | '<' | '>' | '\n' | '\r'))
+            {
+                anyhow::bail!("mcp.client stdio 'program' contains forbidden characters");
+            }
             let args: Vec<String> = params
                 .get("args")
                 .and_then(Value::as_array)
@@ -67,7 +82,11 @@ pub async fn mcp_client_connect_payload(params: Value) -> Result<Value> {
                         .collect()
                 })
                 .unwrap_or_default();
+            if args.len() > 64 || args.iter().any(|a| a.len() > 4096) {
+                anyhow::bail!("mcp.client stdio 'args' exceeds size limits");
+            }
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            tracing::info!(program, args = ?args, client_id, "mcp.client stdio connect");
             let client = McpStdioClient::connect(program, &arg_refs, client_id, config).await?;
             McpClientHandle::Stdio(Box::new(client))
         }
@@ -76,6 +95,11 @@ pub async fn mcp_client_connect_payload(params: Value) -> Result<Value> {
                 .get("base_url")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("http transport requires 'base_url'"))?;
+            // SSRF: the same URL policy as http_request / web_scrape / rss_read
+            // (scheme http(s) + private-host/loopback block + allow/block
+            // patterns) so the server cannot be driven to probe internal
+            // networks or the cloud metadata service.
+            crate::orchestration::tool::extended::http::validate_url_async(base_url).await?;
             let client = McpHttpClient::connect(base_url, client_id, config).await?;
             McpClientHandle::Http(Box::new(client))
         }

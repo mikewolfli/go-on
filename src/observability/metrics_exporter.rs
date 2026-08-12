@@ -332,9 +332,9 @@ pub async fn build_prometheus_metrics(server: &AcpServer) -> String {
     lines.push(format!("go_on_memory_usage_bytes {}", m.memory_usage_bytes));
 
     // ── O3: Task count / queue depth metrics ──────────────────────────────
-    lines.push("# HELP go_on_active_requests Currently active requests".to_string());
-    lines.push("# TYPE go_on_active_requests gauge".to_string());
-    lines.push(format!("go_on_active_requests {}", m.active_requests));
+    // (the active-request gauge was removed: `go_on_inflight_requests` above
+    // already reports `m.active_requests` with the same HELP text — the
+    // duplicate metric name only confused scrapers.)
 
     lines.push("# HELP go_on_agent_timeout_failures_total Agent timeout failures".to_string());
     lines.push("# TYPE go_on_agent_timeout_failures_total counter".to_string());

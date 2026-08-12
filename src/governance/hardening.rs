@@ -52,7 +52,17 @@ struct BudgetState {
     token_usage: HashMap<String, usize>,
     api_call_usage: HashMap<String, usize>,
     active_tasks: HashMap<String, usize>,
+    /// Wall-clock start (ms) of the most recent slot acquisition per tenant.
+    /// Used by opportunistic stale-slot recovery: a request that errored
+    /// between the pre-route reservation and the success-path `record_usage`
+    /// would otherwise leak its slot forever.
+    last_started_ms: HashMap<String, i64>,
 }
+
+/// Stale-slot timeout: a slot older than this with the tenant at its
+/// concurrent limit is treated as leaked and recovered (see
+/// [`TenantBudgetEnforcer::check_and_start_task`]).
+const STALE_SLOT_TIMEOUT_MS: i64 = 30 * 60 * 1000;
 
 /// Tracks per-tenant resource usage and enforces quotas.
 /// Used by CapabilityBus to reject tasks when a tenant exceeds its limits.
@@ -72,6 +82,7 @@ impl TenantBudgetEnforcer {
                 token_usage: HashMap::new(),
                 api_call_usage: HashMap::new(),
                 active_tasks: HashMap::new(),
+                last_started_ms: HashMap::new(),
             }),
             current_day: AtomicI64::new(Self::today()),
         }
@@ -170,6 +181,29 @@ impl TenantBudgetEnforcer {
             tracing::warn!("budget state lock poisoned: recovering");
             poisoned.into_inner()
         });
+        let now_ms = crate::shared::timestamps::now_ts_ms();
+        let current_tasks = guard.active_tasks.get(tenant_id).copied().unwrap_or(0);
+        if current_tasks >= quota.concurrent_tasks_limit {
+            // Opportunistic stale-slot recovery: `record_usage` (the only
+            // decrement) runs on the success-path finalizer, so a request
+            // that errors mid-pipeline leaks its slot. When the tenant is at
+            // its limit and the most recent acquisition is older than the
+            // timeout, clear the stale slots instead of rejecting the tenant
+            // forever. (A legitimately long-running request older than the
+            // timeout may over-subscribe briefly — the limit is a guardrail,
+            // and this is preferable to permanent lockout.)
+            if let Some(last) = guard.last_started_ms.get(tenant_id) {
+                if now_ms.saturating_sub(*last) > STALE_SLOT_TIMEOUT_MS {
+                    guard.active_tasks.insert(tenant_id.to_string(), 0);
+                    guard.last_started_ms.remove(tenant_id);
+                    tracing::warn!(
+                        "tenant '{}' recovered stale concurrent-task slots (no completion for >{}s)",
+                        tenant_id,
+                        STALE_SLOT_TIMEOUT_MS / 1000
+                    );
+                }
+            }
+        }
         let current_tasks = guard.active_tasks.get(tenant_id).copied().unwrap_or(0);
         if current_tasks >= quota.concurrent_tasks_limit {
             return Err(format!(
@@ -200,6 +234,7 @@ impl TenantBudgetEnforcer {
 
         // All checks passed — atomically consume the slot.
         *guard.active_tasks.entry(tenant_id.to_string()).or_insert(0) += 1;
+        guard.last_started_ms.insert(tenant_id.to_string(), now_ms);
         Ok(())
     }
 

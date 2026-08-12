@@ -140,10 +140,19 @@ impl AgentMemoryBus {
                 Some(uid) => format!("agent_memory:{}", uid),
                 None => "agent_memory".to_string(),
             };
-            let _ = vs
+            // Persist failure of the vector mirror with a warn — silent loss
+            // of execution memories must be visible.
+            if let Err(e) = vs
                 .clone()
                 .upsert(&phase, task_description, &entry.content)
-                .await;
+                .await
+            {
+                tracing::warn!(
+                    "agent_memory_bus: vector upsert failed (phase={}): {}",
+                    phase,
+                    e
+                );
+            }
         }
 
         self.store_memory(entry, user_id).await;

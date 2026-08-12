@@ -2335,60 +2335,38 @@ async fn run_agent_streaming_phase(
 }
 
 /// Filter tool calls based on mode constraints (allowed tools, max_calls).
-/// Returns the filtered list with blocked tools warned to stderr.
+/// Delegates the policy decision to the shared `filter_tool_calls_by_policy`
+/// (single implementation shared with the ACP chat path); this wrapper keeps
+/// the CLI's stderr UX.
 fn filter_tool_calls_by_mode(
     tool_calls: &[(String, String)],
     mode_runtime: Option<&dyn ModeRuntime>,
 ) -> Vec<(String, String)> {
+    let kind = mode_runtime.map(|m| m.kind()).unwrap_or(ModeKind::Edit);
     let max_calls = mode_runtime.map(|m| m.max_tool_calls()).unwrap_or(20);
-    let allowed_tools: Vec<String> = mode_runtime.map(|m| m.allowed_tools()).unwrap_or_else(|| {
-        // 默认允许所有已注册的工具
-        tool_registry()
-            .names()
-            .iter()
-            .map(|n| n.to_string())
-            .collect()
-    });
+    let (filtered_calls, blocked) =
+        crate::orchestration::mode::filter_tool_calls_by_policy(tool_calls, &kind);
 
-    let filtered_calls: Vec<(String, String)> = tool_calls
-        .iter()
-        .filter(|(name, _)| {
-            if allowed_tools.contains(name) {
-                true
-            } else {
-                eprintln!(
-                    "{}{}{}",
-                    ansi!("33"),
-                    tf(
-                        "cli.chat.tool_blocked_by_mode",
-                        &[
-                            ("tool_name", name),
-                            ("allowed", &format!("{:?}", allowed_tools))
-                        ]
-                    ),
-                    ansi!("0")
-                );
-                false
-            }
-        })
-        .take(max_calls)
-        .cloned()
-        .collect();
-
-    if filtered_calls.len() < tool_calls.len() {
-        let blocked = tool_calls.len() - filtered_calls.len();
-        let mode_str = mode_runtime
-            .map(|m| m.kind())
-            .map(|k| format!("{:?}", k))
-            .unwrap_or_default();
+    for name in &blocked {
+        eprintln!(
+            "{}{}{}",
+            ansi!("33"),
+            tf(
+                "cli.chat.tool_blocked_by_mode",
+                &[("tool_name", name), ("allowed", "")]
+            ),
+            ansi!("0")
+        );
+    }
+    if !blocked.is_empty() {
         eprintln!(
             "{}{}{}",
             ansi!("33"),
             tf(
                 "cli.chat.tool_call_blocked_by_mode",
                 &[
-                    ("blocked", &blocked.to_string()),
-                    ("mode", &mode_str),
+                    ("blocked", &blocked.len().to_string()),
+                    ("mode", &format!("{:?}", kind)),
                     ("max", &max_calls.to_string())
                 ]
             ),

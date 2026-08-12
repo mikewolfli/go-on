@@ -463,14 +463,17 @@ impl ConfigValidator {
 
         // Check vector configuration
         {
-            const OPTIMAL_VECTOR_DIMENSIONS: usize = 192;
+            // Single source of truth for the recommended dimension: the same
+            // default `default_vector_dimensions()` produces (previously this
+            // was a second hardcoded literal that could silently drift).
+            let optimal = crate::core::config::defaults::default_vector_dimensions();
 
             if let Some(vector) = &self.config.vector {
-                if vector.enabled && vector.dimensions != OPTIMAL_VECTOR_DIMENSIONS {
+                if vector.enabled && vector.dimensions != optimal {
                     result.warnings.push(ValidationWarning {
                         message: format!(
                             "Vector dimensions ({}) may not be optimal (recommended: {})",
-                            vector.dimensions, OPTIMAL_VECTOR_DIMENSIONS
+                            vector.dimensions, optimal
                         ),
                         section: "vector".to_string(),
                     });

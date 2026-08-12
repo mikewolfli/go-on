@@ -14,7 +14,7 @@ use tracing::{debug, info};
 use crate::acp::r#impl::cors::build_cors_headers;
 use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
 use crate::acp::server::AcpServer;
-use crate::acp::transport::{set_current_transport, RpcBufferTransport, SseTransport};
+use crate::acp::transport::{RpcBufferTransport, SseTransport};
 use crate::core::error::error_code_from_status;
 use crate::i18n::runtime::{t, tf};
 use crate::rpc_protocol::{chat_trace_context, JsonRpcRequest, RequestTraceContext};
@@ -251,11 +251,9 @@ pub(crate) async fn handle_http_connection(
     )
     .await;
 
-    // Clear the global transport on every path: SseTransport holds an Arc to
-    // this request's socket (and RpcBufferTransport holds the response buffer),
-    // so leaving it in the global would pin the TCP connection open indefinitely
-    // (observed as a hanging /chat/stream response).
-    crate::acp::transport::clear_current_transport();
+    // No global transport to clear: each request runs inside its own task-local
+    // transport scope (see route_http_post), so the SseTransport/RpcBufferTransport
+    // Arc is dropped with the request task instead of lingering in a global.
 
     post_result?;
     Ok(())
@@ -712,96 +710,116 @@ async fn route_http_post(
                     use super::sse::{flush_sse, write_sse_event, write_sse_headers};
                     write_sse_headers(socket, cors_headers).await?;
                     // Out-of-band SSE transport requires an fd-cloneable plain TCP
-                    // stream; on the TLS arm this global transport is not set
-                    // (matches the pre-merge TLS behavior).
-                    if let HttpStream::Plain(plain) = socket {
-                        set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(
+                    // stream; on the TLS arm no out-of-band transport is set
+                    // (matches the pre-merge TLS behavior — notifications are not
+                    // delivered on the TLS arm).
+                    let out_of_band_transport = if let HttpStream::Plain(plain) = socket {
+                        Some(Arc::new(SseTransport::new(clone_tcp_stream(
                             plain,
-                        )?)));
-                    }
+                        )?)) as Arc<dyn crate::acp::transport::Transport>)
+                    } else {
+                        None
+                    };
 
-                    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-                    let trace = http_trace_context("chat.stream");
-                    let ctx = Some(crate::acp::r#impl::chat::ChatRequestContext::new(
-                        user_session,
-                    ));
-                    let server_ref = Arc::clone(&server);
-                    let sse_tx = tx.clone();
-                    let task = tokio::spawn(async move {
-                        if let Err(err) = crate::acp::r#impl::chat::process_chat_request(
-                            server_ref.as_ref(),
-                            &mut params,
-                            Some(crate::acp::r#impl::chat::StreamObserver::sse(tx)),
-                            &trace,
-                            None,
-                            ctx,
-                        )
-                        .await
-                        {
-                            handle_chat_stream_task_error(&sse_tx, err);
-                        }
-                    });
+                    let stream_block = async move {
+                        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+                        let trace = http_trace_context("chat.stream");
+                        let ctx = Some(crate::acp::r#impl::chat::ChatRequestContext::new(
+                            user_session,
+                        ));
+                        let server_ref = Arc::clone(&server);
+                        let sse_tx = tx.clone();
+                        let task = tokio::spawn(async move {
+                            if let Err(err) = crate::acp::r#impl::chat::process_chat_request(
+                                server_ref.as_ref(),
+                                &mut params,
+                                Some(crate::acp::r#impl::chat::StreamObserver::sse(tx)),
+                                &trace,
+                                None,
+                                ctx,
+                            )
+                            .await
+                            {
+                                handle_chat_stream_task_error(&sse_tx, err);
+                            }
+                        });
 
-                    // Inactivity timeout for the chat stream.
-                    // If no events arrive within the timeout window (e.g. pipeline hang
-                    // during long-running tool execution), abort and return error.
-                    // The timeout resets on each received event, so long-running tool
-                    // chains that produce periodic progress events are fine.
-                    const STREAM_INACTIVITY_TIMEOUT_SECS: u64 = 120;
-                    let mut sse_event_count: usize = 0;
+                        // Inactivity timeout for the chat stream.
+                        // If no events arrive within the timeout window (e.g. pipeline hang
+                        // during long-running tool execution), abort and return error.
+                        // The timeout resets on each received event, so long-running tool
+                        // chains that produce periodic progress events are fine.
+                        const STREAM_INACTIVITY_TIMEOUT_SECS: u64 = 120;
+                        let mut sse_event_count: usize = 0;
 
-                    let stream_timeout =
-                        tokio::time::sleep(std::time::Duration::from_secs(STREAM_INACTIVITY_TIMEOUT_SECS));
-                    tokio::pin!(stream_timeout);
-                    loop {
-                        tokio::select! {
-                            frame = rx.recv() => {
-                                match frame {
-                                    Some(frame) => {
-                                        if let Err(err) = write_sse_event(socket, frame.event, &frame.payload).await {
-                                            task.abort();
-                                            return Err(err);
+                        let stream_timeout = tokio::time::sleep(
+                            std::time::Duration::from_secs(STREAM_INACTIVITY_TIMEOUT_SECS),
+                        );
+                        tokio::pin!(stream_timeout);
+                        loop {
+                            tokio::select! {
+                                frame = rx.recv() => {
+                                    match frame {
+                                        Some(frame) => {
+                                            if let Err(err) = write_sse_event(socket, frame.event, &frame.payload).await {
+                                                task.abort();
+                                                return Err(err);
+                                            }
+                                            sse_event_count += 1;
+                                            // Reset inactivity timer on each received event.
+                                            stream_timeout.as_mut().reset(
+                                                tokio::time::Instant::now() +
+                                                std::time::Duration::from_secs(STREAM_INACTIVITY_TIMEOUT_SECS)
+                                            );
+                                            // Periodic flush: every SSE_FLUSH_INTERVAL events.
+                                            // This batches syscalls while keeping latency low.
+                                            if sse_event_count.is_multiple_of(super::sse::SSE_FLUSH_INTERVAL)
+                                            {
+                                                let _ = flush_sse(socket).await;
+                                            }
                                         }
-                                        sse_event_count += 1;
-                                        // Reset inactivity timer on each received event.
-                                        stream_timeout.as_mut().reset(
-                                            tokio::time::Instant::now() +
-                                            std::time::Duration::from_secs(STREAM_INACTIVITY_TIMEOUT_SECS)
-                                        );
-                                        // Periodic flush: every SSE_FLUSH_INTERVAL events.
-                                        // This batches syscalls while keeping latency low.
-                                        if sse_event_count.is_multiple_of(super::sse::SSE_FLUSH_INTERVAL)
-                                        {
-                                            let _ = flush_sse(socket).await;
-                                        }
+                                        None => break,
                                     }
-                                    None => break,
+                                }
+                                _ = &mut stream_timeout => {
+                                    task.abort();
+                                    let payload = serde_json::json!({"error": t("error.chat.stream_timeout")});
+                                    let _ = write_sse_event(socket, "error", &payload).await;
+                                    let _ = flush_sse(socket).await;
+                                    return Ok(());
                                 }
                             }
-                            _ = &mut stream_timeout => {
-                                task.abort();
-                                let payload = serde_json::json!({"error": t("error.chat.stream_timeout")});
-                                let _ = write_sse_event(socket, "error", &payload).await;
-                                let _ = flush_sse(socket).await;
-                                return Ok(());
-                            }
                         }
-                    }
 
-                    // Final flush after all events are sent.
-                    let _ = flush_sse(socket).await;
-
-                    // The spawned task has already sent any error events via the SSE channel.
-                    // Await the task to ensure it finishes, but errors are already handled.
-                    if let Err(join_err) = task.await {
-                        let payload = inject_platform_profiles_if_absent(
-                            serde_json::json!({"message": format!("chat task panicked: {join_err}")}),
-                            "chat",
-                        );
-                        let _ = write_sse_event(socket, "error", &payload).await;
+                        // Final flush after all events are sent.
                         let _ = flush_sse(socket).await;
-                    }
 
+                        // The spawned task has already sent any error events via the SSE channel.
+                        // Await the task to ensure it finishes, but errors are already handled.
+                        if let Err(join_err) = task.await {
+                            let payload = inject_platform_profiles_if_absent(
+                                serde_json::json!({"message": format!("chat task panicked: {join_err}")}),
+                                "chat",
+                            );
+                            let _ = write_sse_event(socket, "error", &payload).await;
+                            let _ = flush_sse(socket).await;
+                        }
+
+                        Ok(())
+                    };
+
+                    // Run the stream inside a task-local transport scope: permission
+                    // requests and session updates emitted during chat processing
+                    // write to THIS connection's socket (the process-wide global was
+                    // overwritten by concurrent connections). Task-locals propagate
+                    // to the spawned chat task above.
+                    let stream_result: Result<(), anyhow::Error> = match out_of_band_transport {
+                        Some(transport) => {
+                            crate::acp::transport::with_transport(transport, stream_block).await
+                        }
+                        None => stream_block.await,
+                    };
+                    stream_result?;
                 }
                 "/chat/completions" | "/v1/chat/completions" | "/chat/chat/completions" => {
                     handle_openai_chat_completions(
@@ -814,6 +832,49 @@ async fn route_http_post(
                     .await?;
                 }
                 "/" | "/rpc" => {
+                    // A client's reply to a server-initiated request (e.g.
+                    // `session/request_permission`) arrives as a JSON-RPC
+                    // response shape (`id` + `result`/`error`, no `method`).
+                    // Resolve it against the pending client-request registry
+                    // here, mirroring the stdio loop's `is_jsonrpc_response`
+                    // handling — without this, approval round-trips over HTTP
+                    // always timed out (and the permission gate failed open).
+                    let is_client_response = body.get("id").is_some()
+                        && (body.get("result").is_some() || body.get("error").is_some())
+                        && body.get("method").is_none();
+                    if is_client_response {
+                        let ack = match serde_json::from_value::<
+                            crate::rpc_protocol::JsonRpcResponse,
+                        >(body)
+                        {
+                            Ok(response) => {
+                                let resolved = server
+                                    .resolve_pending_client_response(response)
+                                    .await;
+                                serde_json::json!({ "resolved": resolved })
+                            }
+                            Err(e) => {
+                                write_http_json_response_with_context(
+                                    socket,
+                                    400,
+                                    serde_json::json!({
+                                        "error": format!(
+                                            "{}: {}",
+                                            t("error.invalid_request"),
+                                            e
+                                        )
+                                    }),
+                                    path,
+                                    cors_headers,
+                                )
+                                .await?;
+                                return Ok(());
+                            }
+                        };
+                        write_http_json_response(socket, 200, ack, cors_headers).await?;
+                        return Ok(());
+                    }
+
                     let request: JsonRpcRequest = match serde_json::from_value(body) {
                         Ok(r) => r,
                         Err(e) => {
@@ -838,9 +899,26 @@ async fn route_http_post(
                     let headers_owned = header_part.to_string();
                     let server_ref = Arc::clone(&server);
 
+                    // Run request handling inside a task-local transport scope:
+                    // every out-of-band write (session/update notifications,
+                    // permission requests) goes into THIS request's buffer, not
+                    // whichever request ran last (the process-wide global was
+                    // overwritten by concurrent connections).
                     let rpc_transport = Arc::new(RpcBufferTransport::new(transport_buffer));
-                    set_current_transport(rpc_transport.clone() as Arc<dyn crate::acp::transport::Transport>);
-                    let rpc_result = handle_request(server_ref.as_ref(), request, Some(&headers_owned)).await;
+                    let (rpc_result, response_value) = crate::acp::transport::with_transport(
+                        rpc_transport.clone() as Arc<dyn crate::acp::transport::Transport>,
+                        async {
+                            let rpc_result =
+                                handle_request(server_ref.as_ref(), request, Some(&headers_owned))
+                                    .await;
+                            let response_value = rpc_transport
+                                .last_response()
+                                .await
+                                .unwrap_or_else(|| serde_json::json!({}));
+                            (rpc_result, response_value)
+                        },
+                    )
+                    .await;
 
                     if let Err(err) = &rpc_result {
                         write_http_json_response_with_context(
@@ -853,11 +931,6 @@ async fn route_http_post(
                         .await?;
                         return Ok(());
                     }
-
-                    let response_value = rpc_transport
-                        .last_response()
-                        .await
-                        .unwrap_or_else(|| serde_json::json!({}));
 
                     // Check for __text_plain__ sentinel key — serve as text/plain
                     if let Some(text) = response_value

@@ -235,7 +235,9 @@ impl Default for CapabilityBusProfile {
 pub struct CapabilityBusConfig {
     /// How many requests between evolve() calls. Default: 50.
     pub evolve_interval: u64,
-    /// Whether the capability bus is enabled. Default: false.
+    /// Whether the capability bus evolve cycle is enabled. Default: true
+    /// (the read path — sense/decide/feedback — always runs; this switch
+    /// gates only the expensive multi-subsystem evolve).
     pub enable_capability_bus: bool,
     /// Timeout (ms) for each subsystem call inside evolve(). Default: 100.
     pub subsystem_timeout_ms: u64,
@@ -245,7 +247,12 @@ impl Default for CapabilityBusConfig {
     fn default() -> Self {
         Self {
             evolve_interval: 50,
-            enable_capability_bus: false,
+            // Default true: the capability bus is core to the self-learning
+            // pipeline (sense/decide feed agent selection; the throttled
+            // evolve drives sub-bus learning). The switch is consumed by
+            // `capability_bus_feedback` — setting it false stops the 12-
+            // subsystem evolve cycle without disabling the bus's read path.
+            enable_capability_bus: true,
             subsystem_timeout_ms: 100,
         }
     }

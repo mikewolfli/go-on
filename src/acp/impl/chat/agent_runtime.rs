@@ -104,6 +104,10 @@ pub(crate) async fn run_agent_collecting(
     let sender = crate::agent::StreamingSender::from(sender);
     let task =
         tokio::spawn(async move { agent.chat(chat_messages, principles, options, sender).await });
+    // Abort capability independent of the JoinHandle: when the outer timeout
+    // fires, `collect` (which owns the handle) is dropped without aborting —
+    // this aborts the orphaned agent.chat so it stops burning tokens.
+    let abort_handle = task.abort_handle();
 
     let collect = async move {
         let stream_started = Instant::now();
@@ -239,12 +243,45 @@ pub(crate) async fn run_agent_collecting(
                     &server.orchestration_deps.skill_registry,
                 );
 
-                if tool_calls.len() >= MAX_TOOL_CALLS_PER_AGENT {
+                // Enforce the per-agent tool-call ceiling: previously this only
+                // logged "truncating" without truncating, so a runaway model
+                // could emit an unbounded tool batch. Truncate for real and
+                // report how many calls were dropped.
+                let tool_calls: Vec<_> = if tool_calls.len() > MAX_TOOL_CALLS_PER_AGENT {
+                    let dropped = tool_calls.len() - MAX_TOOL_CALLS_PER_AGENT;
                     warn!(
-                        "run_agent_collecting: tool_calls limit reached ({}), truncating",
-                        MAX_TOOL_CALLS_PER_AGENT
+                        "run_agent_collecting: tool_calls limit reached ({}), dropping {}",
+                        MAX_TOOL_CALLS_PER_AGENT, dropped
+                    );
+                    tool_calls
+                        .into_iter()
+                        .take(MAX_TOOL_CALLS_PER_AGENT)
+                        .collect()
+                } else {
+                    tool_calls
+                };
+
+                // ── Enforce the mode's tool policy (allowed tools + max
+                // calls) — shared with the CLI chat path. Previously the ACP
+                // path bypassed the mode policy entirely: Ask mode executed
+                // tools, Plan mode could run write tools, and the per-agent
+                // cap above was log-only. An empty result after filtering
+                // short-circuits the executor (it returns a default result
+                // for empty input) and skips the followup block below.
+                let mode_kind = crate::orchestration::mode::ModeKind::from(operation_mode);
+                let (tool_calls, blocked) = crate::orchestration::mode::filter_tool_calls_by_policy(
+                    &tool_calls,
+                    &mode_kind,
+                );
+                if !blocked.is_empty() {
+                    warn!(
+                        "run_agent_collecting: mode {:?} blocked {} tool call(s): {:?}",
+                        mode_kind,
+                        blocked.len(),
+                        blocked
                     );
                 }
+
                 // ── Execute tool calls concurrently via unified executor ──
                 // operation_mode / is_safeguard are passed through from the
                 // request (fallback path) or defaulted for read-only helper
@@ -382,5 +419,10 @@ pub(crate) async fn run_agent_collecting(
         if err.to_string().to_ascii_lowercase().contains("timed out") {
             server.observability.metrics.inc_agent_timeout_failure();
         }
+    })
+    .inspect_err(|_| {
+        // The collect future (and its JoinHandle) was dropped by the timeout;
+        // abort the still-running agent.chat task.
+        abort_handle.abort();
     })
 }

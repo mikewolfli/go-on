@@ -331,7 +331,7 @@ impl McpStdioServer {
 /// the handler function signatures across all call sites.
 enum MaybeTlsStream {
     Plain(tokio::net::TcpStream),
-    Tls(Box<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>),
+    Tls(Box<tokio_rustls::TlsStream<tokio::net::TcpStream>>),
 }
 
 impl AsyncRead for MaybeTlsStream {
@@ -490,23 +490,36 @@ impl McpHttpServer {
         // build_server_config. (The former `tls_acceptor` field had no
         // setter and was always `None`, so the `is_some()` branch was
         // unreachable; the mTLS config paths are the only way to get TLS.)
-        let effective_acceptor: Option<tokio_rustls::TlsAcceptor> =
+        let effective_acceptor: Option<Arc<MtlsAcceptor>> =
             if let (Some(ca), Some(cert), Some(key)) = (
                 self.mtls_ca_cert_path.as_ref(),
                 self.mtls_server_cert_path.as_ref(),
                 self.mtls_server_key_path.as_ref(),
             ) {
-                let mtls_acceptor = MtlsAcceptor::new(ca.as_str(), cert.as_str(), key.as_str());
+                let mut mtls_acceptor = MtlsAcceptor::new(ca.as_str(), cert.as_str(), key.as_str());
                 // Consume `mtls_require_client_cert` (previously the MCP arm never
                 // read the switch, so client-cert verification was always off while
                 // the ACP arm hardcoded it on). The field defaults to `false`;
                 // deployments that want mTLS must set it to `true`.
-                let mtls_acceptor = mtls_acceptor.with_client_cert(self.mtls_require_client_cert);
-                let server_config = mtls_acceptor
+                mtls_acceptor = mtls_acceptor.with_client_cert(self.mtls_require_client_cert);
+                // Wire the client-CN whitelist (same runtime config consumed by
+                // the ACP HTTP arm) so the leaf-certificate CN check runs on
+                // the MCP TLS arm too.
+                if let Some(ref acp) = self.acp_server {
+                    let allowed: Vec<String> = acp
+                        .runtime_config
+                        .mtls_allowed_cns
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    mtls_acceptor = mtls_acceptor.with_allowed_cns(allowed);
+                }
+                let _ = mtls_acceptor
                     .build_server_config()
                     .map_err(|e| anyhow::anyhow!("failed to build mTLS server config: {e}"))?;
                 info!("MCP HTTP: TLS acceptor configured from mTLS config");
-                Some(tokio_rustls::TlsAcceptor::from(server_config))
+                Some(Arc::new(mtls_acceptor))
             } else {
                 None
             };
@@ -569,7 +582,7 @@ impl McpHttpServer {
                     async move {
                         let mut stream = match tls_acceptor {
                             Some(ref acceptor) => match acceptor.accept(socket).await {
-                                Ok(tls) => MaybeTlsStream::Tls(Box::new(tls)),
+                                Ok((tls, _cn)) => MaybeTlsStream::Tls(Box::new(tls)),
                                 Err(e) => {
                                     warn!(
                                         "{}",
@@ -613,7 +626,12 @@ impl McpHttpServer {
         )
         .await?;
 
-        // Drain active connections before full shutdown.
+        // Grace period for in-flight MCP connections after the accept loop
+        // stops. The accept loop already stopped accepting new connections
+        // once the ACP drain guard entered drain mode; this sleep bounds the
+        // window for already-accepted connections to finish before the
+        // process exits. (A true connection-tracking drain would need an
+        // in-flight counter here; the sleep is the documented approximation.)
         let drain_seconds = self
             .acp_server
             .as_ref()
@@ -622,7 +640,10 @@ impl McpHttpServer {
             // `default_runtime_shutdown_drain_seconds`).
             .unwrap_or(30);
         if drain_seconds > 0 {
-            info!("Draining connections for {} seconds...", drain_seconds);
+            info!(
+                "Waiting {} seconds for in-flight MCP connections...",
+                drain_seconds
+            );
             tokio::time::sleep(std::time::Duration::from_secs(drain_seconds)).await;
         }
 

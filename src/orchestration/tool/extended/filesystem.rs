@@ -293,8 +293,14 @@ impl Tool for EditFileTool {
             anyhow::bail!("{}", tf("error.path_not_found", &[("path", path)]));
         }
 
-        // Read the file content
-        let content = fs::read_to_string(&validated).context("failed to read file")?;
+        // Read the file content (byte-capped: a model-picked huge file must
+        // not be fully buffered before the replacement check).
+        let content =
+            String::from_utf8_lossy(&crate::orchestration::tool::exec_common::read_file_capped(
+                &validated,
+                crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+            )?)
+            .into_owned();
 
         // Count occurrences of old_text
         let occurrences = content.matches(old_text).count();

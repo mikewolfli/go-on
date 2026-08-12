@@ -83,21 +83,8 @@ impl MtlsAcceptor {
 
     /// Build (or rebuild) the rustls ServerConfig from the current config files.
     pub fn build_server_config(&self) -> Result<Arc<rustls::ServerConfig>, MtlsError> {
-        // Load CA certificates
-        let ca_cert_bytes = std::fs::read(&self.ca_cert_path).map_err(|e| {
-            MtlsError::CertNotFound(format!("{}: {}", self.ca_cert_path.display(), e))
-        })?;
-
-        let mut root_store = rustls::RootCertStore::empty();
-        let ca_certs = rustls_pemfile::certs(&mut ca_cert_bytes.as_slice())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| MtlsError::InvalidCert(e.to_string()))?;
-
-        for cert in &ca_certs {
-            root_store
-                .add(cert.clone())
-                .map_err(|e| MtlsError::InvalidCert(e.to_string()))?;
-        }
+        // Load CA certificates (shared with the root-store builder below).
+        let root_store = self.build_ca_store()?;
 
         // Load server certificate chain
         let server_cert_bytes = std::fs::read(&self.server_cert_path).map_err(|e| {
@@ -130,18 +117,8 @@ impl MtlsAcceptor {
                 .build()
                 .map_err(|e| MtlsError::InvalidCert(e.to_string()))?;
 
-            let final_verifier = if !self.allowed_cn_list.is_empty() {
-                rustls::server::WebPkiClientVerifier::builder(Arc::new(
-                    self.build_ca_store_with_cn_check()?,
-                ))
-                .build()
-                .map_err(|e| MtlsError::InvalidCert(e.to_string()))?
-            } else {
-                verifier
-            };
-
             let mut server_config = rustls::ServerConfig::builder()
-                .with_client_cert_verifier(final_verifier)
+                .with_client_cert_verifier(verifier)
                 .with_single_cert(cert_chain, private_key)
                 .map_err(|e| MtlsError::InvalidCert(e.to_string()))?;
 
@@ -158,30 +135,20 @@ impl MtlsAcceptor {
         }
     }
 
-    /// Build a root store that also checks CN against the allowed list.
-    fn build_ca_store_with_cn_check(&self) -> Result<rustls::RootCertStore, MtlsError> {
-        let ca_cert_bytes = std::fs::read(&self.ca_cert_path)?;
+    /// Build a root store from the CA file. The CN whitelist is enforced in
+    /// [`MtlsAcceptor::accept`] against the client's **leaf** certificate —
+    /// filtering the CA's own CN would reject valid client certs or bypass the
+    /// leaf check entirely.
+    fn build_ca_store(&self) -> Result<rustls::RootCertStore, MtlsError> {
+        let ca_cert_bytes = std::fs::read(&self.ca_cert_path).map_err(|e| {
+            MtlsError::CertNotFound(format!("{}: {}", self.ca_cert_path.display(), e))
+        })?;
         let mut root_store = rustls::RootCertStore::empty();
         let certs = rustls_pemfile::certs(&mut ca_cert_bytes.as_slice())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| MtlsError::InvalidCert(e.to_string()))?;
 
         for cert in &certs {
-            let subject_cn = match x509_parser::parse_x509_certificate(cert) {
-                Ok((_, parsed_cert)) => parsed_cert
-                    .subject()
-                    .iter_common_name()
-                    .next()
-                    .and_then(|cn| cn.as_str().ok())
-                    .unwrap_or("unknown")
-                    .to_string(),
-                Err(_) => "unknown".to_string(),
-            };
-            if !self.allowed_cn_list.is_empty()
-                && !self.allowed_cn_list.iter().any(|cn| cn == &subject_cn)
-            {
-                return Err(MtlsError::CnNotAllowed(subject_cn));
-            }
             root_store
                 .add(cert.clone())
                 .map_err(|e| MtlsError::InvalidCert(e.to_string()))?;
@@ -245,6 +212,13 @@ impl MtlsAcceptor {
             "unknown".to_string()
         };
 
+        // Enforce the CN whitelist against the client's leaf certificate.
+        // `unknown` means no peer certificate was presented (client-cert
+        // verification disabled): nothing to authorize, so the check passes.
+        if !self.cn_allowed(&cn) {
+            return Err(MtlsError::CnNotAllowed(cn));
+        }
+
         Ok((tokio_rustls::TlsStream::Server(tls_stream), cn))
     }
 
@@ -256,10 +230,20 @@ impl MtlsAcceptor {
         self
     }
 
+    /// Whether the given client leaf-certificate CN passes the whitelist.
+    ///
+    /// Semantics: an empty whitelist allows any CN; `"unknown"` (no peer
+    /// certificate presented — client-cert verification disabled) is always
+    /// allowed, since there is nothing to authorize.
+    fn cn_allowed(&self, cn: &str) -> bool {
+        self.allowed_cn_list.is_empty()
+            || cn == "unknown"
+            || self.allowed_cn_list.iter().any(|allowed| allowed == cn)
+    }
+
     /// Builder-pattern: restrict mTLS to client certificates whose Common Name
     /// appears in the given list. An empty list disables CN filtering.
-    /// Called from `run_acp_http_server` under `#[cfg(feature = "multi-users-server")]`.
-    #[cfg(feature = "multi-users-server")]
+    /// Consumed by the ACP HTTP and MCP HTTP arms.
     pub fn with_allowed_cns(mut self, allowed: Vec<String>) -> Self {
         self.allowed_cn_list = allowed;
         self
@@ -480,7 +464,7 @@ mod tests {
         );
     }
 
-    // ── build_ca_store_with_cn_check tests ──────────────────────────────
+    // ── build_ca_store tests ─────────────────────────────────────────────
 
     #[test]
     fn test_ca_store_with_allowed_cn() {
@@ -489,7 +473,7 @@ mod tests {
         // The CA cert has CN = "Test CA"
         acceptor.allowed_cn_list = vec!["Test CA".to_string()];
 
-        let store = acceptor.build_ca_store_with_cn_check().unwrap();
+        let store = acceptor.build_ca_store().unwrap();
         assert!(
             !store.is_empty(),
             "RootCertStore should contain the CA cert"
@@ -497,16 +481,36 @@ mod tests {
     }
 
     #[test]
-    fn test_ca_store_cn_rejected() {
+    fn test_ca_store_accepts_any_cn() {
         let f = TestCertFixture::new();
         let mut acceptor = f.acceptor();
+        // The whitelist is enforced on the client leaf cert in `accept()`,
+        // not on the CA store — a non-matching list must not break the store.
         acceptor.allowed_cn_list = vec!["Wrong-CN".to_string()];
 
-        let err = acceptor.build_ca_store_with_cn_check().unwrap_err();
+        let store = acceptor.build_ca_store().unwrap();
         assert!(
-            matches!(err, MtlsError::CnNotAllowed(_)),
-            "expected CnNotAllowed, got: {err}"
+            !store.is_empty(),
+            "RootCertStore should contain the CA cert regardless of CN list"
         );
+    }
+
+    #[test]
+    fn test_cn_allowed_semantics() {
+        let f = TestCertFixture::new();
+        let mut acceptor = f.acceptor();
+        acceptor.allowed_cn_list = vec!["client-alpha".to_string()];
+
+        // Listed CN passes.
+        assert!(acceptor.cn_allowed("client-alpha"));
+        // Unlisted CN is rejected.
+        assert!(!acceptor.cn_allowed("client-beta"));
+        // No peer cert ("unknown") passes when verification is off.
+        assert!(acceptor.cn_allowed("unknown"));
+
+        // Empty list allows everything.
+        acceptor.allowed_cn_list = vec![];
+        assert!(acceptor.cn_allowed("anything"));
     }
 
     #[test]
@@ -516,7 +520,7 @@ mod tests {
         // Empty list = no CN filtering
         acceptor.allowed_cn_list = vec![];
 
-        let store = acceptor.build_ca_store_with_cn_check().unwrap();
+        let store = acceptor.build_ca_store().unwrap();
         assert!(
             !store.is_empty(),
             "RootCertStore should contain the CA cert"

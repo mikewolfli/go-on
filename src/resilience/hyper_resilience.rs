@@ -1087,6 +1087,34 @@ impl HyperResilienceEngine {
 
         let (success, result, real_effect) = match &action {
             SelfHealingAction::ClearCircuitBreaker => {
+                // Only clear a breaker whose target actually passes the health
+                // probe. Previously the probe result was logged and then
+                // ignored: a still-unhealthy service had its breaker reset
+                // every cycle, causing a reset-open oscillation that bypassed
+                // half-open recovery entirely. Non-host:port targets (breaker
+                // names) cannot be probed — they are left open and recover
+                // naturally via half-open on the next successful call.
+                if !healthy {
+                    tracing::warn!(
+                        target: "resilience",
+                        action = "ClearCircuitBreaker",
+                        target = %target,
+                        healthy = %healthy,
+                        "[HEALING] SKIPPED: target '{}' did not pass the health probe; leaving the breaker open",
+                        target
+                    );
+                    return Ok(HealingReport {
+                        action,
+                        target: target.to_string(),
+                        initiated_ms: started_ms,
+                        success: false,
+                        duration_ms: crate::shared::timestamps::now_ts_ms_u64()
+                            .saturating_sub(started_ms),
+                        result: format!(
+                            "health probe failed ({health_check_result}); breaker left open"
+                        ),
+                    });
+                }
                 tracing::info!(
                     target: "resilience",
                     action = "ClearCircuitBreaker",
@@ -1811,6 +1839,41 @@ mod tests {
     #[tokio::test]
     async fn test_execute_healing() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        // Register the breaker under a reachable host:port so the health probe
+        // passes (healing only clears breakers whose target passes the probe).
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let target = listener.local_addr().expect("local addr").to_string();
+        engine
+            .register_circuit_breaker(&target, 1, 10_000)
+            .await
+            .expect("register_circuit_breaker should succeed");
+        engine
+            .record_failure(&target)
+            .await
+            .expect("record_failure should not fail");
+
+        let report = engine
+            .execute_healing(SelfHealingAction::ClearCircuitBreaker, &target)
+            .await
+            .expect("execute_healing should succeed");
+        assert!(report.success);
+        assert_eq!(report.target, target);
+        assert!(report.duration_ms > 0);
+
+        // After healing, the breaker should be closed.
+        let health = engine.system_health().await;
+        assert_eq!(health.open_circuits, 0);
+    }
+
+    /// 10a. A breaker whose target does NOT pass the health probe is left
+    /// open: the auto-heal must not reset an unhealthy service (previously the
+    /// probe result was ignored, causing reset-open oscillation).
+    #[tokio::test]
+    async fn test_execute_healing_skips_unhealthy_target() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        // A breaker name (not a host:port) cannot be probed — healing skips it.
         engine
             .register_circuit_breaker("cb-broken", 1, 10_000)
             .await
@@ -1824,13 +1887,11 @@ mod tests {
             .execute_healing(SelfHealingAction::ClearCircuitBreaker, "cb-broken")
             .await
             .expect("execute_healing should succeed");
-        assert!(report.success);
-        assert_eq!(report.target, "cb-broken");
-        assert!(report.duration_ms > 0);
+        assert!(!report.success, "unprobeable target must not be healed");
 
-        // After healing, the breaker should be closed.
+        // Breaker stays open.
         let health = engine.system_health().await;
-        assert_eq!(health.open_circuits, 0);
+        assert_eq!(health.open_circuits, 1);
     }
 
     /// 10b. Healing counters distinguish executed from simulated actions:
@@ -1839,8 +1900,12 @@ mod tests {
     #[tokio::test]
     async fn test_execute_healing_counts_executed_vs_simulated() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let target = listener.local_addr().expect("local addr").to_string();
         engine
-            .register_circuit_breaker("cb-real", 1, 10_000)
+            .register_circuit_breaker(&target, 1, 10_000)
             .await
             .expect("register_circuit_breaker should succeed");
         engine
@@ -1848,10 +1913,10 @@ mod tests {
             .await
             .expect("register_failover_group should succeed");
 
-        // Real effects: ClearCircuitBreaker (breaker exists) and PromoteReplica
+        // Real effects: ClearCircuitBreaker (reachable target) and PromoteReplica
         // (group exists) both count as executed.
         engine
-            .execute_healing(SelfHealingAction::ClearCircuitBreaker, "cb-real")
+            .execute_healing(SelfHealingAction::ClearCircuitBreaker, &target)
             .await
             .expect("execute_healing should succeed");
         engine

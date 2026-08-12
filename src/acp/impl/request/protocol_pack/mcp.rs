@@ -58,14 +58,95 @@ pub async fn mcp_logging_set_level_payload(_server: &AcpServer, _params: Value) 
     ))
 }
 
-/// Handle `mcp.completion.complete` — not supported on the bridge transport.
-///
-/// The dedicated MCP server implements real argument completion; the ACP
-/// bridge returns an honest error instead of a fake success.
-pub async fn mcp_completion_complete_payload(_server: &AcpServer, _params: Value) -> Result<Value> {
-    Err(anyhow::anyhow!(
-        "Completion is not supported on the ACP bridge; use the dedicated MCP server"
-    ))
+/// Handle `mcp.completion.complete` — argument-name completion for prompts
+/// and resources, mirroring the native MCP arm's implementation (the bridge
+/// previously rejected it even though the server supports the capability).
+pub async fn mcp_completion_complete_payload(server: &AcpServer, params: Value) -> Result<Value> {
+    let ref_type = params
+        .get("ref")
+        .and_then(|r| r.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let ref_name = params
+        .get("ref")
+        .and_then(|r| r.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let argument_name = params
+        .get("argument")
+        .and_then(|a| a.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+
+    if ref_type != "ref/prompt" && ref_type != "ref/resource" {
+        anyhow::bail!(
+            "Unknown reference type '{ref_type}': only ref/prompt and ref/resource are supported"
+        );
+    }
+
+    let values: Vec<String> = match ref_type {
+        "ref/prompt" => {
+            if ref_name.is_empty() {
+                let all: Vec<String> = vec![
+                    "template://".to_string(),
+                    "agent://".to_string(),
+                    "skill://".to_string(),
+                ];
+                if argument_name.is_empty() || argument_name == "name" {
+                    all
+                } else {
+                    vec![]
+                }
+            } else if argument_name.is_empty() || argument_name == "name" {
+                if ref_name.starts_with("agent://") {
+                    server
+                        .agent_registry()
+                        .map(|registry| {
+                            registry
+                                .names()
+                                .iter()
+                                .map(|n| format!("agent://{}", n))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else if ref_name.starts_with("template://") {
+                    let lang = params
+                        .get("lang")
+                        .and_then(Value::as_str)
+                        .unwrap_or("en")
+                        .to_string();
+                    if let Ok(collection) = server.prompt_manager.get_all_templates(&lang) {
+                        collection
+                            .categories
+                            .iter()
+                            .flat_map(|cat| {
+                                cat.templates
+                                    .iter()
+                                    .map(|t| format!("template://{}.{}", cat.id, t.id))
+                            })
+                            .collect()
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    vec![]
+                }
+            } else {
+                vec![]
+            }
+        }
+        "ref/resource" => {
+            vec!["go-on://agents".to_string(), "go-on://tools".to_string()]
+        }
+        _ => unreachable!("ref_type guarded above"),
+    };
+
+    Ok(json!({
+        "completion": {
+            "values": values,
+            "total": values.len()
+        }
+    }))
 }
 
 /// Handle `mcp.sampling.createMessage` — create a sampling request.

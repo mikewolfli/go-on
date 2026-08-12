@@ -1,20 +1,24 @@
 //! Code Index & Semantic Search Tool
 //!
-//! Provides a persistent, incremental code index for the local workspace.
-//! Extracts symbols (functions, structs, enums, traits, impls, modules) using
+//! Provides a per-process code index for the local workspace: extracts
+//! symbols (functions, structs, enums, traits, impls, modules) using
 //! lightweight regex-based parsing, builds an inverted index keyed by symbol
 //! name and file path, and supports ranked keyword search across the index.
 //!
 //! Unlike `grep`, this tool:
 //! - Understands code **structure** (symbol names, types, signatures)
 //! - Returns ranked results by relevance (exact matches > prefix > fuzzy)
-//! - Caches the index between runs for instant reload
 //! - Supports scope-limited search (by directory, by file type)
 //!
-//! # Persistence
+//! # Lifecycle
 //!
-//! The index is stored as `{cache_dir}/code_index.msgpack.zst` (or JSON fallback).
-//! It is automatically rebuilt when source files change (checked by mtime).
+//! The index is **process-local** (a static `OnceLock<Mutex<CodeIndex>>`): it
+//! is rebuilt from scratch on the first `code_index_search` call and again on
+//! every `refresh` (a full rebuild — the mtime map is collected but not yet
+//! used to skip unchanged files). It is never persisted to disk, so a new
+//! process rebuilds it from the source tree. (The original docs promised
+//! msgpack/zstd persistence and incremental mtime-based updates; those were
+//! never implemented and the docs now match the code.)
 //!
 //! # Integration
 //!
@@ -260,10 +264,11 @@ impl CodeIndex {
         })
     }
 
-    /// Incrementally update the index by checking mtimes.
+    /// Rebuild the index. A true mtime-diff incremental update is not
+    /// implemented — every refresh is a full rebuild (documented in the
+    /// module docs; the mtime map is collected but not yet used to skip
+    /// unchanged files).
     pub fn refresh(&mut self, root_dir: &Path) -> Result<BuildSummary> {
-        // For simplicity, always do a full rebuild.
-        // In a production version, we'd diff mtimes and only re-index changed files.
         self.build(root_dir)
     }
 

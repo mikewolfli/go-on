@@ -14,7 +14,7 @@ use crate::acp::r#impl::chat::{ChatParams, ChatRequestContext, StreamFrame, Stre
 use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
 use crate::acp::r#impl::session::UserSession;
 use crate::acp::server::AcpServer;
-use crate::acp::transport::{set_current_transport, SseTransport};
+use crate::acp::transport::SseTransport;
 use crate::agent::Message;
 use crate::i18n::runtime::{t, tf};
 use crate::rpc_protocol::RequestTraceContext;
@@ -496,63 +496,128 @@ pub(crate) async fn handle_openai_chat_completions(
         return Ok(());
     }
 
+    stream_openai_sse(
+        socket,
+        server,
+        params,
+        user_session,
+        cors_headers,
+        request_id,
+        model,
+        started,
+    )
+    .await
+}
+
+/// Stream the OpenAI-compatible SSE response.
+///
+/// Runs the receive loop inside a task-local transport scope (plain-TCP arm
+/// only): permission requests and session updates emitted during chat
+/// processing write to THIS connection's socket instead of a process-wide
+/// global that concurrent connections overwrite. The TLS arm keeps the
+/// documented pre-merge behavior (no out-of-band transport).
+#[allow(clippy::too_many_arguments)]
+async fn stream_openai_sse(
+    socket: &mut HttpStream,
+    server: Arc<AcpServer>,
+    mut params: ChatParams,
+    user_session: Option<UserSession>,
+    cors_headers: &str,
+    request_id: String,
+    model: String,
+    started: std::time::Instant,
+) -> Result<()> {
+    // Clone the Arc and copy the Instant into the outcome closure so the
+    // original `server` can be moved into the async stream block below.
+    let server_metrics = Arc::clone(&server);
+    let record_outcome = move |success: bool| {
+        server_metrics
+            .observability
+            .metrics
+            .record_request_outcome(success, started.elapsed().as_millis() as f64);
+    };
+
     write_sse_headers(socket, cors_headers).await?;
     // Out-of-band SSE transport requires a plain TCP stream (fd clone); on the
-    // TLS arm the global transport is not set.
-    if let HttpStream::Plain(plain) = socket {
-        set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(plain)?)));
-    }
+    // TLS arm no out-of-band transport is set.
+    let out_of_band_transport = if let HttpStream::Plain(plain) = socket {
+        Some(Arc::new(SseTransport::new(clone_tcp_stream(plain)?))
+            as Arc<dyn crate::acp::transport::Transport>)
+    } else {
+        None
+    };
 
-    // Periodic flush interval for SSE streaming — flushes every 4 events
-    // to batch syscalls while keeping latency low (shared constant from
-    // sse.rs, same pattern as http.rs).
-    let mut sse_event_count: usize = 0;
+    let stream_block = async move {
+        // Periodic flush interval for SSE streaming — flushes every 4 events
+        // to batch syscalls while keeping latency low (shared constant from
+        // sse.rs, same pattern as http.rs).
+        let mut sse_event_count: usize = 0;
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let trace = http_trace_context("openai.chat.completions.stream");
-    let ctx = Some(ChatRequestContext::new(user_session));
-    let server_ref = Arc::clone(&server);
-    let task = tokio::spawn(async move {
-        crate::acp::r#impl::chat::process_chat_request(
-            server_ref.as_ref(),
-            &mut params,
-            Some(StreamObserver::sse(tx)),
-            &trace,
-            None,
-            ctx,
-        )
-        .await
-    });
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let trace = http_trace_context("openai.chat.completions.stream");
+        let ctx = Some(ChatRequestContext::new(user_session));
+        let server_ref = Arc::clone(&server);
+        let task = tokio::spawn(async move {
+            crate::acp::r#impl::chat::process_chat_request(
+                server_ref.as_ref(),
+                &mut params,
+                Some(StreamObserver::sse(tx)),
+                &trace,
+                None,
+                ctx,
+            )
+            .await
+        });
 
-    while let Some(frame) = rx.recv().await {
-        if frame.event == "error" {
-            // Forward error events from the chat pipeline
-            let err_msg = frame
-                .payload
-                .get("error")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown pipeline error");
-            let payload = build_openai_chunk(
-                &request_id,
-                &model,
-                &format!("upstream model service error: {}", err_msg),
-                Some("stop"),
-            );
-            let _ = write_openai_sse_data(socket, &payload).await;
-            write_openai_sse_done(socket).await?;
-            record_outcome(false);
-            task.abort();
-            return Ok(());
-        }
-        // Forward "done" event: if it carries a response, send the final chunk
-        // with finish_reason="stop" and the SSE [DONE] signal, then return.
-        if frame.event == "done" {
-            let response_text = frame
-                .payload
-                .get("response")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if !response_text.is_empty() {
+        while let Some(frame) = rx.recv().await {
+            if frame.event == "error" {
+                // Forward error events from the chat pipeline
+                let err_msg = frame
+                    .payload
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown pipeline error");
+                let payload = build_openai_chunk(
+                    &request_id,
+                    &model,
+                    &format!("upstream model service error: {}", err_msg),
+                    Some("stop"),
+                );
+                let _ = write_openai_sse_data(socket, &payload).await;
+                write_openai_sse_done(socket).await?;
+                record_outcome(false);
+                task.abort();
+                return Ok(());
+            }
+            // Forward "done" event: if it carries a response, send the final chunk
+            // with finish_reason="stop" and the SSE [DONE] signal, then return.
+            if frame.event == "done" {
+                let response_text = frame
+                    .payload
+                    .get("response")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !response_text.is_empty() {
+                    let payload =
+                        build_openai_chunk(&request_id, &model, response_text, Some("stop"));
+                    let _ = write_openai_sse_data(socket, &payload).await;
+                    write_openai_sse_done(socket).await?;
+                    record_outcome(true);
+                    task.abort();
+                    return Ok(());
+                }
+                continue;
+            }
+
+            // Forward "result" event: the final pipeline result carries the complete
+            // response text extracted from the agent output. Send it as the final
+            // chunk with finish_reason="stop", then the SSE [DONE] signal.
+            if frame.event == "result" {
+                let response_text = frame
+                    .payload
+                    .get("response")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let payload = build_openai_chunk(&request_id, &model, response_text, Some("stop"));
                 let _ = write_openai_sse_data(socket, &payload).await;
                 write_openai_sse_done(socket).await?;
@@ -560,91 +625,80 @@ pub(crate) async fn handle_openai_chat_completions(
                 task.abort();
                 return Ok(());
             }
-            continue;
-        }
 
-        // Forward "result" event: the final pipeline result carries the complete
-        // response text extracted from the agent output. Send it as the final
-        // chunk with finish_reason="stop", then the SSE [DONE] signal.
-        if frame.event == "result" {
-            let response_text = frame
+            // "telemetry" events are informational — ignore them.
+            if frame.event == "telemetry" {
+                continue;
+            }
+
+            // Only "chunk" events should proceed past this point.
+            if frame.event != "chunk" {
+                continue;
+            }
+            let token = frame
                 .payload
-                .get("response")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let payload = build_openai_chunk(&request_id, &model, response_text, Some("stop"));
-            let _ = write_openai_sse_data(socket, &payload).await;
-            write_openai_sse_done(socket).await?;
-            record_outcome(true);
-            task.abort();
-            return Ok(());
+                .get("token")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            if token.is_empty() {
+                continue;
+            }
+            let payload = build_openai_chunk(&request_id, &model, token, None);
+            if let Err(err) = write_openai_sse_data(socket, &payload).await {
+                task.abort();
+                record_outcome(false);
+                return Err(err);
+            }
+            sse_event_count += 1;
+            // Periodic flush: every SSE_FLUSH_INTERVAL events.
+            // This batches syscalls while keeping latency low.
+            if sse_event_count.is_multiple_of(super::sse::SSE_FLUSH_INTERVAL) {
+                use super::sse::flush_sse;
+                let _ = flush_sse(socket).await;
+            }
         }
 
-        // "telemetry" events are informational — ignore them.
-        if frame.event == "telemetry" {
-            continue;
-        }
-
-        // Only "chunk" events should proceed past this point.
-        if frame.event != "chunk" {
-            continue;
-        }
-        let token = frame
-            .payload
-            .get("token")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        if token.is_empty() {
-            continue;
-        }
-        let payload = build_openai_chunk(&request_id, &model, token, None);
-        if let Err(err) = write_openai_sse_data(socket, &payload).await {
-            task.abort();
-            record_outcome(false);
-            return Err(err);
-        }
-        sse_event_count += 1;
-        // Periodic flush: every SSE_FLUSH_INTERVAL events.
-        // This batches syscalls while keeping latency low.
-        if sse_event_count.is_multiple_of(super::sse::SSE_FLUSH_INTERVAL) {
-            use super::sse::flush_sse;
-            let _ = flush_sse(socket).await;
-        }
-    }
-
-    match task.await {
-        Ok(Ok(_)) => {
-            let done_payload = build_openai_chunk(&request_id, &model, "", Some("stop"));
-            write_openai_sse_data(socket, &done_payload).await?;
-            write_openai_sse_done(socket).await?;
-            record_outcome(true);
-        }
-        Ok(Err(err)) => {
-            if is_setup_or_upstream_unavailable(&err) {
-                let payload = build_openai_chunk(
-                    &request_id,
-                    &model,
-                    &degraded_openai_message(&err),
-                    Some("stop"),
-                );
-                write_openai_sse_data(socket, &payload).await?;
+        match task.await {
+            Ok(Ok(_)) => {
+                let done_payload = build_openai_chunk(&request_id, &model, "", Some("stop"));
+                write_openai_sse_data(socket, &done_payload).await?;
                 write_openai_sse_done(socket).await?;
                 record_outcome(true);
-                return Ok(());
             }
-            let payload = serde_json::json!({"error": {"message": err.to_string()}});
-            write_openai_sse_data(socket, &payload).await?;
-            write_openai_sse_done(socket).await?;
-            record_outcome(false);
+            Ok(Err(err)) => {
+                if is_setup_or_upstream_unavailable(&err) {
+                    let payload = build_openai_chunk(
+                        &request_id,
+                        &model,
+                        &degraded_openai_message(&err),
+                        Some("stop"),
+                    );
+                    write_openai_sse_data(socket, &payload).await?;
+                    write_openai_sse_done(socket).await?;
+                    record_outcome(true);
+                    return Ok(());
+                }
+                let payload = serde_json::json!({"error": {"message": err.to_string()}});
+                write_openai_sse_data(socket, &payload).await?;
+                write_openai_sse_done(socket).await?;
+                record_outcome(false);
+            }
+            Err(err) => {
+                let payload = serde_json::json!({"error": {"message": tf("error.chat_task_panicked", &[("error", &err.to_string())])}});
+                write_openai_sse_data(socket, &payload).await?;
+                write_openai_sse_done(socket).await?;
+                record_outcome(false);
+            }
         }
-        Err(err) => {
-            let payload = serde_json::json!({"error": {"message": tf("error.chat_task_panicked", &[("error", &err.to_string())])}});
-            write_openai_sse_data(socket, &payload).await?;
-            write_openai_sse_done(socket).await?;
-            record_outcome(false);
-        }
-    }
 
+        Ok(())
+    };
+
+    let stream_result: Result<(), anyhow::Error> = match out_of_band_transport {
+        Some(transport) => crate::acp::transport::with_transport(transport, stream_block).await,
+        None => stream_block.await,
+    };
+    stream_result?;
     Ok(())
 }
 
@@ -1810,108 +1864,65 @@ async fn handle_response_stream(
 
     write_sse_headers(socket, cors_headers).await?;
     // Out-of-band SSE transport requires a plain TCP stream (fd clone); on the
-    // TLS arm the global transport is not set.
-    if let HttpStream::Plain(plain) = socket {
-        set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(plain)?)));
-    }
-    write_sse_event(
-        socket,
-        "response.created",
-        &serde_json::json!({
-            "type": "response.created",
-            "response": initial_response,
-        }),
-    )
-    .await?;
-
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamFrame>();
-    let observer = StreamObserver::sse(tx);
-    let ctx = Some(ChatRequestContext::new(user_session));
-    let server_ref = Arc::clone(&server);
-    let trace_for_task = trace.clone();
-    let mut params_for_task = params.clone();
-    let task = tokio::spawn(async move {
-        crate::acp::r#impl::chat::process_chat_request(
-            server_ref.as_ref(),
-            &mut params_for_task,
-            Some(observer),
-            &trace_for_task,
-            None,
-            ctx,
-        )
-        .await
-    });
-
-    while let Some(frame) = rx.recv().await {
-        if let Err(err) = write_sse_event(socket, frame.event, &frame.payload).await {
-            task.abort();
-            return Err(err);
-        }
-    }
-
-    let result = match task.await {
-        Ok(r) => r,
-        Err(err) => {
-            let payload = serde_json::json!({"message": format!("chat task panicked: {err}")});
-            write_sse_event(socket, "error", &payload).await?;
-            return Ok(());
-        }
+    // TLS arm no out-of-band transport is set.
+    let out_of_band_transport = if let HttpStream::Plain(plain) = socket {
+        Some(Arc::new(SseTransport::new(clone_tcp_stream(plain)?))
+            as Arc<dyn crate::acp::transport::Transport>)
+    } else {
+        None
     };
 
-    match result {
-        Ok(r) => {
-            let text = r
-                .get("response")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            let item_id = next_responses_api_id("msg");
+    let stream_block = async move {
+        write_sse_event(
+            socket,
+            "response.created",
+            &serde_json::json!({
+                "type": "response.created",
+                "response": initial_response,
+            }),
+        )
+        .await?;
 
-            write_sse_event(
-                socket,
-                "response.output_text.delta",
-                &serde_json::json!({
-                    "type": "response.output_text.delta",
-                    "output_index": 0,
-                    "content_index": 0,
-                    "delta": text,
-                    "item_id": item_id,
-                    "response_id": request_id,
-                }),
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamFrame>();
+        let observer = StreamObserver::sse(tx);
+        let ctx = Some(ChatRequestContext::new(user_session));
+        let server_ref = Arc::clone(&server);
+        let trace_for_task = trace.clone();
+        let mut params_for_task = params.clone();
+        let task = tokio::spawn(async move {
+            crate::acp::r#impl::chat::process_chat_request(
+                server_ref.as_ref(),
+                &mut params_for_task,
+                Some(observer),
+                &trace_for_task,
+                None,
+                ctx,
             )
-            .await?;
+            .await
+        });
 
-            write_sse_event(
-                socket,
-                "response.token_economy",
-                &serde_json::json!({
-                    "type": "response.token_economy",
-                    "response_id": request_id,
-                    "token_economy": crate::acp::r#impl::chat::estimate_token_economy(&params.messages, text),
-                }),
-            )
-            .await?;
-
-            let completed = attach_responses_token_economy(
-                build_responses_api_response(request_id, model, text),
-                &params.messages,
-                text,
-            );
-            let completed = inject_platform_profiles_if_absent(completed, "responses.api");
-            store_responses_api_payload(server.as_ref(), &completed);
-
-            write_sse_event(
-                socket,
-                "response.completed",
-                &serde_json::json!({
-                    "type": "response.completed",
-                    "response": completed,
-                }),
-            )
-            .await?;
+        while let Some(frame) = rx.recv().await {
+            if let Err(err) = write_sse_event(socket, frame.event, &frame.payload).await {
+                task.abort();
+                return Err(err);
+            }
         }
-        Err(err) => {
-            if is_setup_or_upstream_unavailable(&err) {
-                let text = degraded_openai_message(&err);
+
+        let result = match task.await {
+            Ok(r) => r,
+            Err(err) => {
+                let payload = serde_json::json!({"message": format!("chat task panicked: {err}")});
+                write_sse_event(socket, "error", &payload).await?;
+                return Ok(());
+            }
+        };
+
+        match result {
+            Ok(r) => {
+                let text = r
+                    .get("response")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
                 let item_id = next_responses_api_id("msg");
 
                 write_sse_event(
@@ -1934,15 +1945,15 @@ async fn handle_response_stream(
                     &serde_json::json!({
                         "type": "response.token_economy",
                         "response_id": request_id,
-                        "token_economy": crate::acp::r#impl::chat::estimate_token_economy(&params.messages, &text),
+                        "token_economy": crate::acp::r#impl::chat::estimate_token_economy(&params.messages, text),
                     }),
                 )
                 .await?;
 
                 let completed = attach_responses_token_economy(
-                    build_responses_api_response(request_id, model, &text),
+                    build_responses_api_response(request_id, model, text),
                     &params.messages,
-                    &text,
+                    text,
                 );
                 let completed = inject_platform_profiles_if_absent(completed, "responses.api");
                 store_responses_api_payload(server.as_ref(), &completed);
@@ -1956,49 +1967,105 @@ async fn handle_response_stream(
                     }),
                 )
                 .await?;
-
-                write_openai_sse_done(socket).await?;
-                return Ok(());
             }
+            Err(err) => {
+                if is_setup_or_upstream_unavailable(&err) {
+                    let text = degraded_openai_message(&err);
+                    let item_id = next_responses_api_id("msg");
 
-            let code = classify_responses_upstream_error_code(&err);
-            write_sse_event(
-                socket,
-                "response.token_economy",
-                &serde_json::json!({
-                    "type": "response.token_economy",
-                    "response_id": request_id,
-                    "token_economy": crate::acp::r#impl::chat::estimate_token_economy(&params.messages, ""),
-                }),
-            )
-            .await?;
-            let failed = serde_json::json!({
-                "id": request_id,
-                "object": "response",
-                "created_at": created_at,
-                "model": model,
-                "status": "failed",
-                "output": [],
-                "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
-                "error": {"code": code, "type": "upstream_error", "message": err.to_string()},
-                "incomplete_details": null,
-            });
-            let failed = inject_platform_profiles_if_absent(failed, "responses.api");
-            store_responses_api_payload(server.as_ref(), &failed);
+                    write_sse_event(
+                        socket,
+                        "response.output_text.delta",
+                        &serde_json::json!({
+                            "type": "response.output_text.delta",
+                            "output_index": 0,
+                            "content_index": 0,
+                            "delta": text,
+                            "item_id": item_id,
+                            "response_id": request_id,
+                        }),
+                    )
+                    .await?;
 
-            write_sse_event(
-                socket,
-                "response.failed",
-                &serde_json::json!({
-                    "type": "response.failed",
-                    "response": failed,
-                }),
-            )
-            .await?;
+                    write_sse_event(
+                        socket,
+                        "response.token_economy",
+                        &serde_json::json!({
+                            "type": "response.token_economy",
+                            "response_id": request_id,
+                            "token_economy": crate::acp::r#impl::chat::estimate_token_economy(&params.messages, &text),
+                        }),
+                    )
+                    .await?;
+
+                    let completed = attach_responses_token_economy(
+                        build_responses_api_response(request_id, model, &text),
+                        &params.messages,
+                        &text,
+                    );
+                    let completed = inject_platform_profiles_if_absent(completed, "responses.api");
+                    store_responses_api_payload(server.as_ref(), &completed);
+
+                    write_sse_event(
+                        socket,
+                        "response.completed",
+                        &serde_json::json!({
+                            "type": "response.completed",
+                            "response": completed,
+                        }),
+                    )
+                    .await?;
+
+                    write_openai_sse_done(socket).await?;
+                    return Ok(());
+                }
+
+                let code = classify_responses_upstream_error_code(&err);
+                write_sse_event(
+                    socket,
+                    "response.token_economy",
+                    &serde_json::json!({
+                        "type": "response.token_economy",
+                        "response_id": request_id,
+                        "token_economy": crate::acp::r#impl::chat::estimate_token_economy(&params.messages, ""),
+                    }),
+                )
+                .await?;
+                let failed = serde_json::json!({
+                    "id": request_id,
+                    "object": "response",
+                    "created_at": created_at,
+                    "model": model,
+                    "status": "failed",
+                    "output": [],
+                    "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                    "error": {"code": code, "type": "upstream_error", "message": err.to_string()},
+                    "incomplete_details": null,
+                });
+                let failed = inject_platform_profiles_if_absent(failed, "responses.api");
+                store_responses_api_payload(server.as_ref(), &failed);
+
+                write_sse_event(
+                    socket,
+                    "response.failed",
+                    &serde_json::json!({
+                        "type": "response.failed",
+                        "response": failed,
+                    }),
+                )
+                .await?;
+            }
         }
-    }
 
-    write_openai_sse_done(socket).await?;
+        write_openai_sse_done(socket).await?;
+        Ok(())
+    };
+
+    let stream_result: Result<(), anyhow::Error> = match out_of_band_transport {
+        Some(transport) => crate::acp::transport::with_transport(transport, stream_block).await,
+        None => stream_block.await,
+    };
+    stream_result?;
     Ok(())
 }
 

@@ -20,3 +20,23 @@ pub fn truncate_chars(text: &str, max_chars: usize, ellipsis: &str) -> String {
         truncated
     }
 }
+
+/// Hard-budget variant: the input is trimmed and the `...` ellipsis replaces
+/// the last 3 characters of the budget, so the result is **at most**
+/// `max_chars` characters. This is the exact semantics of the former local
+/// `truncate_chars` in `acp/impl/chat/knowledge.rs` (kept here so all
+/// truncation lives in one module).
+pub fn truncate_chars_hard_budget(text: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+
+    let trimmed = text.trim();
+    let mut result = trimmed.chars().take(max_chars).collect::<String>();
+    if trimmed.chars().count() > max_chars && max_chars > 1 {
+        let keep = max_chars.saturating_sub(3);
+        result = trimmed.chars().take(keep).collect::<String>();
+        result.push_str("...");
+    }
+    result
+}

@@ -345,16 +345,24 @@ mod e2e_tests {
             .get("result")
             .expect("governance.status should return result");
 
-        // Should contain bus-level metrics
-        if let Some(harness_bus) = result.get("harness_bus") {
-            assert!(harness_bus.is_object(), "harness_bus should be an object");
-        }
-        if let Some(capability_bus) = result.get("capability_bus") {
-            assert!(
-                capability_bus.is_object(),
-                "capability_bus should be an object"
-            );
-        }
+        // Should contain bus-level metrics (hard assertions — previously the
+        // `if let Some(...)` guards let a missing key pass silently).
+        assert!(
+            result.get("harness_bus").is_some(),
+            "governance.status must report harness_bus metrics"
+        );
+        assert!(
+            result.get("capability_bus").is_some(),
+            "governance.status must report capability_bus metrics"
+        );
+        assert!(
+            result.get("harness_bus").unwrap().is_object(),
+            "harness_bus should be an object"
+        );
+        assert!(
+            result.get("capability_bus").unwrap().is_object(),
+            "capability_bus should be an object"
+        );
 
         harness.wait_for_exit(Duration::from_secs(5));
     }
@@ -525,19 +533,20 @@ review_required_checks = []
             })),
         );
 
-        // Should either succeed or return a meaningful error (not crash)
+        // Must return exactly one of result/error (previously the `has_result
+        // || has_error` OR was tautologically true for any response).
         let has_result = resp.get("result").is_some();
         let has_error = resp.get("error").is_some();
         assert!(
-            has_result || has_error,
-            "chat.completions should return result or error"
+            has_result != has_error,
+            "chat.completions must return exactly one of result/error"
         );
 
         if let Some(error) = resp.get("error") {
             // If error, should be structured (not just a crash)
             assert!(
-                error.get("code").is_some() || error.get("message").is_some(),
-                "error should have code or message"
+                error.get("code").is_some() && error.get("message").is_some(),
+                "error should have code and message"
             );
         }
 

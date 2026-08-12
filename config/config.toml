@@ -11,7 +11,7 @@ model_selection_mode = "adaptive"
 
 # ── Governance / Feature flags (root-level via #[serde(flatten)]) ─────
 governance_enabled = true
-governance_policy_mode = "advisory"
+governance_policy_mode = "audit"
 
 [cache]
 enabled = true

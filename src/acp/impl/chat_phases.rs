@@ -848,6 +848,20 @@ async fn extract_data_uris(
             continue;
         }
         let ml = mime.to_lowercase();
+        // Enforce the declared per-modality size limits (previously the
+        // MAX_IMAGE_SIZE / MAX_AUDIO_SIZE constants were never applied, so a
+        // hostile message could push an arbitrarily large payload into the
+        // vision/ASR pipeline).
+        if (ml.contains("image") && bytes.len() > crate::multimodal::MAX_IMAGE_SIZE)
+            || (ml.contains("audio") && bytes.len() > crate::multimodal::MAX_AUDIO_SIZE)
+        {
+            tracing::warn!(
+                mime = %ml,
+                len = bytes.len(),
+                "skipping inline data URI exceeding the declared modality size limit"
+            );
+            continue;
+        }
         let input = if ml.contains("image") {
             MultimodalInput::Image(bytes)
         } else if ml.contains("audio") {
@@ -904,6 +918,24 @@ async fn process_file_uri(
     let ext = path.extension().and_then(|e| e.to_str())?;
     let bytes = tokio::fs::read(path).await.ok()?;
     let ext_lower = ext.to_lowercase();
+    // Enforce the declared per-modality size limits (same guard as the
+    // inline `data:` URI path) so a model-picked huge file cannot push an
+    // unbounded payload into the vision/ASR pipeline.
+    let is_image = matches!(
+        ext_lower.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+    );
+    let is_audio = matches!(ext_lower.as_str(), "mp3" | "wav" | "flac" | "ogg" | "m4a");
+    if (is_image && bytes.len() > crate::multimodal::MAX_IMAGE_SIZE)
+        || (is_audio && bytes.len() > crate::multimodal::MAX_AUDIO_SIZE)
+    {
+        tracing::warn!(
+            file = %file_path,
+            len = bytes.len(),
+            "skipping file:// URI exceeding the declared modality size limit"
+        );
+        return None;
+    }
     let input = match ext_lower.as_str() {
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" => MultimodalInput::Image(bytes),
         "mp3" | "wav" | "flac" | "ogg" | "m4a" => MultimodalInput::Audio(bytes),
@@ -2126,59 +2158,53 @@ pub(crate) async fn reflect_phase(
         },
     );
 
-    // Metacognitive observation
-    if let Some(ref cb) = server.governance_deps.capability_bus {
-        let success = !exec_out.response_text.is_empty() && exec_out.last_err.is_none();
-        let task_desc = task_desc.clone();
-        let now_ms = crate::shared::timestamps::now_ts_ms_u64();
-        if let Ok(obs_id) = cb.metacognitive.record_observation(
-            &format!("chat-{}", now_ms),
-            &exec_out.selected_agent,
-            if success {
-                "execution_success"
-            } else {
-                "execution_failure"
-            },
-            if success { "info" } else { "error" },
-            &format!(
-                "Chat execution for '{}': {}",
-                task_desc,
-                if success { "success" } else { "failed" }
-            ),
-        ) {
-            if !success {
-                cb.metacognitive.autoreflect();
-                let _ = cb.metacognitive.resolve_observation(&obs_id);
-            }
-        }
-    }
-
-    // ── Metacognitive persistence save (fire-and-forget) ──────────────────
-    if let Some(ref cb) = server.governance_deps.capability_bus {
-        let meta = cb.metacognitive.clone();
-        tokio::spawn(async move {
-            use crate::intelligence::metacognitive_persistence::MetacognitivePersistence;
-            let storage_dir = crate::shared::goon_paths::goon_subdir("metacognitive");
-            if let Ok(persistence) = MetacognitivePersistence::new(storage_dir) {
-                if let Err(e) = persistence.save(&meta) {
-                    tracing::debug!(
-                        target: "metacognitive_persistence",
-                        "fire-and-forget save failed: {e}"
-                    );
+    // Metacognitive observation and fusion cycle — gated by
+    // `enable_metacognitive_feedback` (the flag was previously written into
+    // agent options but never read anywhere, so toggling it had no effect).
+    //
+    // NOTE: the per-request fire-and-forget persistence save was removed — the
+    // periodic background save (every `maintenance_interval_seconds`, plus on
+    // graceful shutdown) already persists the same snapshot, so the extra
+    // per-request `create_dir_all` + rebuild + write (and its fixed tmp-file
+    // races with the background writer) were redundant.
+    if server.runtime_config.enable_metacognitive_feedback {
+        if let Some(ref cb) = server.governance_deps.capability_bus {
+            let success = !exec_out.response_text.is_empty() && exec_out.last_err.is_none();
+            let task_desc = task_desc.clone();
+            let now_ms = crate::shared::timestamps::now_ts_ms_u64();
+            if let Ok(obs_id) = cb.metacognitive.record_observation(
+                &format!("chat-{}", now_ms),
+                &exec_out.selected_agent,
+                if success {
+                    "execution_success"
+                } else {
+                    "execution_failure"
+                },
+                if success { "info" } else { "error" },
+                &format!(
+                    "Chat execution for '{}': {}",
+                    task_desc,
+                    if success { "success" } else { "failed" }
+                ),
+            ) {
+                if !success {
+                    cb.metacognitive.autoreflect();
+                    let _ = cb.metacognitive.resolve_observation(&obs_id);
                 }
             }
-        });
-    }
+        }
 
-    // ── TripleFusion fusion cycle (fire-and-forget, non-blocking) ────────
-    if let Some(ref cb) = server.governance_deps.capability_bus {
-        let meta = cb.metacognitive.clone();
-        let cs = cb.consciousness.clone();
-        tokio::spawn(async move {
-            let fusion_bridge = crate::intelligence::triple_fusion::global_triple_fusion_bridge();
-            let triggers = fusion_bridge.lock().await.run_fusion_cycle(&meta, &cs);
-            crate::intelligence::fusion_evolution_bridge::send_triggers_to_evolution(triggers);
-        });
+        // ── TripleFusion fusion cycle (fire-and-forget, non-blocking) ────────
+        if let Some(ref cb) = server.governance_deps.capability_bus {
+            let meta = cb.metacognitive.clone();
+            let cs = cb.consciousness.clone();
+            tokio::spawn(async move {
+                let fusion_bridge =
+                    crate::intelligence::triple_fusion::global_triple_fusion_bridge();
+                let triggers = fusion_bridge.lock().await.run_fusion_cycle(&meta, &cs);
+                crate::intelligence::fusion_evolution_bridge::send_triggers_to_evolution(triggers);
+            });
+        }
     }
 
     // Include all_tools_failed flag when all tools failed
@@ -2365,6 +2391,12 @@ async fn capability_bus_feedback(
         // conversation_id). This function now only drives the THROTTLED
         // evolve() (every evolve_interval requests) so learning happens
         // without a per-request full pipeline spawn.
+
+        // The evolve cycle is gated by `enable_capability_bus` (previously the
+        // flag was never read — the 12-subsystem evolve ran regardless).
+        if !cb.config.enable_capability_bus {
+            return;
+        }
 
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

@@ -56,7 +56,7 @@ skills_require_sha256 = true
 skills_allow_floating_ref = false
 skills_cache_dir = "skills_cache"
 governance_enabled = true
-governance_policy_mode = "enforce"
+governance_policy_mode = "active"
 
 [agents]
 

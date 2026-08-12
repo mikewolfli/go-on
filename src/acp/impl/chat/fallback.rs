@@ -47,34 +47,41 @@ async fn record_agent_intelligence_outcome(
         crate::observability::live_performance::global_live_performance()
             .record_failure(agent_name, duration_ms);
     }
-    if let Some(ref cb) = server.governance_deps.capability_bus {
-        let (awareness, confidence) = if success { (1.0, 0.9) } else { (0.0, 0.8) };
-        let _ = cb.consciousness.record_metric(
-            AwarenessMetricType::SelfAwareness,
-            awareness,
-            confidence,
-        );
-        cb.self_model
-            .record_execution_result(agent_name, success, duration_ms);
-        // BLUE56-B08: Record agent execution event in WorldModel
-        let mut payload = std::collections::HashMap::new();
-        payload.insert(
-            "status".to_string(),
-            if success { "success" } else { "failure" }.to_string(),
-        );
-        payload.insert("phase".to_string(), phase_name.to_string());
-        payload.insert("duration_ms".to_string(), duration_ms.to_string());
-        let _ = cb
-            .world_model
-            .record_event("agent_execution", agent_name, payload);
-        // BLUE56-B09: Run TripleFusion fusion cycle after execution
-        // Uses the shared global singleton so fusion_cycles accumulate across requests.
-        let fusion_bridge = crate::intelligence::triple_fusion::global_triple_fusion_bridge();
-        let triggers = fusion_bridge
-            .lock()
-            .await
-            .run_fusion_cycle(&cb.metacognitive, &cb.consciousness);
-        crate::intelligence::fusion_evolution_bridge::send_triggers_to_evolution(triggers);
+    // Metacognitive feedback hooks (consciousness / self-model / world-model /
+    // triple-fusion). Gated by `enable_metacognitive_feedback` — previously
+    // the flag was inserted into agent options but never read, so toggling it
+    // had no effect. The LivePerformanceFeed above is reinforcement feedback
+    // and stays unconditional.
+    if server.runtime_config.enable_metacognitive_feedback {
+        if let Some(ref cb) = server.governance_deps.capability_bus {
+            let (awareness, confidence) = if success { (1.0, 0.9) } else { (0.0, 0.8) };
+            let _ = cb.consciousness.record_metric(
+                AwarenessMetricType::SelfAwareness,
+                awareness,
+                confidence,
+            );
+            cb.self_model
+                .record_execution_result(agent_name, success, duration_ms);
+            // BLUE56-B08: Record agent execution event in WorldModel
+            let mut payload = std::collections::HashMap::new();
+            payload.insert(
+                "status".to_string(),
+                if success { "success" } else { "failure" }.to_string(),
+            );
+            payload.insert("phase".to_string(), phase_name.to_string());
+            payload.insert("duration_ms".to_string(), duration_ms.to_string());
+            let _ = cb
+                .world_model
+                .record_event("agent_execution", agent_name, payload);
+            // BLUE56-B09: Run TripleFusion fusion cycle after execution
+            // Uses the shared global singleton so fusion_cycles accumulate across requests.
+            let fusion_bridge = crate::intelligence::triple_fusion::global_triple_fusion_bridge();
+            let triggers = fusion_bridge
+                .lock()
+                .await
+                .run_fusion_cycle(&cb.metacognitive, &cb.consciousness);
+            crate::intelligence::fusion_evolution_bridge::send_triggers_to_evolution(triggers);
+        }
     }
 }
 

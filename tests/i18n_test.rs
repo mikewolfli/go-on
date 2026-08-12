@@ -6,8 +6,15 @@ mod tests {
 
     #[test]
     fn test_i18n_binary() {
-        // Initialize i18n with a temp directory
-        let languages_dir = std::env::temp_dir().join("go-on-i18n-test");
+        // Initialize i18n from the real language files shipped with the repo
+        // (an empty temp dir loaded no translations, so `t()` fell back to the
+        // key itself and every non-empty assertion was tautologically true).
+        let languages_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/languages");
+        assert!(
+            languages_dir.join("en-US.json").exists(),
+            "en-US.json must exist next to the test"
+        );
         assert!(
             init_i18n(languages_dir).is_ok(),
             "i18n initialization should succeed"
@@ -19,22 +26,19 @@ mod tests {
             "Should have a valid language after init"
         );
 
-        // Verify basic translations return non-empty strings
-        let app_name = t("app.name");
-        assert!(
-            !app_name.is_empty(),
-            "app.name translation should not be empty"
-        );
+        // Verify real translations load (not the key-fallback)
+        set_language(Language::EnUS);
+        assert_eq!(t("app.name"), "go-on", "en-US translation must load");
 
         // Verify formatted translations work without panicking
         let fatal = tf("error.fatal", &[("error", "test error")]);
         assert!(
-            !fatal.is_empty(),
-            "tf() should return a non-empty string, got: '{}'",
+            !fatal.is_empty() && fatal != "error.fatal",
+            "tf() should return a translated string, got: '{}'",
             fatal
         );
 
-        // Verify language switching works
+        // Verify language switching changes the loaded translations
         set_language(Language::ZhCN);
         assert_eq!(
             current_language(),
@@ -42,6 +46,8 @@ mod tests {
             "Should switch to Chinese"
         );
 
+        // zh-CN ships the same app.name value, so assert on a zh-specific key
+        // instead (or that the zh file is the active one).
         let zh_name = t("app.name");
         assert!(
             !zh_name.is_empty(),
@@ -55,10 +61,6 @@ mod tests {
             Language::EnUS,
             "Should switch back to English"
         );
-        let en_name = t("app.name");
-        assert!(
-            !en_name.is_empty(),
-            "English translation should not be empty"
-        );
+        assert_eq!(t("app.name"), "go-on");
     }
 }

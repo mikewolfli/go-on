@@ -78,11 +78,23 @@ impl Tool for DiffTool {
         let (diff_text, used_system_diff) = match diff_output {
             Ok(text) => (text, true),
             Err(_) => {
-                // Fall back to built-in Rust diff
-                let content_a =
-                    std::fs::read_to_string(&path_a).context("failed to read file_a")?;
-                let content_b =
-                    std::fs::read_to_string(&path_b).context("failed to read file_b")?;
+                // Fall back to built-in Rust diff (byte-capped reads: the
+                // 5000-line LCS guard below must not run after unbounded
+                // buffering of a 10GB file).
+                let content_a = String::from_utf8_lossy(
+                    &crate::orchestration::tool::exec_common::read_file_capped(
+                        &path_a,
+                        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+                    )?,
+                )
+                .into_owned();
+                let content_b = String::from_utf8_lossy(
+                    &crate::orchestration::tool::exec_common::read_file_capped(
+                        &path_b,
+                        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+                    )?,
+                )
+                .into_owned();
                 (builtin_diff(&content_a, &content_b, context_lines)?, false)
             }
         };

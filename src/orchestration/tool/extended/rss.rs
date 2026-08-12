@@ -32,10 +32,11 @@ impl Tool for RssReadTool {
 
         info!(url = %url, "rss_read: fetching feed");
 
-        // Reuse the shared blocking client (connection pooling); the request
+        // Reuse the tool-side blocking client (validated redirect policy —
+        // redirect hops are re-checked against the URL policy, unlike the
+        // shared default client which follows them unvalidated); the request
         // carries the per-call timeout.
-        let client = crate::shared::http_client::blocking_http_client()
-            .context("failed to build HTTP client")?;
+        let client = super::http::blocking_client();
 
         let mut response = client
             .get(url)

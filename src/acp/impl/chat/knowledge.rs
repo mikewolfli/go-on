@@ -243,23 +243,10 @@ fn derive_knowledge_confidence(reusable_insights: &[String], verification_steps:
 
 /// Truncate by characters with a hard output budget: the input is trimmed
 /// and the `...` ellipsis replaces the last 3 characters of the budget, so
-/// the result is at most `max_chars` characters. This differs from
-/// [`crate::shared::truncate::truncate_chars`] (append-style, no trim) and is
-/// kept local to preserve the exact knowledge-artifact excerpt semantics.
-pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-
-    let trimmed = text.trim();
-    let mut result = trimmed.chars().take(max_chars).collect::<String>();
-    if trimmed.chars().count() > max_chars && max_chars > 1 {
-        let keep = max_chars.saturating_sub(3);
-        result = trimmed.chars().take(keep).collect::<String>();
-        result.push_str("...");
-    }
-    result
-}
+/// the result is at most `max_chars` characters. Single implementation lives
+/// in `shared::truncate` — previously this local copy duplicated (and
+/// diverged from) `shared::truncate::truncate_chars`.
+pub(crate) use crate::shared::truncate::truncate_chars_hard_budget as truncate_chars;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn persist_session_distillation(

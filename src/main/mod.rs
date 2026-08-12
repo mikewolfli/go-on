@@ -165,6 +165,12 @@ pub(crate) async fn main() {
 async fn run() -> Result<()> {
     // Initialize telemetry (tracing subscriber) early so that all subsequent
     // tracing::info!() / warn!() calls are captured on stderr.
+    //
+    // NOTE: enable_tracing/enable_metrics stay false here BY DESIGN — the
+    // binary's distributed-tracing export is driven by the runtime config
+    // (`[runtime] otel_*`) via `init_otel_export` after config load, not by
+    // these early TelemetryConfig switches (which remain a library API for
+    // external consumers; the stdout metrics exporter has no config surface).
     let telemetry_cfg = crate::observability::telemetry_enhanced::TelemetryConfig {
         enable_logging: true,
         enable_tracing: false,
@@ -187,6 +193,13 @@ async fn run() -> Result<()> {
         Some(ref path) => path.clone(),
         None => default_config_path()?,
     };
+
+    // Record the config dir so every subsystem resolves the project data root
+    // the same way (config-relative `.goon` rather than a CWD-relative one)
+    // — see `shared::goon_paths` for the unified rule.
+    if let Some(config_dir) = config_path.parent() {
+        crate::shared::goon_paths::set_config_dir(config_dir.to_path_buf());
+    }
 
     if let Some(command) = cli.command.take() {
         match command {

@@ -1124,6 +1124,11 @@ impl ServerBuilder {
         // Resolve runtime config: use provided one or default.
         let runtime_config = self.runtime_config.unwrap_or_default();
 
+        // Wire `shutdown_drain_seconds` into the DrainGuard (previously the
+        // config value was reported in the config baseline but the guard was
+        // hardcoded to 30s, so ACP drains never honored the configured value).
+        let drain_seconds = runtime_config.shutdown_drain_seconds;
+
         let telemetry_runtime = Arc::new(StdMutex::new(TelemetryRuntime::new(&runtime_config)));
 
         // ── B54-073: Gate governance initialization ──────────────────────
@@ -1368,7 +1373,7 @@ impl ServerBuilder {
             },
             prompt_manager,
             shutdown_notify: Arc::new(Notify::new()),
-            drain_guard: DrainGuard::default(),
+            drain_guard: DrainGuard::new(128, drain_seconds),
             // Share the process-wide registry so the ACP server, ToolBus, and
             // MCP arms all execute against the same tool set (single full
             // registration per process).

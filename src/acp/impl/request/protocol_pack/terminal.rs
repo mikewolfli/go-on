@@ -37,6 +37,7 @@ pub async fn terminal_create_payload(_server: &AcpServer, params: Value) -> Resu
         .map_err(|e| anyhow::anyhow!("failed to spawn terminal process '{}': {}", command, e))?;
 
     {
+        super::make_room_for_terminal();
         let mut state = super::acp_terminal_state()
             .lock()
             .unwrap_or_else(|poisoned| {
@@ -48,6 +49,8 @@ pub async fn terminal_create_payload(_server: &AcpServer, params: Value) -> Resu
             super::TerminalProcess {
                 child,
                 output_buffer: Vec::new(),
+                read_offset: 0,
+                truncated: false,
                 exited: false,
                 exit_code: None,
             },
@@ -65,15 +68,23 @@ pub async fn terminal_create_payload(_server: &AcpServer, params: Value) -> Resu
 /// Drain available output from a blocking pipe into the process output buffer.
 ///
 /// Reads until EOF, an error, or a `WouldBlock`. The caller runs on the
-/// blocking pool (`spawn_blocking`), so no async worker is starved — adding a
-/// read timeout here would change the blocking-pipe semantics, so the loop is
-/// extracted as-is.
-fn drain(reader: &mut impl std::io::Read, output_buffer: &mut Vec<u8>) {
+/// blocking pool (`spawn_blocking`), so no async worker is starved. The buffer
+/// is capped at [`super::MAX_TERMINAL_OUTPUT_BYTES`]: beyond it the oldest
+/// bytes are dropped and the `truncated` flag is set, so an unread
+/// firehose cannot grow the buffer without bound.
+fn drain(reader: &mut impl std::io::Read, output_buffer: &mut Vec<u8>, truncated: &mut bool) {
     let mut buf = [0u8; 4096];
     loop {
         match reader.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => output_buffer.extend_from_slice(&buf[..n]),
+            Ok(n) => {
+                output_buffer.extend_from_slice(&buf[..n]);
+                if output_buffer.len() > super::MAX_TERMINAL_OUTPUT_BYTES {
+                    let drop = output_buffer.len() - super::MAX_TERMINAL_OUTPUT_BYTES;
+                    output_buffer.drain(..drop);
+                    *truncated = true;
+                }
+            }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
             Err(_) => break,
         }
@@ -81,6 +92,10 @@ fn drain(reader: &mut impl std::io::Read, output_buffer: &mut Vec<u8>) {
 }
 
 /// Handle `terminal/output` — reads buffered terminal output.
+///
+/// Returns only the output accumulated since the previous `terminal/output`
+/// call (incremental semantics): the `read_offset` is advanced past the bytes
+/// returned, so a long-lived process never re-serializes its full history.
 pub async fn terminal_output_payload(_server: &AcpServer, params: Value) -> Result<Value> {
     let terminal_id = params
         .get("terminalId")
@@ -97,10 +112,10 @@ pub async fn terminal_output_payload(_server: &AcpServer, params: Value) -> Resu
             });
         if let Some(proc) = state.get_mut(&terminal_id_owned) {
             if let Some(ref mut stdout) = proc.child.stdout {
-                drain(stdout, &mut proc.output_buffer);
+                drain(stdout, &mut proc.output_buffer, &mut proc.truncated);
             }
             if let Some(ref mut stderr) = proc.child.stderr {
-                drain(stderr, &mut proc.output_buffer);
+                drain(stderr, &mut proc.output_buffer, &mut proc.truncated);
             }
 
             let exit_code = proc.child.try_wait().ok().flatten().map(|status| {
@@ -111,8 +126,11 @@ pub async fn terminal_output_payload(_server: &AcpServer, params: Value) -> Resu
                 proc.exit_code = code;
             }
 
-            let output_str = String::from_utf8_lossy(&proc.output_buffer).to_string();
-            let is_truncated = proc.output_buffer.len() > 65536;
+            // Incremental read: only bytes past the previous read offset.
+            let new_bytes: Vec<u8> = proc.output_buffer[proc.read_offset..].to_vec();
+            proc.read_offset = proc.output_buffer.len();
+            let output_str = String::from_utf8_lossy(&new_bytes).to_string();
+            let is_truncated = proc.truncated;
             let exit = proc
                 .exit_code
                 .map(|code| crate::schema::TerminalExitStatus {

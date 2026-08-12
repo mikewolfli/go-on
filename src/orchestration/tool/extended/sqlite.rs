@@ -36,6 +36,13 @@ impl Tool for SqliteQueryTool {
         let conn = rusqlite::Connection::open(&validated)
             .with_context(|| format!("failed to open SQLite DB: {}", validated.display()))?;
 
+        // Enforce the documented read-only contract: `query_only` makes SQLite
+        // reject any statement that would modify the database (INSERT/UPDATE/
+        // DELETE/DROP/PRAGMA write paths), so a model-supplied query cannot
+        // silently alter the user's SQLite file.
+        conn.pragma_update(None, "query_only", true)
+            .with_context(|| format!("failed to enable query_only on {}", validated.display()))?;
+
         let mut stmt = conn
             .prepare(sql)
             .with_context(|| format!("failed to prepare SQL: {sql}"))?;

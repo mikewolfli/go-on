@@ -115,13 +115,28 @@ struct InternalChatParams {
 pub(super) struct TerminalProcess {
     /// The child process handle.
     child: std::process::Child,
-    /// Captured stdout + stderr output so far.
+    /// Captured stdout + stderr output so far (ring semantics: old bytes are
+    /// dropped beyond [`MAX_TERMINAL_OUTPUT_BYTES`], see `truncated`).
     output_buffer: Vec<u8>,
+    /// Number of bytes of `output_buffer` already returned to clients via
+    /// `terminal/output`. `terminal/output` returns only the delta since the
+    /// last call, so a long-running process does not re-serialize history
+    /// (previously the whole buffer was returned every time — unbounded
+    /// growth and O(n²) total transfer).
+    read_offset: usize,
+    /// True once output exceeded the buffer cap and the oldest bytes were
+    /// dropped.
+    truncated: bool,
     /// Whether the process has exited.
     exited: bool,
     /// Exit status captured when process exited.
     exit_code: Option<i32>,
 }
+
+/// Hard cap for a single terminal's captured output. Beyond this, the oldest
+/// bytes are dropped (the client is expected to consume output regularly via
+/// `terminal/output`).
+pub(super) const MAX_TERMINAL_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 
 // ── Static state ─────────────────────────────────────────────────────────
 
@@ -131,6 +146,54 @@ static ACP_SESSION_STATE: OnceLock<tokio::sync::RwLock<HashMap<String, AcpSessio
 pub(super) fn acp_session_state() -> &'static tokio::sync::RwLock<HashMap<String, AcpSessionState>>
 {
     ACP_SESSION_STATE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+/// Resolve the work-directory base for an ACP session (the `cwd` from
+/// `session/new`). Consumed by the tool executor's path sandbox
+/// (`allowed_base_dir`) so file tools stay inside the session's workspace.
+/// Returns `None` when the session has no recorded cwd (sandbox check is
+/// then skipped by `sanitize_path`).
+pub(crate) async fn session_base_dir(session_id: &str) -> Option<std::path::PathBuf> {
+    let state = acp_session_state().read().await;
+    state
+        .get(session_id)
+        .and_then(|s| s.cwd.clone())
+        .map(std::path::PathBuf::from)
+}
+
+/// Memory bound for the in-memory ACP session map. `session/set_mode` and
+/// `session/resume` create entries for arbitrary session ids via
+/// `entry().or_default()`, so an unauthenticated client could otherwise grow
+/// the map without bound. When at capacity and the id is new, an arbitrary
+/// existing entry is evicted (iteration order is unspecified — the bound is
+/// what matters for memory safety).
+pub(super) const MAX_ACP_SESSIONS: usize = 4096;
+
+/// Bound `acp_session_state()` before inserting a new id.
+pub(super) async fn make_room_for_session(session_id: &str) {
+    let mut state = acp_session_state().write().await;
+    if state.len() >= MAX_ACP_SESSIONS && !state.contains_key(session_id) {
+        if let Some(arbitrary) = state.keys().next().cloned() {
+            state.remove(&arbitrary);
+        }
+    }
+}
+
+/// Memory bound for the terminal map: every entry holds a live child-process
+/// handle, so `terminal/create` must not grow it without limit.
+pub(super) const MAX_ACP_TERMINALS: usize = 256;
+
+/// Bound `acp_terminal_state()` before inserting a new terminal.
+pub(super) fn make_room_for_terminal() {
+    let mut state = acp_terminal_state().lock().unwrap_or_else(|poisoned| {
+        warn!("ACP terminal state lock poisoned in make_room_for_terminal, recovering");
+        poisoned.into_inner()
+    });
+    if state.len() >= MAX_ACP_TERMINALS {
+        if let Some(arbitrary) = state.keys().next().cloned() {
+            state.remove(&arbitrary);
+        }
+    }
 }
 
 static ACP_PENDING_PERMISSION_REQUESTS: OnceLock<

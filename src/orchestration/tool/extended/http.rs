@@ -295,6 +295,78 @@ pub(crate) async fn is_private_host_async(host: &str) -> bool {
 /// Maximum redirect hops for the http_request tool (10).
 const MAX_REDIRECTS: usize = 10;
 
+/// Validate a redirect target without the blocking DNS recheck.
+///
+/// reqwest's redirect-policy hook is synchronous, so the resolver cannot be
+/// moved to the blocking pool here. This still catches literal private/
+/// loopback IP redirects (e.g. `public.example` → `169.254.169.254`) and
+/// allow/block pattern violations on every hop; hostname-resolves-to-internal
+/// redirects remain a documented residual (the initial-URL `validate_url`
+/// still performs the DNS recheck). Without this, the previous
+/// `Policy::limited` followed every hop unvalidated, so a one-line redirect
+/// chain could reach the cloud metadata service.
+fn validate_redirect_url_no_dns(url: &str) -> Result<()> {
+    let parsed = url::Url::parse(url).map_err(|e| anyhow::anyhow!("invalid redirect URL: {e}"))?;
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        anyhow::bail!("unsupported redirect scheme: {scheme}");
+    }
+    let host = parsed.host_str().unwrap_or("");
+    if host.is_empty() {
+        anyhow::bail!("redirect URL missing host");
+    }
+
+    if url_policy().block_private_ips {
+        let literal = host.trim_start_matches('[').trim_end_matches(']');
+        if host.eq_ignore_ascii_case("localhost")
+            || host.eq_ignore_ascii_case("127.0.0.1")
+            || host.eq_ignore_ascii_case("::1")
+            || host.eq_ignore_ascii_case("[::1]")
+        {
+            anyhow::bail!("redirect target is a private host: {host}");
+        }
+        if let Ok(ip) = literal.parse::<IpAddr>() {
+            if is_private_ip(ip) {
+                anyhow::bail!("redirect target is a private host: {host}");
+            }
+        }
+    }
+
+    // URL allow/block patterns (LAYER 3) apply to redirect hops too.
+    let policy = url_policy();
+    if policy.restrict_to_allowed && !policy.allowed_patterns.is_empty() {
+        let allowed = policy.allowed_patterns.iter().any(|p| url.contains(p));
+        if !allowed {
+            anyhow::bail!("redirect target not allowed: {url}");
+        }
+    }
+    if !policy.blocked_patterns.is_empty() {
+        let blocked = policy.blocked_patterns.iter().any(|p| url.contains(p));
+        if blocked {
+            anyhow::bail!("redirect target blocked: {url}");
+        }
+    }
+    Ok(())
+}
+
+/// Redirect policy that re-validates every hop against the URL policy
+/// (scheme / literal private IP / allow-block patterns).
+fn redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let url = attempt.url().to_string();
+        match validate_redirect_url_no_dns(&url) {
+            Ok(()) => {
+                if attempt.previous().len() >= MAX_REDIRECTS {
+                    attempt.error(std::io::Error::other("too many redirects"))
+                } else {
+                    attempt.follow()
+                }
+            }
+            Err(e) => attempt.error(std::io::Error::other(e.to_string())),
+        }
+    })
+}
+
 /// Shared async reqwest client — built once and reused to benefit from
 /// connection pooling. Per-request timeouts are applied at the request
 /// builder level so the pooled client serves every timeout class.
@@ -302,18 +374,20 @@ fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
+            .redirect(redirect_policy())
             .build()
             .expect("failed to build shared HTTP client")
     })
 }
 
-/// Shared blocking reqwest client for the sync fallback path.
-fn blocking_client() -> &'static reqwest::blocking::Client {
+/// Shared blocking reqwest client for the sync fallback path. Also used by
+/// `web_scrape` / `rss_read` (via `super::http::blocking_tool_client`) so
+/// redirect hops are re-validated against the URL policy there too.
+pub(crate) fn blocking_client() -> &'static reqwest::blocking::Client {
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
+            .redirect(redirect_policy())
             .build()
             .expect("failed to build shared blocking HTTP client")
     })

@@ -163,6 +163,8 @@ pub struct FeatureConfig {
     #[serde(default = "super::defaults::default_true")]
     pub governance_enabled: bool,
     /// Governance policy mode: "active" (enforce), "audit" (log-only), "disabled".
+    /// (Config examples previously wrote "enforce"/"advisory" — those values
+    /// were never consumed; the canonical vocabulary is active/audit/disabled.)
     #[serde(default)]
     pub governance_policy_mode: String,
     /// Enable builtin skills at server startup.

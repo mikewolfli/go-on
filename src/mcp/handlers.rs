@@ -1107,57 +1107,22 @@ impl McpServer {
 
 /// Filter a list of MCP tool descriptors to only include Direct-exposure tools.
 ///
-/// Niche/domain-specific tools (CAD, 3D, GIS, games, barcodes, etc.)
-/// are classified as `Deferred` — they are hidden from the default tool list
-/// but discoverable via the `tool_search` / `skill-finder` tools.
+/// Niche/domain-specific tools (CAD, 3D, GIS, games, barcodes, etc.) are
+/// classified as `Deferred` via the `Tool::exposure()` trait — they are
+/// hidden from the default tool list but discoverable via the `tool_search`
+/// tool (which searches `registry.deferred_tool_names()`).
 ///
 /// Infrastructure tools (goon_*, acp_*, prompts_*, skill-*) are always kept.
+///
+/// Single source of truth: the `ToolExposure` trait on the shared tool
+/// registry. The previous hardcoded name/prefix tables here drifted from the
+/// trait — 25 trait-Direct tools (security_scan, read_file_lines, ping, …)
+/// were hidden from MCP without being Deferred, so MCP clients could neither
+/// see them nor discover them via tool_search.
 fn filter_tools_by_exposure(tools: &mut Vec<Value>) {
-    // Deferred tool name prefixes — niche domains not needed in everyday use.
-    const DEFERRED_PREFIXES: &[&str] = &[
-        "stl_", "obj_", "dxf_", "step_", "ply_", "iges_", "gltf_", "gcode_", "gpx_", "geo_",
-        "svg_", "barcode_", "game_", "cad_", "image_",
-    ];
-    // Deferred exact tool names.
-    const DEFERRED_NAMES: &[&str] = &[
-        "read_docx",
-        "read_excel",
-        "read_ppt",
-        "read_pdf",
-        "write_docx",
-        "write_excel",
-        "write_ppt",
-        "pdf_merge",
-        "pdf_split",
-        "email_parse",
-        "invoice_parse",
-        "rss_read",
-        "sqlite_query",
-        "dns_lookup",
-        "ping",
-        "port_scan",
-        "csv_analyze",
-        "csv_write",
-        "csv_transform",
-        "toml_write",
-        "yaml_write",
-        "web_scrape",
-        "docker_build",
-        "docker_push",
-        "lint_run",
-        "template_render",
-        "search_packages",
-        "security_scan",
-        "uuid_gen",
-        "random_token",
-        "encode_decode",
-        "hash_file",
-        "file_watch",
-        "file_diff",
-        "read_file_lines",
-        "code_metrics",
-        "code_index_search",
-    ];
+    let registry = crate::acp::r#impl::request::tools_pack::global_tool_registry();
+    let deferred: std::collections::HashSet<&str> =
+        registry.deferred_tool_names().into_iter().collect();
 
     tools.retain(|tool| {
         let name = match tool.get("name").and_then(Value::as_str) {
@@ -1175,14 +1140,10 @@ fn filter_tools_by_exposure(tools: &mut Vec<Value>) {
         {
             return true;
         }
-        // Check if this is a deferred (niche) tool.
-        if DEFERRED_NAMES.contains(&name) {
-            return false;
-        }
-        if DEFERRED_PREFIXES.iter().any(|p| name.starts_with(p)) {
-            return false;
-        }
-        true
+        // Registry tools: drop Deferred/Hidden (niche domains, discoverable
+        // via tool_search). Non-registry entries (dynamic skills) stay
+        // visible unless they collide with a deferred registry name.
+        !deferred.contains(name)
     });
 }
 
