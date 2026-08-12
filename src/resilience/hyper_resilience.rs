@@ -188,6 +188,7 @@ fn transition_breaker(cb: &mut CircuitBreaker, outcome: BreakerOutcome, now: u64
         BreakerOutcome::Success => match cb.state {
             CircuitState::HalfOpen => {
                 reset_breaker(cb);
+                cb.last_state_change_ms = now;
             }
             CircuitState::Closed => {
                 cb.failure_count = 0;
@@ -203,6 +204,7 @@ fn transition_breaker(cb: &mut CircuitBreaker, outcome: BreakerOutcome, now: u64
                 cb.last_failure_ms = now;
                 if cb.failure_count >= cb.threshold {
                     cb.state = CircuitState::Open;
+                    cb.last_state_change_ms = now;
                 }
             }
             CircuitState::Open => {
@@ -214,6 +216,7 @@ fn transition_breaker(cb: &mut CircuitBreaker, outcome: BreakerOutcome, now: u64
                 cb.state = CircuitState::Open;
                 cb.failure_count += 1;
                 cb.last_failure_ms = now;
+                cb.last_state_change_ms = now;
             }
         },
     }
@@ -269,6 +272,8 @@ pub struct CircuitBreaker {
     pub threshold: u64,
     pub recovery_timeout_ms: u64,
     pub last_failure_ms: u64,
+    /// Timestamp (ms since epoch) of the last state transition.
+    pub last_state_change_ms: u64,
     /// The failure mode of the most recent failure.
     pub last_failure_mode: Option<FailureMode>,
     /// Rolling history of recent failure modes (most recent first, max 10).
@@ -286,6 +291,7 @@ impl CircuitBreaker {
             threshold,
             recovery_timeout_ms,
             last_failure_ms: 0,
+            last_state_change_ms: 0,
             last_failure_mode: None,
             failure_history: Vec::new(),
         }
@@ -734,17 +740,24 @@ impl HyperResilienceEngine {
     }
 
     /// Snapshot all circuit breakers as
-    /// `(name, state, failure_count, total_requests, successful_requests)`.
-    pub fn breaker_snapshots(&self) -> Vec<(String, CircuitState, u64, u64, u64)> {
+    /// `(name, state, failure_count, total_requests, successful_requests, last_state_change_ms)`.
+    pub fn breaker_snapshots(&self) -> Vec<(String, CircuitState, u64, u64, u64, u64)> {
         // Lock circuit_breakers first (documented order), then release before
         // touching counters so no two locks are held simultaneously.
-        let snap: Vec<(String, CircuitState, u64)> = lock_mutex(&self.circuit_breakers)
+        let snap: Vec<(String, CircuitState, u64, u64)> = lock_mutex(&self.circuit_breakers)
             .iter()
-            .map(|(n, cb)| (n.clone(), cb.state, cb.failure_count))
+            .map(|(n, cb)| {
+                (
+                    n.clone(),
+                    cb.state,
+                    cb.failure_count,
+                    cb.last_state_change_ms,
+                )
+            })
             .collect();
         let counters = lock_mutex(&self.service_counters);
         snap.into_iter()
-            .map(|(name, state, failures)| {
+            .map(|(name, state, failures, last_change)| {
                 let c = counters.get(&name);
                 (
                     name,
@@ -752,6 +765,7 @@ impl HyperResilienceEngine {
                     failures,
                     c.map(|c| c.total_requests).unwrap_or(0),
                     c.map(|c| c.successful_requests).unwrap_or(0),
+                    last_change,
                 )
             })
             .collect()
@@ -868,6 +882,7 @@ impl HyperResilienceEngine {
                 let now = crate::shared::timestamps::now_ts_ms_u64();
                 if now >= cb.last_failure_ms + recovery {
                     cb.state = CircuitState::HalfOpen;
+                    cb.last_state_change_ms = now;
                     true
                 } else {
                     false
@@ -2115,15 +2130,22 @@ mod tests {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
         engine.register_service("api");
         engine.record_outcome("api", true, 100);
-        engine.record_outcome("api", false, 900);
+        // Trip the breaker open so a real Closed→Open transition is recorded.
+        for _ in 0..10 {
+            engine.record_outcome("api", false, 900);
+        }
+        assert_eq!(engine.breaker_state("api"), CircuitState::Open);
         let snapshots = engine.breaker_snapshots();
-        let (name, state, _failures, total, successes) = snapshots
+        let (name, state, _failures, total, successes, last_change) = snapshots
             .iter()
             .find(|(n, ..)| n == "api")
             .expect("api snapshot");
         assert_eq!(name, "api");
-        assert_eq!(*total, 2);
+        assert_eq!(*total, 11);
         assert_eq!(*successes, 1);
-        assert!(matches!(state, CircuitState::Closed));
+        assert!(matches!(state, CircuitState::Open));
+        // A real transition timestamp must have been recorded when the
+        // breaker tripped open (the former snapshot always reported "now").
+        assert!(*last_change > 0);
     }
 }

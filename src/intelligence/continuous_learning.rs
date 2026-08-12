@@ -122,27 +122,18 @@ impl ForgettingRiskRecord {
 pub struct ContinuousLearningConfig {
     /// Maximum number of consolidated memories retained.
     pub max_memories: usize,
-    /// Maximum number of learning tasks tracked at once.
-    pub max_tasks: usize,
     /// Default decay rate (per hour) for the forgetting curve.
     pub default_decay_rate: f64,
     /// Minimum importance threshold for memory retention.
     pub min_retention_importance: f64,
-    /// Number of curriculum stages.
-    pub curriculum_stages: u32,
-    /// Tasks needed per curriculum stage.
-    pub tasks_per_stage: u32,
 }
 
 impl Default for ContinuousLearningConfig {
     fn default() -> Self {
         Self {
             max_memories: 5000,
-            max_tasks: 1000,
             default_decay_rate: 0.05,
             min_retention_importance: 0.1,
-            curriculum_stages: 5,
-            tasks_per_stage: 10,
         }
     }
 }
@@ -151,9 +142,9 @@ impl Default for ContinuousLearningConfig {
 // Continuous Learning Center
 // ---------------------------------------------------------------------------
 
-/// The central coordinator for lifelong learning, guarding task management,
-/// memory consolidation, forgetting-curve tracking, and curriculum scheduling
-/// behind a thread-safe `Arc<Mutex<>>`.
+/// The central coordinator for lifelong learning, guarding memory
+/// consolidation and forgetting-curve tracking behind a thread-safe
+/// `Arc<Mutex<>>`.
 pub struct ContinuousLearningCenter {
     config: ContinuousLearningConfig,
     state: Arc<Mutex<CenterState>>,
@@ -199,6 +190,33 @@ struct CenterState {
     semantic_patterns: HashMap<String, SemanticPattern>,
     next_memory_id: u64,
     next_pattern_id: u64,
+}
+
+/// Insert a semantic pattern under a hard cap, evicting the oldest patterns
+/// (monotonic `pat-{n}` ids) when the store is full. The pattern store has no
+/// consumers today, so keeping the most recent patterns bounds memory without
+/// losing value — previously the TF-IDF path re-inserted one pattern per
+/// memory per review cycle and the map grew without bound.
+fn insert_pattern_bounded(state: &mut CenterState, pattern: SemanticPattern) {
+    const MAX_SEMANTIC_PATTERNS: usize = 1024;
+    if state.semantic_patterns.len() >= MAX_SEMANTIC_PATTERNS {
+        if let Some(oldest_id) = state
+            .semantic_patterns
+            .keys()
+            .min_by_key(|id| {
+                id.strip_prefix("pat-")
+                    .and_then(|n| n.split('-').next())
+                    .and_then(|n| n.parse::<u64>().ok())
+                    .unwrap_or(u64::MAX)
+            })
+            .cloned()
+        {
+            state.semantic_patterns.remove(&oldest_id);
+        }
+    }
+    state
+        .semantic_patterns
+        .insert(pattern.pattern_id.clone(), pattern);
 }
 
 impl ContinuousLearningCenter {
@@ -440,9 +458,7 @@ Memories:
                 };
 
                 state.next_pattern_id += 1;
-                state
-                    .semantic_patterns
-                    .insert(pattern.pattern_id.clone(), pattern);
+                insert_pattern_bounded(&mut state, pattern);
                 count += 1;
             }
 
@@ -555,9 +571,7 @@ Memories:
             };
 
             state.next_pattern_id += 1;
-            state
-                .semantic_patterns
-                .insert(pattern.pattern_id.clone(), pattern.clone());
+            insert_pattern_bounded(&mut state, pattern.clone());
             patterns.push(pattern);
             let _ = mem_id;
         }

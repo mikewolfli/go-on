@@ -403,7 +403,20 @@ impl SkillImportStore {
         self.save()?;
 
         // Register the skill in the runtime SkillRegistry so it is immediately
-        // executable by the skill engine.
+        // executable by the skill engine — but only for ENABLED imports. The
+        // `enabled` flag was previously never consulted: a disabled import
+        // (`--enabled=false`, the default) was still registered and executed
+        // at runtime. Disabled records stay dormant metadata until explicitly
+        // enabled.
+        if !record.enabled {
+            tracing::info!(
+                "imported skill '{}' v{} is disabled — not registered for execution",
+                record.name,
+                record.version
+            );
+            return Ok(record);
+        }
+
         //
         // Two registration paths:
         //   - prompt_template present → register as a PromptBasedSkill

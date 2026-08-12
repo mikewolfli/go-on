@@ -549,10 +549,27 @@ impl EvolutionLoop {
     async fn propose(&self, analysis: &Analysis) -> Result<CodePatch, apply::EvolutionLoopError> {
         // If a self-evolution agent is available, use it for real patch generation.
         if let Some(ref agent) = self.agent {
-            // Build a synthetic Report from the Analysis to pass to generate_patch
-            let report = crate::agents::self_evolution_agent::Report::new(
-                analysis.suggested_approach.clone(),
-            );
+            // Derive the real file target from the trigger, mirroring `analyze()`:
+            // only `.rs`-ending targets were actually analyzed, so only those can
+            // carry a patch target. The former code passed `suggested_approach`
+            // (natural-language prose) as the Report target, so `generate_patch`
+            // always failed at `fs::read_to_string` and no cycle ever produced a
+            // patch — the analyze→propose→apply pipeline was inert.
+            let target = match &analysis.trigger {
+                EvolutionTrigger::ManualRequest { .. } => "src/lib.rs".to_string(),
+                EvolutionTrigger::DeadCodeDetected { module, .. } => module.clone(),
+                _ => {
+                    return Err(apply::EvolutionLoopError::ProposalUnavailable(
+                        "trigger carries no real file target — cannot propose a patch".to_string(),
+                    ));
+                }
+            };
+            if !target.trim().ends_with(".rs") {
+                return Err(apply::EvolutionLoopError::ProposalUnavailable(format!(
+                    "target '{target}' is not a Rust source file — cannot propose a patch"
+                )));
+            }
+            let report = crate::agents::self_evolution_agent::Report::new(target);
 
             match agent.generate_patch(&report, &analysis.root_cause).await {
                 Ok(patch) => {

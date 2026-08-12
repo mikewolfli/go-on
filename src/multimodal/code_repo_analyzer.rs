@@ -267,13 +267,24 @@ pub enum AnswerCoverage {
 pub struct RepoAnalyzer {
     /// Cache of cloned repos keyed by URL / path.
     cache: Arc<Mutex<HashMap<String, RepoContext>>>,
+    /// Insertion order of cache keys for FIFO eviction (bounds disk usage:
+    /// each entry pins a full clone in a temp dir for the process lifetime).
+    cache_order: Arc<Mutex<std::collections::VecDeque<String>>>,
     /// Maximum file size (in bytes) to index.
     max_file_size: u64,
+    /// Maximum number of files indexed per repository.
+    max_repo_files: usize,
     /// File extensions to exclude from analysis.
     excluded_extensions: HashSet<String>,
     /// Directories to exclude from analysis.
     excluded_dirs: HashSet<String>,
 }
+
+/// Maximum number of cloned repositories retained in the in-memory cache.
+const MAX_CACHE_ENTRIES: usize = 16;
+/// Maximum number of files indexed per repository (bounds the walk for
+/// hostile inputs like `repo:/`).
+const MAX_REPO_FILES: usize = 50_000;
 
 impl Default for RepoAnalyzer {
     fn default() -> Self {
@@ -305,7 +316,9 @@ impl Default for RepoAnalyzer {
 
         Self {
             cache: Arc::new(Mutex::new(HashMap::new())),
+            cache_order: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             max_file_size: 512 * 1024, // 512 KB
+            max_repo_files: MAX_REPO_FILES,
             excluded_extensions: excluded_ext,
             excluded_dirs,
         }
@@ -346,7 +359,9 @@ impl RepoAnalyzer {
     ) -> Self {
         Self {
             cache: Arc::new(Mutex::new(HashMap::new())),
+            cache_order: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             max_file_size,
+            max_repo_files: MAX_REPO_FILES,
             excluded_extensions,
             excluded_dirs,
         }
@@ -417,6 +432,14 @@ impl RepoAnalyzer {
             if !local.exists() {
                 return Err(RepoAnalyzerError::PathNotFound(url.into()));
             }
+            // Reject walking a filesystem root (e.g. `repo:/`): the walk has
+            // no total size bound and would scan the whole tree.
+            if local.parent().is_none() {
+                return Err(RepoAnalyzerError::CloneFailed(format!(
+                    "refusing to analyze filesystem root: {}",
+                    local.display()
+                )));
+            }
             (local, None)
         };
 
@@ -455,10 +478,18 @@ impl RepoAnalyzer {
             temp_dir,
         };
 
-        // Insert into cache.
+        // Insert into cache under a FIFO cap: each entry pins a full clone on
+        // disk for the process lifetime, so unbounded caching is a disk leak.
         {
             let mut cache = self.cache.lock().await;
+            let mut order = self.cache_order.lock().await;
             cache.insert(url.to_owned(), ctx.clone());
+            order.push_back(url.to_owned());
+            while order.len() > MAX_CACHE_ENTRIES {
+                if let Some(oldest) = order.pop_front() {
+                    cache.remove(&oldest);
+                }
+            }
         }
 
         Ok(ctx)
@@ -502,6 +533,11 @@ impl RepoAnalyzer {
         repo_map: &mut RepoMap,
         contents: &mut Vec<Option<String>>,
     ) -> Result<(), RepoAnalyzerError> {
+        // Bound the total walk: without a cap, `repo:/` on a large tree (or a
+        // symlinked system dir) would scan unbounded numbers of files.
+        if repo_map.files.len() >= self.max_repo_files {
+            return Ok(());
+        }
         let mut entries = tokio::fs::read_dir(dir).await?;
         while let Some(entry) = entries.next_entry().await? {
             let ft = entry.file_type().await?;

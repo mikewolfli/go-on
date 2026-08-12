@@ -63,6 +63,12 @@ pub const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024;
 /// Maximum allowed size for audio payloads (25 MB). Enforced by the chat
 /// pipeline's inline-`data:`-URI and `file://` extraction paths.
 pub const MAX_AUDIO_SIZE: usize = 25 * 1024 * 1024;
+/// Maximum allowed size for document payloads (50 MB) — matches the cap
+/// enforced by `DocumentParser::parse` on the path-based API.
+pub const MAX_DOCUMENT_SIZE: usize = 50 * 1024 * 1024;
+/// Maximum allowed size for video payloads (500 MB) — matches
+/// `video_processor::MAX_FILE_SIZE_MB`.
+pub const MAX_VIDEO_SIZE: usize = video_processor::MAX_FILE_SIZE_MB as usize * 1024 * 1024;
 
 /// ## Variants
 ///
@@ -456,6 +462,20 @@ impl MultimodalProcessor {
     /// read them (its API requires a `Path`).
     async fn process_video(&self, data: &[u8]) -> ProcessedContent {
         if let Some(ref processor) = self.video_processor {
+            // Enforce the video size cap BEFORE writing the payload to a temp
+            // file (the VideoProcessor re-checks after reading, but the whole
+            // file must not be materialized on disk first).
+            if data.len() as u64 > video_processor::MAX_FILE_SIZE_MB * 1024 * 1024 {
+                tracing::warn!(
+                    len = data.len(),
+                    "MultimodalProcessor: video payload exceeds the size limit; skipping"
+                );
+                return ProcessedContent {
+                    text: String::new(),
+                    images: Vec::new(),
+                    audio_transcriptions: Vec::new(),
+                };
+            }
             // Write bytes to a temp file because VideoProcessor works with paths.
             let tmp_dir = match tempfile::TempDir::new() {
                 Ok(d) => d,

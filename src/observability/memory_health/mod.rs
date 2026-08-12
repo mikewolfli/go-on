@@ -132,10 +132,16 @@ fn query_macos_memory() -> SystemMemoryInfo {
 
     // Free = free pages + speculative (can be reclaimed) + purgeable
     let free_bytes = (free_pages + speculative_pages) * page_size;
+    // A live macOS system always reports some free pages. `(0, 0)` with a
+    // non-zero total means `vm_stat` failed (sandbox/container) — the
+    // `free_bytes = 0, total_bytes > 0` combination must NOT be reported as
+    // "0 MB free" (which would refuse to start the server); see
+    // `check_startup_memory`.
+    let query_failed = total_bytes > 0 && free_pages == 0 && speculative_pages == 0;
 
     SystemMemoryInfo {
-        total_bytes,
-        free_bytes,
+        total_bytes: if query_failed { 0 } else { total_bytes },
+        free_bytes: if query_failed { 0 } else { free_bytes },
         pressure_level,
     }
 }

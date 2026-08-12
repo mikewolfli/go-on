@@ -91,7 +91,9 @@ impl ProtocolVersion {
     /// Construct from a raw numeric version (clamped to the supported range
     /// when above the latest; values below 1 map to V1).
     pub fn from_u16(value: u16) -> Self {
-        if value >= Self::LATEST.as_u16() {
+        if value == 0 {
+            Self::V1
+        } else if value >= Self::LATEST.as_u16() {
             Self::LATEST
         } else {
             Self(value)

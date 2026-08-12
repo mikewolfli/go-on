@@ -139,7 +139,8 @@ impl AgentMessenger {
         }
     }
 
-    /// Deliver a message to multiple target inboxes.
+    /// Deliver a message to multiple target inboxes (fire-and-forget — used
+    /// for non-critical payloads like observability messages).
     async fn deliver_to_targets(&self, msg: AgentMessage, targets: Vec<AgentPath>) {
         for target in targets {
             self.deliver_single(msg.clone(), &target).await;
@@ -147,32 +148,42 @@ impl AgentMessenger {
     }
 
     /// Deliver a single message to an inbox, with backpressure.
-    async fn deliver_single(&self, msg: AgentMessage, path: &AgentPath) {
+    ///
+    /// Returns `true` when the message was queued, `false` when the inbox was
+    /// at capacity and the message was dropped (callers that need AtLeastOnce
+    /// delivery must check the result).
+    async fn deliver_single(&self, msg: AgentMessage, path: &AgentPath) -> bool {
         let mut inboxes = self.inboxes.write().await;
         let inbox = inboxes
             .entry(path.clone())
             .or_insert_with(|| VecDeque::with_capacity(64));
         if inbox.len() < self.max_inbox_size {
             inbox.push_back(msg);
+            // Notify watchers that a new message has been delivered.
+            let _ = self
+                .notify
+                .send(NOTIFY_COUNTER.fetch_add(1, Ordering::Relaxed));
+            true
+        } else {
+            false
         }
-        // Notify watchers that a new message has been delivered.
-        let _ = self
-            .notify
-            .send(NOTIFY_COUNTER.fetch_add(1, Ordering::Relaxed));
     }
 
     /// Deliver with verification (for AtLeastOnce).
+    ///
+    /// Verifies that THIS message was actually queued. The previous check
+    /// (inbox size > 0) passed whenever any earlier message existed, so a
+    /// dropped message was still reported as delivered and retries were
+    /// skipped.
     async fn deliver_with_check(
         &self,
         msg: &AgentMessage,
         targets: &[AgentPath],
     ) -> Result<(), String> {
         for target in targets {
-            self.deliver_single(msg.clone(), target).await;
-            // Verify delivery by checking inbox growth.
-            let size = self.inbox_size(target).await;
-            if size == 0 {
-                return Err(format!("delivery verification failed for {}", target));
+            let delivered = self.deliver_single(msg.clone(), target).await;
+            if !delivered {
+                return Err(format!("delivery failed for {}: inbox at capacity", target));
             }
         }
         Ok(())

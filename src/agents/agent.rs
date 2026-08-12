@@ -175,7 +175,11 @@ pub(crate) fn is_rate_limit_error(msg: &str) -> bool {
 /// `backoff_secs` in copilot.rs and an inline `1 << (attempt - 1)` in
 /// `skill/execution.rs`).
 pub(crate) fn retry_backoff_secs(attempt: u32) -> u64 {
-    (1u64 << attempt).min(MAX_RETRY_BACKOFF_SECS)
+    // `1u64 << attempt` panics for attempt >= 64 and the `.min()` cap applies
+    // after the shift; `checked_shl` makes the shift itself overflow-safe.
+    1u64.checked_shl(attempt)
+        .unwrap_or(u64::MAX)
+        .min(MAX_RETRY_BACKOFF_SECS)
 }
 
 /// Agent task envelope (Phase 0/1 discipline)
@@ -689,6 +693,8 @@ pub trait Agent: Send + Sync {
 pub struct AgentRegistry {
     /// Map of agent names to agent instances
     agents: HashMap<String, Arc<dyn Agent>>,
+    /// Insertion order of agent names (for true FIFO eviction at capacity).
+    agent_order: std::collections::VecDeque<String>,
     /// Optional multi-level token cache — when set, all agents returned
     /// via `get()` are automatically wrapped with `CachedAgentWrapper`.
     token_cache: RwLock<Option<Arc<TokenCache>>>,
@@ -716,6 +722,7 @@ impl AgentRegistry {
     pub fn new() -> Self {
         Self {
             agents: HashMap::new(),
+            agent_order: std::collections::VecDeque::new(),
             token_cache: RwLock::new(None),
             capability_graph: Arc::new(Mutex::new(CapabilityGraph::new())),
         }
@@ -794,6 +801,7 @@ impl AgentRegistry {
 
         Ok(Self {
             agents,
+            agent_order: config.agents().keys().cloned().collect(),
             token_cache: RwLock::new(None),
             capability_graph,
         })
@@ -848,12 +856,21 @@ impl AgentRegistry {
 
     pub fn register_arc(&mut self, name: impl Into<String>, agent: Arc<dyn Agent>) {
         let name = name.into();
-        // Evict oldest entry when at capacity.
+        // Evict the OLDEST registered agent when at capacity (HashMap
+        // iteration order is arbitrary, so `keys().next()` would evict a
+        // random agent — the previous behavior).
         if self.agents.len() >= MAX_AGENTS && !self.agents.contains_key(&name) {
-            if let Some(oldest) = self.agents.keys().next().cloned() {
+            if let Some(oldest) = self.agent_order.pop_front() {
                 self.agents.remove(&oldest);
             }
         }
+        // Re-registering an existing name must not leave a stale queue entry
+        // behind (duplicates would let eviction remove the wrong entry and
+        // let the map exceed MAX_AGENTS).
+        if self.agents.contains_key(&name) {
+            self.agent_order.retain(|n| n != &name);
+        }
+        self.agent_order.push_back(name.clone());
         // NOTE: no CachedAgentWrapper here — wrapping is a `get()`/`all()`
         // responsibility. The cache-managed call paths (ACP chat phases)
         // resolve raw agents via `get_unwrapped`/`all_unwrapped` so agent

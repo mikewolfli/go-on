@@ -22,6 +22,13 @@ use std::io::Read;
 /// legitimate LLM stream chunk.
 const MAX_DECOMPRESSED_BYTES: usize = 16 * 1024 * 1024;
 
+/// Cap for the accumulated compressed input (a legitimate gzip-encoded LLM
+/// stream is far below this; the cap only bounds hostile inputs).
+const MAX_COMPRESSED_BUFFER: usize = 64 * 1024 * 1024;
+
+/// gzip magic bytes (RFC 1952): `1f 8b`.
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
+
 /// Configuration for SSE streaming behavior
 #[derive(Debug, Clone)]
 pub struct StreamingConfig {
@@ -47,9 +54,14 @@ impl Default for StreamingConfig {
 /// Despite its name, this is a **decompressor** — it decompresses
 /// gzip-encoded streaming data.
 pub struct SseDecompressor {
+    /// Accumulated compressed input (gzip path).
     buffer: Vec<u8>,
-    threshold: usize,
     enabled: bool,
+    /// Whether the stream is gzip-encoded, decided from the first two bytes.
+    /// `None` until enough bytes have arrived to decide. When the provider
+    /// serves identity encoding (the norm when the client does not advertise
+    /// `Accept-Encoding: gzip`), the stream passes through untouched.
+    detected_gzip: Option<bool>,
 }
 
 impl SseDecompressor {
@@ -57,47 +69,80 @@ impl SseDecompressor {
     pub fn new(config: &StreamingConfig) -> Self {
         Self {
             buffer: Vec::new(),
-            threshold: config.compression_threshold,
             enabled: config.enable_compression,
+            detected_gzip: None,
         }
     }
 
     /// Feed a raw (possibly gzip-compressed) data chunk into the decompressor.
     ///
-    /// If decompression is enabled and the internal buffer reaches or exceeds
-    /// the threshold, the buffered data is gzip-decompressed and returned
-    /// as a single decompressed chunk. Otherwise, the raw data is
-    /// returned as-is (passthrough mode).
+    /// If decompression is enabled and the stream is gzip-encoded, the bytes
+    /// are accumulated and decompressed in `flush()` at stream end — a
+    /// partial gzip member must never be handed to `MultiGzDecoder` mid-stream
+    /// (the former threshold-based path re-created the decoder on every
+    /// crossing, losing the inflate position and corrupting multi-chunk
+    /// streams). If the stream is identity-encoded, the data passes through
+    /// as-is. Otherwise, the raw data is returned as-is (passthrough mode).
     pub fn decompress_chunk(&mut self, data: &[u8]) -> Vec<u8> {
         if !self.enabled {
             return data.to_vec();
         }
 
-        self.buffer.extend_from_slice(data);
+        // Decide gzip vs identity from the first bytes of the stream.
+        if self.detected_gzip.is_none() {
+            if data.is_empty() {
+                return Vec::new();
+            }
+            let mut probe = std::mem::take(&mut self.buffer);
+            probe.extend_from_slice(data);
+            if probe.len() < 2 {
+                // Not enough bytes to decide yet — hold and wait.
+                self.buffer = probe;
+                return Vec::new();
+            }
+            let is_gzip = probe[0] == GZIP_MAGIC[0] && probe[1] == GZIP_MAGIC[1];
+            self.detected_gzip = Some(is_gzip);
+            if !is_gzip {
+                // Identity encoding: emit the held prefix and pass through
+                // the rest of the stream untouched.
+                return probe;
+            }
+            self.buffer = probe;
+            return Vec::new();
+        }
 
-        if self.buffer.len() >= self.threshold {
-            let decompressed = self.decompress_buffer();
-            self.buffer.clear();
-            decompressed
-        } else {
-            // Hold in buffer, nothing emitted yet
-            Vec::new()
+        match self.detected_gzip {
+            Some(false) => data.to_vec(),
+            Some(true) => {
+                self.buffer.extend_from_slice(data);
+                if self.buffer.len() > MAX_COMPRESSED_BUFFER {
+                    tracing::warn!(
+                        target: "sse_compressor",
+                        bytes = self.buffer.len(),
+                        "SSE gzip input exceeded {} byte cap — stream truncated",
+                        MAX_COMPRESSED_BUFFER
+                    );
+                    self.buffer.truncate(MAX_COMPRESSED_BUFFER);
+                }
+                Vec::new()
+            }
+            None => unreachable!("handled above"),
         }
     }
 
     /// Flush any remaining buffered data.
     ///
-    /// If decompression is enabled, the remaining buffer is decompressed.
-    /// Otherwise, returns the raw buffer contents.
+    /// If decompression is enabled and the stream is gzip, the full
+    /// accumulated member is decompressed here. Otherwise, returns the raw
+    /// buffer contents.
     pub fn flush(&mut self) -> Vec<u8> {
-        if self.enabled && !self.buffer.is_empty() {
-            let decompressed = self.decompress_buffer();
-            self.buffer.clear();
-            decompressed
-        } else if !self.enabled {
-            std::mem::take(&mut self.buffer)
-        } else {
-            Vec::new()
+        match self.detected_gzip {
+            Some(true) => {
+                let input = std::mem::take(&mut self.buffer);
+                self.decompress_buffer(&input)
+            }
+            // Identity / undecided / disabled: pass through whatever was held.
+            _ => std::mem::take(&mut self.buffer),
         }
     }
 
@@ -111,9 +156,9 @@ impl SseDecompressor {
         self.buffer.len()
     }
 
-    /// Decompress the internal buffer using gzip.
-    fn decompress_buffer(&self) -> Vec<u8> {
-        let decoder = MultiGzDecoder::new(&self.buffer[..]);
+    /// Decompress a complete gzip byte slice.
+    fn decompress_buffer(&self, input: &[u8]) -> Vec<u8> {
+        let decoder = MultiGzDecoder::new(input);
         let mut result = Vec::new();
         // Read errors from a &[u8] are infallible for MultiGzDecoder
         // when the data is valid gzip. If invalid, we return empty data
@@ -155,20 +200,27 @@ mod tests {
     }
 
     #[test]
-    fn buffers_below_threshold() {
+    fn identity_stream_passes_through() {
         let config = StreamingConfig {
             enable_compression: true,
             compression_threshold: 1024,
         };
         let mut comp = SseDecompressor::new(&config);
+        // Non-gzip (identity) input is passed through untouched once the
+        // first two bytes rule out gzip magic — the provider did not send
+        // compressed data.
         let result = comp.decompress_chunk(b"hello");
-        // Below threshold, nothing emitted yet
-        assert!(result.is_empty());
-        assert_eq!(comp.buffered_bytes(), 5);
+        assert_eq!(result, b"hello");
+        // A single-byte first chunk is held until the encoding can be decided.
+        let mut comp2 = SseDecompressor::new(&config);
+        assert!(comp2.decompress_chunk(b"h").is_empty());
+        let rest = comp2.decompress_chunk(b"i there");
+        assert_eq!(rest, b"hi there");
+        assert_eq!(comp2.flush(), b"");
     }
 
     #[test]
-    fn decompresses_when_threshold_exceeded() {
+    fn decompresses_on_flush() {
         let config = StreamingConfig {
             enable_compression: true,
             compression_threshold: 10,
@@ -183,14 +235,15 @@ mod tests {
         encoder.write_all(data).expect("write_all should succeed");
         let compressed = encoder.finish().expect("finish should succeed");
 
-        // First chunk below threshold
+        // Gzip input is accumulated; nothing is emitted mid-stream (a partial
+        // gzip member must never be handed to MultiGzDecoder).
         let r1 = comp.decompress_chunk(&compressed[..5]);
         assert!(r1.is_empty());
-        // Second chunk pushes past threshold
         let r2 = comp.decompress_chunk(&compressed[5..]);
-        assert!(!r2.is_empty());
-        // Should contain the decompressed text
-        let output = String::from_utf8_lossy(&r2);
+        assert!(r2.is_empty());
+        // Decompression happens once at stream end.
+        let flushed = comp.flush();
+        let output = String::from_utf8_lossy(&flushed);
         assert!(output.contains("Hello world"));
         assert_eq!(comp.buffered_bytes(), 0);
     }
@@ -252,8 +305,9 @@ mod tests {
             .expect("write_all should succeed");
         let compressed = encoder.finish().expect("finish should succeed");
 
-        // Feed compressed data to the decompressor
-        let decompressed = comp.decompress_chunk(&compressed);
+        // Feed compressed data to the decompressor; output arrives at flush.
+        assert!(comp.decompress_chunk(&compressed).is_empty());
+        let decompressed = comp.flush();
         assert_eq!(decompressed, original);
     }
 }

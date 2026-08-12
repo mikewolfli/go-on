@@ -1094,8 +1094,15 @@ fn scan_skills_directory(
         }
 
         for handle in handles {
-            let (parsed_local, errors_local, skipped_local) =
-                handle.join().expect("skill scan worker panicked");
+            // A worker panic must not crash the triggering request — degrade
+            // to an empty scan result instead of unwinding the caller.
+            let (parsed_local, errors_local, skipped_local) = match handle.join() {
+                Ok(result) => result,
+                Err(_) => {
+                    tracing::warn!("skill scan worker panicked; skipping its results");
+                    (Vec::new(), Vec::new(), 0)
+                }
+            };
             parsed.extend(parsed_local);
             errors.extend(errors_local);
             skipped += skipped_local;

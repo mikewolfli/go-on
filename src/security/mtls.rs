@@ -188,34 +188,41 @@ impl MtlsAcceptor {
             Err(e) => return Err(MtlsError::HandshakeFailed(e.to_string())),
         };
 
-        // Extract CN from the peer certificate
-        let cn = if let Some(peer_certs) = tls_stream.get_ref().1.peer_certificates() {
+        // Extract CN from the peer certificate. `had_cert` distinguishes "no
+        // client certificate presented (verification disabled)" from "a
+        // CA-trusted cert whose subject has no CN=" — the latter must still be
+        // checked against the whitelist (previously it landed on "unknown" and
+        // bypassed the whitelist entirely).
+        let (cn, had_cert) = if let Some(peer_certs) = tls_stream.get_ref().1.peer_certificates() {
             if let Some(cert_der) = peer_certs.first() {
                 match x509_parser::parse_x509_certificate(cert_der) {
                     Ok((_, cert)) => {
                         let subject = cert.subject().to_string();
                         // Extract CN from subject string "CN=name,..."
-                        subject
+                        let cn = subject
                             .split(',')
                             .find_map(|part| {
                                 let p = part.trim();
                                 p.strip_prefix("CN=").map(|cn| cn.to_string())
                             })
-                            .unwrap_or_else(|| "unknown".to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        (cn, true)
                     }
-                    Err(_) => "unknown".to_string(),
+                    Err(_) => ("unknown".to_string(), true),
                 }
             } else {
-                "unknown".to_string()
+                ("unknown".to_string(), false)
             }
         } else {
-            "unknown".to_string()
+            ("unknown".to_string(), false)
         };
 
         // Enforce the CN whitelist against the client's leaf certificate.
-        // `unknown` means no peer certificate was presented (client-cert
-        // verification disabled): nothing to authorize, so the check passes.
-        if !self.cn_allowed(&cn) {
+        // `had_cert == false` means no peer certificate was presented
+        // (client-cert verification disabled): nothing to authorize, so the
+        // check passes. A presented cert whose CN is unextractable must be
+        // rejected when a whitelist is configured.
+        if !self.cn_allowed(&cn, had_cert) {
             return Err(MtlsError::CnNotAllowed(cn));
         }
 
@@ -232,13 +239,17 @@ impl MtlsAcceptor {
 
     /// Whether the given client leaf-certificate CN passes the whitelist.
     ///
-    /// Semantics: an empty whitelist allows any CN; `"unknown"` (no peer
-    /// certificate presented — client-cert verification disabled) is always
-    /// allowed, since there is nothing to authorize.
-    fn cn_allowed(&self, cn: &str) -> bool {
-        self.allowed_cn_list.is_empty()
-            || cn == "unknown"
-            || self.allowed_cn_list.iter().any(|allowed| allowed == cn)
+    /// Semantics: an empty whitelist allows any CN; `presented_cert == false`
+    /// (no peer certificate presented — client-cert verification disabled) is
+    /// always allowed, since there is nothing to authorize. A presented cert
+    /// must match the whitelist — including the `"unknown"` sentinel for
+    /// CA-trusted certs without a `CN=` in their subject, which must NOT
+    /// bypass the whitelist.
+    fn cn_allowed(&self, cn: &str, presented_cert: bool) -> bool {
+        if !presented_cert {
+            return true;
+        }
+        self.allowed_cn_list.is_empty() || self.allowed_cn_list.iter().any(|allowed| allowed == cn)
     }
 
     /// Builder-pattern: restrict mTLS to client certificates whose Common Name
@@ -502,15 +513,19 @@ mod tests {
         acceptor.allowed_cn_list = vec!["client-alpha".to_string()];
 
         // Listed CN passes.
-        assert!(acceptor.cn_allowed("client-alpha"));
+        assert!(acceptor.cn_allowed("client-alpha", true));
         // Unlisted CN is rejected.
-        assert!(!acceptor.cn_allowed("client-beta"));
-        // No peer cert ("unknown") passes when verification is off.
-        assert!(acceptor.cn_allowed("unknown"));
+        assert!(!acceptor.cn_allowed("client-beta", true));
+        // No peer cert ("unknown", no cert presented) passes when
+        // verification is off.
+        assert!(acceptor.cn_allowed("unknown", false));
+        // A presented cert without an extractable CN must NOT bypass the
+        // whitelist (previously "unknown" always passed).
+        assert!(!acceptor.cn_allowed("unknown", true));
 
         // Empty list allows everything.
         acceptor.allowed_cn_list = vec![];
-        assert!(acceptor.cn_allowed("anything"));
+        assert!(acceptor.cn_allowed("anything", true));
     }
 
     #[test]

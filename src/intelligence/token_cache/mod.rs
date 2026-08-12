@@ -850,15 +850,20 @@ impl Agent for CachedAgentWrapper {
         let fwd_sender = sender.clone();
         let collect_handle = tokio::spawn(async move {
             let mut response = String::new();
+            let mut truncated = false;
             while let Some(token) = collect_rx.recv().await {
                 // Forward each token to the caller immediately.
                 if fwd_sender.send(token.clone()).is_err() {
-                    // The caller dropped the receiver – stop collecting.
+                    // The caller dropped the receiver — stop collecting and
+                    // mark the response as truncated so it is NOT cached (a
+                    // partial answer would be served to the next identical
+                    // request as if it were complete).
+                    truncated = true;
                     break;
                 }
                 response.push_str(&token);
             }
-            response
+            (response, truncated)
         });
 
         // Await the inner agent's completion.
@@ -880,7 +885,15 @@ impl Agent for CachedAgentWrapper {
         }
 
         // Collect the full response (channel is drained by the collect task).
-        let output = collect_handle.await.unwrap_or_default();
+        // A panicked collect task defaults to `(empty, truncated=true)` so a
+        // partial/empty answer is never cached (the next identical request
+        // would be served an empty response).
+        let (output, truncated) = collect_handle
+            .await
+            .unwrap_or_else(|_| (String::new(), true));
+        if truncated {
+            return Ok(());
+        }
 
         let token_count = estimate_token_count(&output);
 

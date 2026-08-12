@@ -531,8 +531,12 @@ fn validate_phase_options(phase_name: &str, options: &PhaseOptions) -> Result<()
             anyhow::bail!(
                 "{}",
                 tf(
-                    "error.phase_option_must_be_bool",
-                    &[("phase", phase_name), ("option", "review_timeout_policy")]
+                    "error.phase_option_invalid_value",
+                    &[
+                        ("phase", phase_name),
+                        ("option", "review_timeout_policy"),
+                        ("value", policy),
+                    ],
                 )
             );
         }
@@ -586,8 +590,13 @@ fn validate_extra_u64_range(
         anyhow::bail!(
             "{}",
             tf(
-                "error.phase_option_must_be_number",
-                &[("phase", phase_name), ("option", key)]
+                "error.phase_option_out_of_range",
+                &[
+                    ("phase", phase_name),
+                    ("option", key),
+                    ("min", &min.to_string()),
+                    ("max", &max.to_string()),
+                ],
             )
         );
     }
@@ -627,7 +636,7 @@ fn validate_extra_string_array(
         anyhow::bail!(
             "{}",
             tf(
-                "error.phase_option_must_be_bool",
+                "error.phase_option_must_be_array",
                 &[("phase", phase_name), ("option", key)]
             )
         );
@@ -638,7 +647,7 @@ fn validate_extra_string_array(
             anyhow::bail!(
                 "{}",
                 tf(
-                    "error.phase_option_must_be_bool",
+                    "error.phase_option_must_be_array",
                     &[("phase", phase_name), ("option", key)]
                 )
             );
@@ -648,8 +657,12 @@ fn validate_extra_string_array(
             anyhow::bail!(
                 "{}",
                 tf(
-                    "error.phase_option_must_be_number",
-                    &[("phase", phase_name), ("option", key)]
+                    "error.phase_option_invalid_value",
+                    &[
+                        ("phase", phase_name),
+                        ("option", key),
+                        ("value", module_name),
+                    ],
                 )
             );
         }
@@ -683,8 +696,13 @@ fn validate_extra_f64_range(
         anyhow::bail!(
             "{}",
             tf(
-                "error.phase_option_must_be_number",
-                &[("phase", phase_name), ("option", key)]
+                "error.phase_option_out_of_range",
+                &[
+                    ("phase", phase_name),
+                    ("option", key),
+                    ("min", &min.to_string()),
+                    ("max", &max.to_string()),
+                ],
             )
         );
     }

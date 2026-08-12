@@ -207,7 +207,9 @@ pub(crate) async fn build_execution_context(
     let complexity = params
         .get("complexity")
         .and_then(Value::as_u64)
-        .map(|value| value as u8)
+        // Clamp to the u8 domain: a raw `as u8` truncates (256 → 0), letting
+        // a hostile request select the least-strict lazy-load policy.
+        .map(|value| value.min(u64::from(u8::MAX)) as u8)
         .unwrap_or_else(|| hardness_to_complexity(hardness.normalized));
     let default_mode = match learning_bus.as_ref() {
         Some(bus) => crate::reinforcement::recommend_work_grade_from_learning_bus(bus, "agent"),

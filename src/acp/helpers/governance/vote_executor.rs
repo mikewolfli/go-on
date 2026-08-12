@@ -150,22 +150,32 @@ pub(crate) async fn execute_high_risk_vote(
     // ── Step 1 & 2: Run all vote attempts, collect results ──────────────
     if !high_risk_vote_jobs.is_empty() {
         // Bulkhead isolation: per-agent concurrency cap so a slow agent cannot
-        // consume all parallel slots. Permits that cannot be acquired are
-        // skipped (the vote still proceeds with the remaining agents).
+        // consume all parallel slots. The permit must be HELD for the duration
+        // of the vote job — a permit acquired inside the filter closure was
+        // dropped immediately, making the cap a no-op.
         let vote_jobs = high_risk_vote_jobs
             .into_iter()
-            .filter(|(agent_name, _, _, _)| {
-                vote_bulkhead()
+            .filter_map(|job| {
+                // Take a reference for the bulkhead key so `job` itself is
+                // not partially moved out of the tuple.
+                let agent_name = &job.0;
+                let permit = vote_bulkhead()
                     .try_acquire(agent_name)
-                    .unwrap_or_default()
-                    .is_some()
+                    .unwrap_or_default()?;
+                Some((job, permit))
             })
             .collect::<Vec<_>>();
         let vote_results = join_all(vote_jobs.into_iter().map(
-            |(agent_name, agent, vote_options, strong_model)| {
+            |((agent_name, agent, vote_options, strong_model), permit)| {
                 let server_ref = server;
                 let phase_principles = phase_principles.clone();
                 async move {
+                    // Bind the permit inside the async block so it is held for
+                    // the duration of the vote attempt (a permit bound as a
+                    // closure parameter is dropped when the closure returns
+                    // the future — before join_all polls it — making the
+                    // per-agent concurrency cap a no-op).
+                    let _permit = permit;
                     run_high_risk_vote_attempt(
                         server_ref,
                         phase_name,

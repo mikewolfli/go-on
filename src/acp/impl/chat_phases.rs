@@ -831,8 +831,14 @@ async fn extract_data_uris(
     let mut rest = content;
     while let Some(start) = rest.find("data:") {
         let after = &rest[start + 5..];
+        // A `data:` prefix without `;base64,` (e.g. `data:text/plain,hello`)
+        // must not abort the scan — advance past it and keep looking for
+        // valid base64 URIs (previously `break` dropped every later URI).
         let Some((mime, payload_tail)) = after.split_once(";base64,") else {
-            break;
+            rest = &after[after
+                .find(|c: char| c.is_whitespace() || c == ')' || c == '>' || c == ']')
+                .unwrap_or(after.len())..];
+            continue;
         };
         let payload_end = payload_tail
             .find(|c: char| !matches!(c, 'A'..='Z' | 'a'..='z' | '0'..='9' | '+' | '/' | '='))
@@ -851,13 +857,22 @@ async fn extract_data_uris(
         // Enforce the declared per-modality size limits (previously the
         // MAX_IMAGE_SIZE / MAX_AUDIO_SIZE constants were never applied, so a
         // hostile message could push an arbitrarily large payload into the
-        // vision/ASR pipeline).
-        if (ml.contains("image") && bytes.len() > crate::multimodal::MAX_IMAGE_SIZE)
-            || (ml.contains("audio") && bytes.len() > crate::multimodal::MAX_AUDIO_SIZE)
-        {
+        // vision/ASR pipeline). Video and document modalities get the same
+        // treatment so no modality bypasses the caps.
+        let cap = if ml.contains("image") {
+            crate::multimodal::MAX_IMAGE_SIZE
+        } else if ml.contains("audio") {
+            crate::multimodal::MAX_AUDIO_SIZE
+        } else if ml.contains("video") {
+            crate::multimodal::MAX_VIDEO_SIZE
+        } else {
+            crate::multimodal::MAX_DOCUMENT_SIZE
+        };
+        if bytes.len() > cap {
             tracing::warn!(
                 mime = %ml,
                 len = bytes.len(),
+                cap = cap,
                 "skipping inline data URI exceeding the declared modality size limit"
             );
             continue;
@@ -899,7 +914,7 @@ async fn extract_data_uris(
             }
             if !processed.audio_transcriptions.is_empty() {
                 e.push_str(&format!(
-                    "\n[Audio transcription]:\\n{}",
+                    "\n[Audio transcription]:\n{}",
                     processed.joined_audio()
                 ));
             }
@@ -912,30 +927,53 @@ async fn process_file_uri(
     mp: &crate::multimodal::MultimodalProcessor,
     content: &str,
 ) -> Option<String> {
-    use crate::multimodal::MultimodalInput;
+    use crate::multimodal::{
+        MultimodalInput, MAX_AUDIO_SIZE, MAX_DOCUMENT_SIZE, MAX_IMAGE_SIZE, MAX_VIDEO_SIZE,
+    };
     let file_path = content.strip_prefix("file://")?;
     let path = std::path::Path::new(file_path);
     let ext = path.extension().and_then(|e| e.to_str())?;
-    let bytes = tokio::fs::read(path).await.ok()?;
     let ext_lower = ext.to_lowercase();
-    // Enforce the declared per-modality size limits (same guard as the
-    // inline `data:` URI path) so a model-picked huge file cannot push an
-    // unbounded payload into the vision/ASR pipeline.
+    // Enforce the declared per-modality size limits against the file's
+    // metadata BEFORE reading, so a model-picked huge file cannot push an
+    // unbounded payload into the pipeline (previously the whole file was
+    // read first, and video/document modalities had no cap at all).
     let is_image = matches!(
         ext_lower.as_str(),
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
     );
     let is_audio = matches!(ext_lower.as_str(), "mp3" | "wav" | "flac" | "ogg" | "m4a");
-    if (is_image && bytes.len() > crate::multimodal::MAX_IMAGE_SIZE)
-        || (is_audio && bytes.len() > crate::multimodal::MAX_AUDIO_SIZE)
-    {
-        tracing::warn!(
-            file = %file_path,
-            len = bytes.len(),
-            "skipping file:// URI exceeding the declared modality size limit"
-        );
-        return None;
+    let is_video = matches!(ext_lower.as_str(), "mp4" | "avi" | "mkv" | "mov" | "webm");
+    let cap = if is_image {
+        MAX_IMAGE_SIZE
+    } else if is_audio {
+        MAX_AUDIO_SIZE
+    } else if is_video {
+        MAX_VIDEO_SIZE
+    } else {
+        MAX_DOCUMENT_SIZE
+    };
+    match tokio::fs::metadata(path).await {
+        Ok(meta) if meta.len() > cap as u64 => {
+            tracing::warn!(
+                file = %file_path,
+                len = meta.len(),
+                cap = cap,
+                "skipping file:// URI exceeding the declared modality size limit"
+            );
+            return None;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(
+                file = %file_path,
+                error = %e,
+                "skipping file:// URI whose metadata could not be read"
+            );
+            return None;
+        }
     }
+    let bytes = tokio::fs::read(path).await.ok()?;
     let input = match ext_lower.as_str() {
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" => MultimodalInput::Image(bytes),
         "mp3" | "wav" | "flac" | "ogg" | "m4a" => MultimodalInput::Audio(bytes),
@@ -957,7 +995,7 @@ async fn process_file_uri(
         }
         if !processed.audio_transcriptions.is_empty() {
             e.push_str(&format!(
-                "\n[Audio transcription]:\\n{}",
+                "\n[Audio transcription]:\n{}",
                 processed.joined_audio()
             ));
         }
@@ -1101,6 +1139,13 @@ pub(crate) async fn act_phase(
     let mut quota_failed_agents: Vec<String> = Vec::new();
     let mut agent_attempts: Vec<Value> = Vec::with_capacity(resolve_out.resolved.agents.len() + 2);
     let mut cache_hit = false;
+    // Whether a `done` stream event was already emitted by an inner execution
+    // path: cache hits via `stream_cache_response`, fallback via
+    // `run_agent_collecting`, and the high-risk vote in-block emission. Only
+    // the autonomy loop emits no `done` of its own, so the completion block
+    // below must not double-emit for the other paths (previously every
+    // cache-hit / fallback request sent two `chat.stream.done` notifications).
+    let mut stream_done_emitted = false;
     let cache_bypassed_for_execution =
         should_bypass_for_execution(&params.mode, &routing_out.agent_messages);
 
@@ -1256,6 +1301,7 @@ pub(crate) async fn act_phase(
             &None,
         )
         .await?;
+        stream_done_emitted = true;
         // Push hit entry only after successful stream (preserves original ordering)
         if let Some(entry) = token_outcome.agent_entry {
             agent_attempts.push(entry);
@@ -1274,6 +1320,7 @@ pub(crate) async fn act_phase(
             &None,
         )
         .await?;
+        stream_done_emitted = true;
     }
 
     // ── Pre-execution review gate (SafeGuard mode) ────────────────────
@@ -1496,6 +1543,10 @@ pub(crate) async fn act_phase(
                 success: true,
                 duration_ms: started.elapsed().as_millis() as u64,
             });
+        // Fallback (non-vote) emits its own `done` inside `run_agent_collecting`;
+        // the vote path emits chunk+done in-block above. Either way a `done`
+        // was already sent, so the completion block below must not re-emit.
+        stream_done_emitted = true;
     }
 
     // Semantic + token cache populate — runs for ALL successful execution
@@ -1639,7 +1690,7 @@ pub(crate) async fn act_phase(
                 &estimate_token_economy(&params.messages, &response_text),
             )
             .await?;
-            if !emit_final_vote {
+            if !emit_final_vote && !stream_done_emitted {
                 let total_chars = response_text.chars().count();
                 emit_stream_done(
                     server,

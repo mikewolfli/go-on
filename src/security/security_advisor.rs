@@ -420,10 +420,21 @@ impl SecurityAdvisorAgent {
         let mut senders = self.ws_senders.lock().await;
         senders.retain(|sender| sender.try_send(alert.clone()).is_ok());
 
-        // Also store the alert for the digest.
+        // Also store the alert for the digest. The buffer is bounded: a
+        // long-running server with daily scans would otherwise accumulate
+        // every alert for the process lifetime and each digest would
+        // serialize the whole history.
+        const MAX_ALERTS_BUFFER: usize = 1000;
         {
             let mut alerts = self.alerts.lock().await;
             alerts.push(alert);
+            if alerts.len() > MAX_ALERTS_BUFFER {
+                let overflow = alerts.len() - MAX_ALERTS_BUFFER;
+                alerts.drain(..overflow);
+                info!(
+                    "SecurityAdvisorAgent: alert buffer capped at {MAX_ALERTS_BUFFER}, dropped {overflow} oldest"
+                );
+            }
         }
 
         info!(

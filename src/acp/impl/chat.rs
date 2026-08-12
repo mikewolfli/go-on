@@ -566,16 +566,26 @@ pub(crate) fn infer_adaptive_phase(
         | TaskType::Unknown => Some("coding"),
     };
 
-    if mode.eq_ignore_ascii_case("review") && has_flow_phase(config, "review") {
+    if mode.eq_ignore_ascii_case("review")
+        && crate::config::phase_name_for_kind(config, "review").is_some()
+    {
         candidate = Some("review");
     }
 
-    if characteristics.complexity >= 4 && has_flow_phase(config, "planning") {
+    if characteristics.complexity >= 4
+        && crate::config::phase_name_for_kind(config, "planning").is_some()
+    {
         candidate = Some("planning");
     }
 
+    // Convert the semantic kind to the config's actual phase name (the
+    // shipped template uses think/act/check/done) so the returned value can
+    // be resolved by FlowManager. Previously the candidate was filtered
+    // against the canonical vocabulary only, so inference never fired on the
+    // shipped default config.
     candidate
-        .filter(|phase| has_flow_phase(config, phase))
+        .filter(|phase| crate::config::phase_name_for_kind(config, phase).is_some())
+        .and_then(|phase| crate::config::phase_name_for_kind(config, phase))
         .map(str::to_string)
 }
 

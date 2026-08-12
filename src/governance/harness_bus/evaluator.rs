@@ -740,17 +740,19 @@ impl PolicyEvaluator {
                 GovernanceAction::Read | GovernanceAction::Search => Permission::Read,
             };
             let tenant_id = rbac.default_tenant_id();
-            // P1-4: Extract principal from _args; fall back to "harness"/["user"] when absent
-            let user_id = _args
-                .get("user_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("harness");
-            let roles: Vec<&str> = _args
-                .get("roles")
-                .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<&str>>())
-                .unwrap_or_else(|| vec!["user"]);
-            let mut principal = Principal::new(user_id, roles, tenant_id.as_deref());
+            // P1-4: The principal MUST come from an authenticated session, not
+            // from client-controlled tool arguments — a caller could append
+            // `"roles": ["admin"]` (or `"user_id": "root"`) to any tool
+            // call and escalate to Admin. Use a fixed harness identity and
+            // ignore identity fields in the args; log the attempt so it stays
+            // observable.
+            if _args.get("user_id").is_some() || _args.get("roles").is_some() {
+                tracing::debug!(
+                    tool = %tool,
+                    "RBAC: ignoring identity fields in tool arguments (client-controlled)"
+                );
+            }
+            let mut principal = Principal::new("harness", vec!["user"], tenant_id.as_deref());
             rbac.resolve_permissions(&mut principal);
             match rbac.check_access(&principal, &required_perm) {
                 AccessDecision::Allow => {

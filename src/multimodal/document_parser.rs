@@ -283,6 +283,16 @@ impl DocumentParser {
                 "byte slice is empty; nothing to parse".to_string(),
             ));
         }
+        // Same cap as the path-based `parse()`: the in-memory API is the one
+        // production actually uses (chat pipeline, read_pdf/read_docx tools),
+        // so it must enforce the bound itself rather than relying on callers.
+        const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
+        if bytes.len() as u64 > MAX_FILE_SIZE {
+            return Err(DocumentParserError::FileTooLarge {
+                size: bytes.len() as u64,
+                max: MAX_FILE_SIZE,
+            });
+        }
 
         let mut result = match ext.as_str() {
             "pdf" => self.parse_pdf_bytes(bytes),

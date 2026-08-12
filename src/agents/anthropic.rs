@@ -177,7 +177,9 @@ impl AnthropicAgent {
 
         let model = resolve_effective_model(&self.model, options, &self.available_models());
         let max_tokens = option_u64(options, "max_tokens")
-            .map(|v| v as u32)
+            // Clamp to the u32 domain: a raw `as u32` silently truncates
+            // (2^32+100 → 100) and sends a wrong provider request.
+            .map(|v| v.min(u64::from(u32::MAX)) as u32)
             .unwrap_or(self.max_tokens);
 
         let temperature = option_f64(options, "temperature");

@@ -98,12 +98,11 @@ impl CircuitBreakerRegistry {
     /// Get circuit breaker snapshots.
     pub fn snapshots(&self) -> Vec<CircuitBreakerSnapshot> {
         if let Some(ref hre) = self.source {
-            let now = now_ts();
             return hre
                 .breaker_snapshots()
                 .into_iter()
-                .map(
-                    |(name, state, failures, total, successes)| CircuitBreakerSnapshot {
+                .map(|(name, state, failures, total, successes, last_change)| {
+                    CircuitBreakerSnapshot {
                         name,
                         state: match state {
                             crate::resilience::hyper_resilience::CircuitState::Open => {
@@ -118,11 +117,18 @@ impl CircuitBreakerRegistry {
                         },
                         failure_count: failures as u32,
                         success_count: successes as u32,
-                        last_state_change: now,
-                        total_failures: failures,
-                        total_successes: total,
-                    },
-                )
+                        // Real transition timestamp from the breaker; the
+                        // previous `now` on every poll was meaningless.
+                        last_state_change: last_change as i64,
+                        // Honest window totals: `total_requests -
+                        // successful_requests` is the actual failure total;
+                        // the previous mapping reported the consecutive
+                        // failure count as total_failures and the request
+                        // count as total_successes.
+                        total_failures: total.saturating_sub(successes),
+                        total_successes: successes,
+                    }
+                })
                 .collect();
         }
         self.inner

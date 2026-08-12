@@ -105,7 +105,7 @@ pub(crate) fn run_migrations(client: &mut Client, target_version: usize) -> Resu
         client.batch_execute(sql)?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         client.execute(
             "INSERT INTO _schema_version (version, applied_at) VALUES ($1, $2)",

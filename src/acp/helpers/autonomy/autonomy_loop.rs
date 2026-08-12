@@ -218,7 +218,7 @@ pub async fn run_autonomy_loop(
         let agent_clone = Arc::clone(&params.agent);
         let principles_clone = params.principles.clone();
         let options_clone = params.options.clone();
-        let chat_task = tokio::spawn(async move {
+        let mut chat_task = tokio::spawn(async move {
             agent_clone
                 .chat(agent_messages, principles_clone, options_clone, sender)
                 .await
@@ -226,6 +226,10 @@ pub async fn run_autonomy_loop(
         });
 
         // ── Stream tokens ────────────────────────────────────────────
+        // Per-chunk receive timeout (120s): a stuck provider must not hang the
+        // round even when no phase timeout is configured (`timeout_duration`
+        // None makes `timeout_fut` pending forever).
+        let recv_timeout = std::time::Duration::from_secs(120);
         let timeout_fut = async move {
             if let Some(dur) = timeout_duration {
                 tokio::time::sleep(dur).await;
@@ -247,9 +251,9 @@ pub async fn run_autonomy_loop(
             }
             tokio::select! {
                 biased;
-                token = receiver.recv() => {
+                token = tokio::time::timeout(recv_timeout, receiver.recv()) => {
                     match token {
-                        Some(t) => {
+                        Ok(Some(t)) => {
                             // Single shared token classifier — the same vocabulary
                             // as the CLI and agent-runtime collection loops, so the
                             // stream protocol has exactly one parser.
@@ -310,7 +314,16 @@ pub async fn run_autonomy_loop(
                                 }
                             }
                         }
-                        None => break,
+                        Ok(None) => break,
+                        Err(_) => {
+                            tracing::warn!(
+                                target: "autonomy_loop",
+                                round = iteration,
+                                "autonomy_loop: recv() timed out after {}s — stopping round",
+                                recv_timeout.as_secs()
+                            );
+                            break;
+                        }
                     }
                 }
                 _ = &mut timeout_fut => {
@@ -331,9 +344,26 @@ pub async fn run_autonomy_loop(
             ));
         }
         // Await the chat task, surfacing panics/errors instead of silently
-        // continuing with a possibly-partial tool_calls list.
-        if let Err(e) = chat_task.await {
-            tracing::warn!("autonomy_loop: agent chat task failed: {e}");
+        // continuing with a possibly-partial tool_calls list. The join itself
+        // is bounded: a stalled provider must not hang the loop past the
+        // streaming caps (previously `chat_task.await` had no bound, so a
+        // stuck agent.chat blocked the round forever).
+        match tokio::time::timeout(recv_timeout, &mut chat_task).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(e))) => {
+                tracing::warn!("autonomy_loop: agent chat task failed: {e}");
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("autonomy_loop: agent chat task panicked: {e}");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    target: "autonomy_loop",
+                    "autonomy_loop: agent chat task join timed out after {}s — aborting",
+                    recv_timeout.as_secs()
+                );
+                chat_task.abort();
+            }
         }
 
         // ── Execute tool calls ───────────────────────────────────────
@@ -492,23 +522,47 @@ pub async fn run_autonomy_loop(
             };
             let (tx, mut rx) = mpsc::unbounded_channel::<String>();
             let summary_sender = StreamingSender::from(tx);
-            if params
-                .agent
-                .chat(
-                    vec![summary_msg],
-                    params.principles.clone(),
-                    params.options.clone(),
-                    summary_sender,
-                )
-                .await
-                .is_ok()
-            {
-                let mut summary = String::new();
-                while let Some(token) = rx.recv().await {
-                    summary.push_str(&token);
+            // The summary call runs under the same 120s per-call cap as the
+            // round loop: without it, a stalled provider hangs the whole
+            // autonomy loop after the rounds have completed (the recv-timeout
+            // guarantees only cover the per-round collection).
+            let summary_recv_timeout = std::time::Duration::from_secs(120);
+            let summary_agent = Arc::clone(&params.agent);
+            let summary_principles = params.principles.clone();
+            let summary_options = params.options.clone();
+            let summary_task = tokio::spawn(async move {
+                summary_agent
+                    .chat(
+                        vec![summary_msg],
+                        summary_principles,
+                        summary_options,
+                        summary_sender,
+                    )
+                    .await
+            });
+            let summary_abort = summary_task.abort_handle();
+            match tokio::time::timeout(summary_recv_timeout, summary_task).await {
+                Ok(Ok(Ok(()))) => {
+                    let mut summary = String::new();
+                    while let Some(token) = rx.recv().await {
+                        summary.push_str(&token);
+                    }
+                    if !summary.trim().is_empty() {
+                        final_response = summary;
+                    }
                 }
-                if !summary.trim().is_empty() {
-                    final_response = summary;
+                Ok(Ok(Err(e))) => {
+                    tracing::warn!("autonomy_loop: summary chat failed: {e}");
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("autonomy_loop: summary chat panicked: {e}");
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "autonomy_loop: summary chat timed out after {}s — aborting",
+                        summary_recv_timeout.as_secs()
+                    );
+                    summary_abort.abort();
                 }
             }
         }

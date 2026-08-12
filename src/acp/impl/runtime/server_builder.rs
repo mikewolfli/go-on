@@ -66,6 +66,26 @@ pub async fn new_acp_server(
     }
     builder = builder.with_config_path(config_path.clone());
 
+    // Wire the configured `global_max_inflight` phase option into the
+    // DrainGuard semaphore so operators can actually tune the process-wide
+    // request concurrency cap (previously the option was validated and
+    // reported but never consumed at runtime). Max across phases = the most
+    // permissive phase's cap; clamped to the validator's allowed range.
+    if let Some(ref cfg) = app_config {
+        let cap = cfg
+            .phases
+            .values()
+            .filter_map(|p| p.options.as_ref())
+            .filter_map(|o| o.extra.get("global_max_inflight"))
+            .filter_map(|v| v.as_u64())
+            .map(|v| v as usize)
+            .max()
+            .map(|v| v.clamp(1, 10_000));
+        if let Some(cap) = cap {
+            builder = builder.with_request_inflight_cap(cap);
+        }
+    }
+
     // Note: ServerBuilder doesn't have methods for all parameters yet
     // For now, we'll build with defaults and let the caller set additional fields.
     // The builder already initializes ForkRegistry, Planner, Executor, BenchmarkSuite,

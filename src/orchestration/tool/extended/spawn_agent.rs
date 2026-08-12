@@ -268,39 +268,13 @@ async fn execute_spawn(
         fork_seq,
     );
 
-    // ── BLUE70: ExecutionGovernor limit check ──────────────────────
-    // Check limits via the CommunicationBus ExecutionGovernor before spawning.
-    if let Some(bus) = communication_bus() {
-        // The governor's parent-path check requires the "spawn" namespace to
-        // already exist in the agent tree. Ensure it once (idempotent) so a
-        // fresh CommunicationBus (empty tree) does not deny every spawn.
-        if let Ok(spawn_path) = AgentPath::parse("spawn") {
-            let mut tree = bus.tree().write().await;
-            if tree.resolve(&spawn_path).is_none() {
-                let _ = tree.register(&spawn_path, "spawn", AgentNodeMetadata::new());
-            }
-        }
-        let budget = crate::agents::communication::budget::AgentExecutionBudget::new()
-            .with_max_depth(10)
-            .with_max_concurrency(128);
-        let limit_check = bus
-            .governor()
-            .check_limits(
-                &AgentPath::parse(&format!("spawn/{}", fork_id))
-                    .unwrap_or_else(|_| AgentPath::parse("spawn").unwrap()),
-                &budget,
-            )
-            .await;
-        if let crate::agents::communication::governor::LimitCheckResult::Denied(ref reason) =
-            limit_check
-        {
-            anyhow::bail!("spawn denied by ExecutionGovernor: {}", reason);
-        }
-    }
-    // ────────────────────────────────────────────────────────────────────
-
-    // Acquire RAII concurrency slot via SpawnGuard (BLUE71 §5).
-    // Auto-releases on drop (even during panic). Uses global budget counter.
+    // ── Concurrency limit (BLUE71 §5) ───────────────────────────────
+    // Acquire RAII concurrency slot via SpawnGuard. Auto-releases on drop
+    // (even during panic). Uses global budget counter. (The former
+    // ExecutionGovernor check_limits block was removed: it ran against a
+    // freshly constructed budget — depth 2 < 10, active_children 0 < 128,
+    // no token ceiling — so it could never deny, and the "spawn" tree
+    // registration it relied on was never consumed elsewhere.)
     let budget_arc = spawn_budget()
         .ok_or_else(|| anyhow::anyhow!("SpawnGuard budget not initialised"))?
         .clone();

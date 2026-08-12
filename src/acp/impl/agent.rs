@@ -447,6 +447,11 @@ async fn run_single_review(
             .chat(review_messages, None, agent_options, sender)
             .await
     });
+    // Abort the reviewer task if the deadline fires: `run_with_optional_timeout`
+    // drops the collect future (which owns the JoinHandle) without aborting,
+    // leaving the reviewer LLM call streaming into a dropped channel.
+    // Aborting a task that already finished is a no-op, so the catch-all is safe.
+    let abort_handle = task.abort_handle();
 
     let response = run_with_optional_timeout(
         deadline.map(|value| value.saturating_duration_since(Instant::now())),
@@ -463,7 +468,8 @@ async fn run_single_review(
         },
         |_| anyhow::anyhow!("{}", tf("error.review_timeout", &[("reviewer", reviewer)])),
     )
-    .await?;
+    .await
+    .inspect_err(|_| abort_handle.abort())?;
 
     // Parse reviewer response: APPROVE unless the response contains REJECT or DENIED
     let upper = response.to_ascii_uppercase();

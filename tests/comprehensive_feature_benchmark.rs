@@ -149,15 +149,6 @@ struct BenchmarkReport {
     measured_weight_total: f64,
 }
 
-impl BenchmarkReport {
-    fn min_dimension_score(&self) -> f64 {
-        self.dimensions
-            .values()
-            .map(|d| d.score)
-            .fold(f64::INFINITY, f64::min)
-    }
-}
-
 fn ratio_score(pass: u64, total: u64) -> f64 {
     if total == 0 {
         return 0.0;
@@ -554,7 +545,11 @@ fn comprehensive_benchmark_each_dimension_meets_gate() {
     for (cap, dim) in &report.dimensions {
         let gate = cap.gate();
         let gate_met = if matches!(dim.measurability, Measurability::Qualitative) {
-            dim.score + 1e-9 >= 50.0 || dim.score == 0.0
+            // Qualitative dimensions have no measured basis; they are
+            // documented to score exactly 0.0 (their weight is excluded from
+            // the weighted total). The former `>= 50.0 || == 0.0` was always
+            // true — a real assertion pins the documented behavior.
+            (dim.score - 0.0).abs() < 1e-9
         } else {
             dim.score + 1e-9 >= gate
         };
@@ -592,13 +587,32 @@ fn comprehensive_benchmark_weighted_total_meets_gate() {
 #[test]
 fn comprehensive_benchmark_reports_stable_floor() {
     let report = build_report();
-    // The minimum across ALL dimensions (including qualitative 0.0) should be 0.0
-    // since qualitative dimensions score 0.0. The measured minimum floor is checked
-    // separately in each dimension's gate test.
+    // Structural floor: qualitative dimensions score exactly 0.0 (documented),
+    // and every measured dimension carries a positive score. The former
+    // `min_dimension_score() >= 0.0` compared a non-negative count ratio
+    // against 0.0 and could never fail.
+    let mut measured_count = 0usize;
+    for (cap, dim) in &report.dimensions {
+        match dim.measurability {
+            Measurability::Qualitative => assert_eq!(
+                dim.score,
+                0.0,
+                "qualitative dimension {} must score 0.0",
+                cap.label()
+            ),
+            Measurability::Measured => {
+                measured_count += 1;
+                assert!(
+                    dim.score > 0.0,
+                    "measured dimension {} must have a positive score",
+                    cap.label()
+                );
+            }
+        }
+    }
     assert!(
-        report.min_dimension_score() >= 0.0,
-        "minimum dimension score unexpectedly negative: {}",
-        report.min_dimension_score()
+        measured_count >= 1,
+        "benchmark must contain at least one measured dimension"
     );
 }
 

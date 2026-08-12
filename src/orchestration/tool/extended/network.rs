@@ -26,7 +26,30 @@ impl Tool for DnsLookupTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing required field: hostname"))?;
 
-        let port = input.payload["port"].as_u64().unwrap_or(80) as u16;
+        let raw_port = input.payload["port"].as_u64().unwrap_or(80);
+        // Validate instead of truncating: `70000 as u16` wraps to 4464 and
+        // silently performs the lookup on the wrong port.
+        if !(1..=65535).contains(&raw_port) {
+            return Ok(ToolOutput {
+                success: false,
+                result: Some(serde_json::json!({
+                    "hostname": hostname,
+                    "addresses": [],
+                    "error": format!("port must be between 1 and 65535, got {raw_port}"),
+                })),
+                error: Some(format!("port must be between 1 and 65535, got {raw_port}")),
+                verification: Some("dns_lookup_completed".to_string()),
+                audit_log: Some(format!(
+                    "DNS lookup for '{}' rejected: invalid port {}",
+                    hostname, raw_port
+                )),
+                pua_report: Some(tool_execution_report(
+                    "dns_lookup",
+                    Some("dns_lookup_completed"),
+                )),
+            });
+        }
+        let port = raw_port as u16;
 
         debug!(hostname = %hostname, port = %port, "tool: performing DNS lookup");
 

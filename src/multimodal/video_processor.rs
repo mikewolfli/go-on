@@ -26,6 +26,10 @@ pub const MAX_DURATION_SECS: u64 = 600;
 /// Maximum allowed file size in megabytes.
 pub const MAX_FILE_SIZE_MB: u64 = 500;
 
+/// Bounded runtime for ffmpeg/ffprobe child processes (120s): a pathological
+/// input must not stall video processing indefinitely.
+pub const FFMPEG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -286,21 +290,25 @@ impl VideoProcessor {
 
     /// Probe video duration using ffprobe.
     async fn probe_duration(&self, path: &std::path::Path) -> Result<f64, VideoProcessorError> {
-        let output = tokio::process::Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-            ])
-            .arg(path)
-            .output()
-            .await
-            .map_err(|e| {
-                VideoProcessorError::FrameExtractionFailed(format!("ffprobe not found: {e}"))
-            })?;
+        let output = tokio::time::timeout(
+            FFMPEG_TIMEOUT,
+            tokio::process::Command::new("ffprobe")
+                .args([
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                ])
+                .arg(path)
+                .output(),
+        )
+        .await
+        .map_err(|_| VideoProcessorError::FrameExtractionFailed("ffprobe timed out".into()))?
+        .map_err(|e| {
+            VideoProcessorError::FrameExtractionFailed(format!("ffprobe not found: {e}"))
+        })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         stdout.trim().parse::<f64>().map_err(|_| {
@@ -318,23 +326,26 @@ impl VideoProcessor {
             .map_err(|e| VideoProcessorError::FrameExtractionFailed(format!("tempdir: {e}")))?;
         let pattern = tmp_dir.path().join("frame_%04d.png");
 
-        let status = tokio::process::Command::new("ffmpeg")
-            .args(["-i"])
+        let mut cmd = tokio::process::Command::new("ffmpeg");
+        cmd.args(["-i"])
             .arg(path.to_str().unwrap_or(""))
-            .args([
-                "-vf",
-                &format!("fps=1/{}", interval_secs),
-                "-frames:v",
-                &format!("{}", self.config.max_frames.max(1)),
-            ])
-            .arg(pattern.to_str().unwrap_or(""))
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await
-            .map_err(|e| {
-                VideoProcessorError::FrameExtractionFailed(format!("ffmpeg failed: {e}"))
-            })?;
+            .args(["-vf", &format!("fps=1/{}", interval_secs)]);
+        // `max_frames == 0` means unlimited — the former `max(1)` clamp turned
+        // the default into "exactly one frame", so only pass `-frames:v` when
+        // an explicit cap is configured.
+        if self.config.max_frames > 0 {
+            cmd.args(["-frames:v", &format!("{}", self.config.max_frames)]);
+        }
+        let status = tokio::time::timeout(
+            FFMPEG_TIMEOUT,
+            cmd.arg(pattern.to_str().unwrap_or(""))
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status(),
+        )
+        .await
+        .map_err(|_| VideoProcessorError::FrameExtractionFailed("ffmpeg timed out".into()))?
+        .map_err(|e| VideoProcessorError::FrameExtractionFailed(format!("ffmpeg failed: {e}")))?;
 
         if !status.success() {
             return Err(VideoProcessorError::FrameExtractionFailed(
@@ -405,27 +416,30 @@ impl VideoProcessor {
         }
 
         // Try ffmpeg-based audio extraction
-        match tokio::process::Command::new("ffmpeg")
-            .args(["-i"])
-            .arg(path.to_str().unwrap_or(""))
-            .args([
-                "-vn",
-                "-acodec",
-                "pcm_s16le",
-                "-ar",
-                "16000",
-                "-ac",
-                "1",
-                "-f",
-                "wav",
-                "pipe:1",
-            ])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .await
+        match tokio::time::timeout(
+            FFMPEG_TIMEOUT,
+            tokio::process::Command::new("ffmpeg")
+                .args(["-i"])
+                .arg(path.to_str().unwrap_or(""))
+                .args([
+                    "-vn",
+                    "-acodec",
+                    "pcm_s16le",
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    "-f",
+                    "wav",
+                    "pipe:1",
+                ])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .output(),
+        )
+        .await
         {
-            Ok(output) if output.status.success() && !output.stdout.is_empty() => {
+            Ok(Ok(output)) if output.status.success() && !output.stdout.is_empty() => {
                 self.report_progress(
                     "extract_audio",
                     100.0,

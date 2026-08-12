@@ -579,6 +579,16 @@ impl IdempotencyCache {
     pub fn insert(&mut self, key: String, response: Value) {
         let tenant = tenant_from_key(&key).to_string();
 
+        // Re-inserting an existing key must not leave its old queue entry
+        // behind: duplicates of a hot key would fill the FIFO and let a later
+        // insert evict the key's *current* value (the LRU would remove a live
+        // entry while the duplicate queue entry survived).
+        if self.results.contains_key(&key) {
+            if let Some(keys_for_tenant) = self.tenant_keys.get_mut(&tenant) {
+                keys_for_tenant.retain(|k| k != &key);
+            }
+        }
+
         // Enforce per-tenant LRU cap: evict oldest entries for this tenant
         // until we're under the limit (plus one for the new entry).
         // VecDeque::pop_front() is O(1), unlike Vec::remove(0).

@@ -477,7 +477,11 @@ pub struct RuntimeConfig {
     /// Default concurrent tasks limit per tenant.
     #[serde(default = "super::defaults::default_runtime_tenant_default_concurrent_tasks")]
     pub tenant_default_concurrent_tasks: usize,
-    /// Default language for i18n (e.g. "en-US", "zh-CN").
+    /// Default language used by `prompts.*` handlers when the request does
+    /// not specify `lang` (e.g. "en-US", "zh-CN"). The global process
+    /// locale (CLI status, diagnostics, server error messages) is driven by
+    /// `GO_ON_LANG` / locale env vars via `Language::detect_system`, not by
+    /// this field.
     #[serde(default = "super::defaults::default_runtime_i18n_default_language")]
     pub i18n_default_language: String,
     /// Default daily API call limit per tenant.
@@ -754,6 +758,34 @@ impl PhaseOptions {
             Some(self.extra.clone())
         }
     }
+}
+
+/// Candidate phase names for each semantic phase kind.
+///
+/// The canonical vocabulary (`planning`/`coding`/`review`/`delivery`) is used
+/// by the status report and adaptive phase inference; the shipped config
+/// template uses `think`/`act`/`check`/`done`. Both are accepted so reports
+/// and inference work against either vocabulary instead of reporting the
+/// official default config as incomplete.
+pub const PHASE_KIND_ALIASES: &[(&str, &[&str])] = &[
+    ("planning", &["planning", "think"]),
+    ("coding", &["coding", "act"]),
+    ("review", &["review", "check"]),
+    ("delivery", &["delivery", "done"]),
+];
+
+/// Resolve the config's actual phase name for a semantic kind, or `None` when
+/// the config defines no phase for that kind under any alias.
+pub fn phase_name_for_kind<'a>(config: &'a AppConfig, kind: &str) -> Option<&'a str> {
+    PHASE_KIND_ALIASES
+        .iter()
+        .find(|(k, _)| *k == kind)
+        .and_then(|(_, aliases)| {
+            aliases
+                .iter()
+                .find(|name| config.phases.contains_key(**name))
+        })
+        .copied()
 }
 
 impl AppConfig {

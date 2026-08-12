@@ -50,10 +50,15 @@ pub fn init_fusion_evolution_bridge() -> Result<mpsc::Receiver<EvolutionTrigger>
 /// evolution loop must not stall request processing, and stale triggers lose
 /// value).
 pub fn send_triggers_to_evolution(triggers: Vec<EvolutionTrigger>) {
+    if triggers.is_empty() {
+        return;
+    }
     let sender = match TRIGGER_SENDER.get() {
         Some(s) => s,
         None => {
-            tracing::warn!(
+            // Normal state when evolution is disabled (the default): the
+            // bridge is never initialised, so this must not warn per request.
+            tracing::debug!(
                 target: "fusion_evolution_bridge",
                 "bridge not initialised, dropping {} trigger(s)",
                 triggers.len()

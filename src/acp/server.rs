@@ -116,11 +116,15 @@ impl DrainPermit {
 impl DrainGuard {
     /// Create a new DrainGuard with the given capacity and timeout.
     pub fn new(max_inflight: usize, drain_timeout_secs: u64) -> Self {
+        // Clamp to a sane upper bound (1 hour): an absurd configured value
+        // (e.g. 2e10s) would overflow tokio's u64-nanosecond Instant during
+        // shutdown and panic.
+        let drain_timeout_secs = drain_timeout_secs.clamp(5, 3600);
         Self {
             draining: AtomicBool::new(false),
             inflight: Arc::new(Semaphore::new(max_inflight)),
             max_permits: max_inflight,
-            drain_timeout: Duration::from_secs(drain_timeout_secs.max(5)),
+            drain_timeout: Duration::from_secs(drain_timeout_secs),
             request_seq: AtomicU64::new(0),
             notify_drain: Arc::new(tokio::sync::Notify::new()),
         }
@@ -888,6 +892,9 @@ pub struct ServerBuilder {
     /// Whether the durable response cache is wired as the L3 layer of the
     /// multi-level token cache (default: true — see `CacheConfig::persist_enabled`).
     persist_cache: bool,
+    /// Process-wide in-flight request cap derived from the configured
+    /// `global_max_inflight` phase option (None = keep the default 128).
+    request_inflight_cap: Option<usize>,
 }
 
 impl ServerBuilder {
@@ -914,6 +921,7 @@ impl ServerBuilder {
             lazy_memory_persistence_params: None,
             runtime_config: None,
             persist_cache: true,
+            request_inflight_cap: None,
         }
     }
 
@@ -954,6 +962,14 @@ impl ServerBuilder {
     /// L3 layer. Defaults to enabled.
     pub fn with_persist_cache(mut self, persist_cache: bool) -> Self {
         self.persist_cache = persist_cache;
+        self
+    }
+
+    /// Override the process-wide in-flight request cap used by the DrainGuard
+    /// semaphore. Sourced from the configured `global_max_inflight` phase
+    /// option so operators can actually tune request concurrency.
+    pub fn with_request_inflight_cap(mut self, cap: usize) -> Self {
+        self.request_inflight_cap = Some(cap);
         self
     }
 
@@ -1373,7 +1389,10 @@ impl ServerBuilder {
             },
             prompt_manager,
             shutdown_notify: Arc::new(Notify::new()),
-            drain_guard: DrainGuard::new(128, drain_seconds),
+            // The process-wide in-flight request cap comes from the configured
+            // `global_max_inflight` phase option (max across phases); falls
+            // back to the historical default of 128 when not configured.
+            drain_guard: DrainGuard::new(self.request_inflight_cap.unwrap_or(128), drain_seconds),
             // Share the process-wide registry so the ACP server, ToolBus, and
             // MCP arms all execute against the same tool set (single full
             // registration per process).

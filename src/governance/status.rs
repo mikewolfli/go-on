@@ -238,10 +238,49 @@ const SENSITIVE_EXTENSIONS: &[&str] = &[
     ".passwd",
 ];
 
+/// Lexically normalize a path string: collapse duplicate slashes and resolve
+/// `.` / `..` segments (no filesystem access, so it works for paths that do
+/// not exist yet). Leading `..` segments are preserved so relative traversal
+/// escapes (`../../etc/cron.d/x`) stay recognizable instead of collapsing to
+/// a bare relative name.
+fn normalize_path_string(path: &str) -> String {
+    let is_abs = path.starts_with('/');
+    let mut out: Vec<&str> = Vec::new();
+    for seg in path.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                if out.is_empty() {
+                    // Preserve a leading escape so `../../etc/x` does not
+                    // collapse into `etc/x` (which would miss the check).
+                    out.push("..");
+                } else {
+                    out.pop();
+                }
+            }
+            s => out.push(s),
+        }
+    }
+    let mut joined = out.join("/");
+    if is_abs {
+        joined.insert(0, '/');
+    }
+    joined
+}
+
 fn path_touches_protected_dir(path: &str) -> bool {
-    let lower = path.to_lowercase();
+    // Operate on the lexically normalized path: prefix matching on the raw
+    // string can be bypassed with `..` or duplicate slashes
+    // (e.g. `../../etc/cron.d/x` or `sub//etc/x`).
+    let lower = normalize_path_string(path).to_lowercase();
     PROTECTED_DIRS.iter().any(|protected| {
-        lower.starts_with(protected) || lower.starts_with(&format!("/{protected}"))
+        lower == *protected
+            || lower.starts_with(&format!("{protected}/"))
+            || lower.starts_with(&format!("/{protected}/"))
+            || lower.ends_with(&format!("/{protected}"))
+            // Relative traversal that lands on a protected dir as a segment
+            // (`../../etc/cron.d/x` normalizes to `../../etc/cron.d/x`).
+            || lower.contains(&format!("/{protected}/"))
     })
 }
 

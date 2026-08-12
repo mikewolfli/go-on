@@ -267,7 +267,8 @@ impl Tool for PdfSplitTool {
         let output_path = input.payload["output_path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'output_path'"))?;
-        let start_page = input.payload["start_page"].as_u64().unwrap_or(1) as u32;
+        let start_page_raw = input.payload["start_page"].as_u64().unwrap_or(1);
+        let start_page = start_page_raw.min(u64::from(u32::MAX)) as u32;
         let end_page = input.payload["end_page"].as_u64();
 
         let validated = sanitize_path(input, path)?;

@@ -120,8 +120,26 @@ impl ReinforcementBus {
     fn evict_lru(&mut self) {
         if let Some((key, _)) = self.last_updated.iter().min_by_key(|(_, seq)| **seq) {
             let key = key.clone();
+            let state = key.0.clone();
             self.q_table.remove(&key);
             self.last_updated.remove(&key);
+            // Recompute the per-state max after eviction: if the evicted
+            // (s, a) pair was the state's peak, the cached `state_max_q`
+            // would otherwise bias Q-learning upward indefinitely. Also
+            // prune states with no remaining actions so the index cannot
+            // grow without bound. O(n) scan is fine — eviction is rare
+            // (only at the 10k-entry cap).
+            let state_max = self
+                .q_table
+                .iter()
+                .filter(|((s, _), _)| *s == state)
+                .map(|(_, q)| *q)
+                .fold(f64::NEG_INFINITY, f64::max);
+            if state_max.is_finite() {
+                self.state_max_q.insert(state, state_max);
+            } else {
+                self.state_max_q.remove(&state);
+            }
         }
     }
 

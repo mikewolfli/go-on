@@ -164,7 +164,30 @@ async fn handle_rpc(
 ) -> Result<()> {
     let mut reader = BufReader::new(&mut stream);
     let mut request_line = String::new();
-    reader.read_line(&mut request_line).await?;
+    // Bound the request line with the same cap as header lines; without it a
+    // local client could stream an unbounded line and grow memory.
+    loop {
+        let read = reader.read_line(&mut request_line).await?;
+        if read == 0 || request_line.ends_with('\n') {
+            break;
+        }
+        if request_line.len() > crate::shared::http_timeouts::MAX_HTTP_HEADER_SIZE {
+            return write_json(
+                &mut stream,
+                431,
+                json_rpc_error(None, INVALID_REQUEST, "Request line too large"),
+            )
+            .await;
+        }
+    }
+    if request_line.len() > crate::shared::http_timeouts::MAX_HTTP_HEADER_SIZE {
+        return write_json(
+            &mut stream,
+            431,
+            json_rpc_error(None, INVALID_REQUEST, "Request line too large"),
+        )
+        .await;
+    }
 
     if !request_line.trim().starts_with("POST") {
         return write_json(

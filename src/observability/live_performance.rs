@@ -52,10 +52,25 @@ impl LivePerformanceFeed {
         }
     }
 
+    /// Maximum number of distinct models tracked (model names come from
+    /// request options and could be arbitrary strings — unbounded tracking
+    /// would grow memory forever in a long-running process).
+    const MAX_MODELS_TRACKED: usize = 256;
+
+    /// Whether a new model key may be inserted (bounded by the cap).
+    fn can_track(&self, inner: &LivePerformanceInner) -> bool {
+        inner.model_latency.len() < Self::MAX_MODELS_TRACKED
+    }
+
     /// Record a successful request for `model` with observed latency.
     pub fn record_success(&self, model: &str, latency_ms: u64) {
         let alpha = self.ema_alpha;
         let mut inner = crate::observability::lock_mutex(&self.inner);
+
+        // Unknown models beyond the cap are not tracked (bounded memory).
+        if !inner.model_latency.contains_key(model) && !self.can_track(&inner) {
+            return;
+        }
 
         // Update latency EMA.
         let entry = inner
@@ -85,6 +100,11 @@ impl LivePerformanceFeed {
     pub fn record_failure(&self, model: &str, latency_ms: u64) {
         let alpha = self.ema_alpha;
         let mut inner = crate::observability::lock_mutex(&self.inner);
+
+        // Unknown models beyond the cap are not tracked (bounded memory).
+        if !inner.model_latency.contains_key(model) && !self.can_track(&inner) {
+            return;
+        }
 
         // Update latency EMA (still useful for detecting slow-failing models).
         let entry = inner

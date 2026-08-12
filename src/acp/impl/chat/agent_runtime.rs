@@ -108,6 +108,9 @@ pub(crate) async fn run_agent_collecting(
     // fires, `collect` (which owns the handle) is dropped without aborting —
     // this aborts the orphaned agent.chat so it stops burning tokens.
     let abort_handle = task.abort_handle();
+    // Clone for use inside `collect` (the join-timeout branch) while the
+    // original stays available to the outer `.inspect_err`.
+    let collect_abort = abort_handle.clone();
 
     let collect = async move {
         let stream_started = Instant::now();
@@ -215,7 +218,43 @@ pub(crate) async fn run_agent_collecting(
             .await?;
         }
 
-        match task.await {
+        // The streaming caps (per-chunk / overall) only bound the recv loop
+        // above. Bound the final join as well: a stalled provider (e.g. a
+        // half-open SSE connection on a timeout-less reqwest client) must not
+        // hang the whole request past the declared caps.
+        let task_outcome = match tokio::time::timeout(recv_timeout, task).await {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                tracing::warn!(
+                    "agent.chat join timed out after {}s — aborting task and returning partial response",
+                    recv_timeout.as_secs()
+                );
+                collect_abort.abort();
+                // Emit done with the partial response so the stream terminates
+                // (callers assume a done was sent on the fallback path).
+                emit_stream_done(
+                    server,
+                    stream_ctx.stream_observer.as_ref(),
+                    StreamEventMeta {
+                        agent_name: stream_ctx.agent_name,
+                        phase_name: stream_ctx.phase_name,
+                        trace_id: stream_ctx.trace_id,
+                        mode: None,
+                        risk_score: None,
+                        degrade_policy: None,
+                    },
+                    chunk_index,
+                    total_chars,
+                    stream_started.elapsed().as_millis() as u64,
+                    selected_model.clone(),
+                    Some(&response),
+                )
+                .await?;
+                return Ok((response, reasoning_buffer, selected_model));
+            }
+        };
+
+        match task_outcome {
             Ok(Ok(())) => {
                 emit_stream_done(
                     server,

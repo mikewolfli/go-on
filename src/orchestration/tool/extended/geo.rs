@@ -35,6 +35,12 @@ fn parse_point(value: &serde_json::Value, index: usize) -> Result<Point3> {
     let z = value["z"]
         .as_f64()
         .with_context(|| format!("point[{index}]: missing or non-numeric 'z'"))?;
+    // serde_json parses `1e999` as +Inf; non-finite coordinates would poison
+    // the centroid/bounding-box math with NaN (Inf - Inf) and fail JSON
+    // serialization of the result.
+    if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+        anyhow::bail!("point[{index}]: coordinates must be finite numbers");
+    }
     Ok(Point3 { x, y, z })
 }
 
@@ -125,7 +131,6 @@ impl Tool for GeoUtilTool {
     fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
         crate::orchestration::tool::ToolExposure::Deferred
     }
-
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let operation = input.payload["operation"]

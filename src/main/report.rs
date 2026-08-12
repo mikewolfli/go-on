@@ -286,16 +286,26 @@ pub(crate) fn build_completeness_report(
         }
     }
 
-    for phase_name in ["planning", "coding", "review", "delivery"] {
+    for kind in ["planning", "coding", "review", "delivery"] {
+        // Resolve the config's actual phase name for this semantic kind
+        // (accepts both the canonical vocabulary and the shipped template's
+        // think/act/check/done). Previously the loop hard-coded the canonical
+        // names, so the official default config was reported as missing
+        // review/delivery phases.
+        let Some(phase_name) = crate::config::phase_name_for_kind(config, kind) else {
+            out.missing.push(format!("{kind} phase missing"));
+            continue;
+        };
+
         let expected = provider_recommendation
             .as_ref()
-            .map(|item| match phase_name {
+            .map(|item| match kind {
                 "planning" => item.planning_request_timeout_seconds,
                 "coding" => item.coding_request_timeout_seconds,
                 "review" => item.review_request_timeout_seconds,
                 _ => item.delivery_request_timeout_seconds,
             })
-            .unwrap_or(match phase_name {
+            .unwrap_or(match kind {
                 "planning" => fallback.planning_request_timeout_seconds,
                 "coding" => fallback.coding_request_timeout_seconds,
                 "review" => fallback.review_request_timeout_seconds,
@@ -324,13 +334,15 @@ pub(crate) fn build_completeness_report(
         }
     }
 
+    // The coding-phase checks below resolve the actual phase name so they work
+    // with both the canonical and template (think/act/check/done) vocabularies.
+    let coding_phase = crate::config::phase_name_for_kind(config, "coding");
     let expected_review_timeout = provider_recommendation
         .as_ref()
         .map(|item| item.coding_review_timeout_seconds)
         .unwrap_or(fallback.coding_review_timeout_seconds);
-    let actual_review_timeout = config
-        .phases
-        .get("coding")
+    let actual_review_timeout = coding_phase
+        .and_then(|phase_name| config.phases.get(phase_name))
         .and_then(|phase| phase.options.as_ref())
         .and_then(|options| options.review_timeout_seconds);
     match actual_review_timeout {
@@ -338,8 +350,10 @@ pub(crate) fn build_completeness_report(
         Some(timeout) => {
             score += 2.5;
             out.push_info(format!(
-                "phases.coding.options.review_timeout_seconds recommended={}, current={}",
-                expected_review_timeout, timeout
+                "phases.{}.options.review_timeout_seconds recommended={}, current={}",
+                coding_phase.unwrap_or("coding"),
+                expected_review_timeout,
+                timeout
             ));
         }
         None => out
@@ -355,9 +369,8 @@ pub(crate) fn build_completeness_report(
         .as_ref()
         .map(|item| item.global_max_inflight as i64)
         .unwrap_or(fallback.global_max_inflight as i64);
-    let coding_options = config
-        .phases
-        .get("coding")
+    let coding_options = coding_phase
+        .and_then(|phase_name| config.phases.get(phase_name))
         .and_then(|phase| phase.options.as_ref());
     let actual_phase_inflight = coding_options.and_then(|options| {
         options
@@ -448,13 +461,13 @@ pub(crate) fn build_completeness_report(
         }
     }
 
-    if config.phases.contains_key("review") {
+    if crate::config::phase_name_for_kind(config, "review").is_some() {
         score += 5.0;
     } else {
         out.missing.push("review phase missing".to_string());
     }
 
-    if config.phases.contains_key("delivery") {
+    if crate::config::phase_name_for_kind(config, "delivery").is_some() {
         score += 5.0;
     } else {
         out.missing.push("delivery phase missing".to_string());

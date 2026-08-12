@@ -79,13 +79,37 @@ pub(crate) async fn start_server(
     let user_cache_max = config.cache.as_ref().map(|c| c.max_entries);
     let user_vector_max = config.vector.as_ref().map(|v| v.max_entries);
 
-    let (safe_cache_max, safe_vector_max, _safe_inflight_max) =
+    let (safe_cache_max, safe_vector_max, safe_inflight_max) =
         crate::observability::memory_health::estimate_safe_limits(
             user_cache_max,
             user_vector_max,
             None,
             cli.low_memory,
         );
+
+    // Apply the low-memory inflight cap to the phase options so
+    // `--low-memory` actually reduces request concurrency (previously the
+    // third returned value was discarded and the promised inflight reduction
+    // never took effect). Only ever LOWERS existing caps; values already at
+    // or below the safe cap are untouched.
+    let config = if cli.low_memory {
+        let mut adjusted = (*config).clone();
+        for phase in adjusted.phases.values_mut() {
+            let opts = phase.options.get_or_insert_with(Default::default);
+            for key in ["global_max_inflight", "phase_max_inflight"] {
+                let entry = opts
+                    .extra
+                    .entry(key.to_string())
+                    .or_insert_with(|| serde_json::json!(safe_inflight_max));
+                if entry.as_u64().is_none_or(|v| v > safe_inflight_max as u64) {
+                    *entry = serde_json::json!(safe_inflight_max);
+                }
+            }
+        }
+        Arc::new(adjusted)
+    } else {
+        config
+    };
 
     // Clone and adjust cache config with safe limits
     let mut adjusted_cache_cfg = config.cache.clone();

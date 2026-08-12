@@ -410,8 +410,7 @@ mod tests {
             .validate()
             .expect_err("min_reviewers above two must fail");
         assert!(
-            err.to_string()
-                .contains("error.phase_option_must_be_number"),
+            err.to_string().contains("error.phase_option_out_of_range"),
             "unexpected error: {err}"
         );
     }
@@ -492,8 +491,7 @@ mod tests {
             .validate()
             .expect_err("burst multiplier out of range must fail");
         assert!(
-            err.to_string()
-                .contains("error.phase_option_must_be_number"),
+            err.to_string().contains("error.phase_option_out_of_range"),
             "unexpected error: {err}"
         );
     }
@@ -516,8 +514,7 @@ mod tests {
             .validate()
             .expect_err("zero breaker open seconds must fail");
         assert!(
-            err.to_string()
-                .contains("error.phase_option_must_be_number"),
+            err.to_string().contains("error.phase_option_out_of_range"),
             "unexpected error: {err}"
         );
     }
@@ -540,7 +537,7 @@ mod tests {
             .validate()
             .expect_err("invalid review timeout policy must fail");
         assert!(
-            err.to_string().contains("error.phase_option_must_be_bool"),
+            err.to_string().contains("error.phase_option_invalid_value"),
             "unexpected error: {err}"
         );
     }
@@ -583,8 +580,7 @@ mod tests {
             .validate()
             .expect_err("unsupported optimization module must fail");
         assert!(
-            err.to_string()
-                .contains("error.phase_option_must_be_number"),
+            err.to_string().contains("error.phase_option_invalid_value"),
             "unexpected error: {err}"
         );
     }

@@ -46,7 +46,14 @@ pub struct TripleFusionBridge {
     fusion_cycles: u64,
     /// Timestamp (ms since epoch) of the last metacognitive sync.
     last_sync_time_ms: u64,
+    /// Timestamp (ms since epoch) of the last consciousness→evolution trigger
+    /// emission, so the static "awareness is high" signal cannot drive a real
+    /// auto-patch cycle on every request when evolution is enabled.
+    last_evolution_trigger_ms: u64,
 }
+
+/// Minimum interval between consciousness→evolution trigger emissions.
+const EVOLUTION_TRIGGER_MIN_INTERVAL_MS: u64 = 10 * 60 * 1000; // 10 minutes
 
 // ── Global singleton ──────────────────────────────────────────────────────
 
@@ -99,6 +106,7 @@ impl TripleFusionBridge {
             config,
             fusion_cycles: 0,
             last_sync_time_ms: 0,
+            last_evolution_trigger_ms: 0,
         }
     }
 
@@ -150,7 +158,7 @@ impl TripleFusionBridge {
     /// When consciousness reflexion produces insights and awareness is high enough,
     /// generate evolution triggers that the EvolutionLoop can process.
     pub fn consciousness_to_evolution_triggers(
-        &self,
+        &mut self,
         consciousness: &ConsciousnessMetrics,
     ) -> Vec<EvolutionTrigger> {
         if !self.config.auto_evolve_from_reflexion {
@@ -165,13 +173,25 @@ impl TripleFusionBridge {
         let mut triggers = Vec::new();
 
         // Generate PerformanceRegression trigger if awareness of self is high
-        // (suggesting the system detects its own performance).
+        // (suggesting the system detects its own performance). The trigger is
+        // a static threshold signal, not a measured regression, so it is
+        // rate-limited: emitting it per request would start a real auto-patch
+        // cycle on every chat once evolution is enabled.
         if profile.overall_awareness > 0.6 {
-            triggers.push(EvolutionTrigger::PerformanceRegression {
-                metric: "consciousness_awareness".to_string(),
-                threshold: 0.5,
-                direction: RegressionDirection::Decreasing,
-            });
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            if now_ms.saturating_sub(self.last_evolution_trigger_ms)
+                >= EVOLUTION_TRIGGER_MIN_INTERVAL_MS
+            {
+                self.last_evolution_trigger_ms = now_ms;
+                triggers.push(EvolutionTrigger::PerformanceRegression {
+                    metric: "consciousness_awareness".to_string(),
+                    threshold: 0.5,
+                    direction: RegressionDirection::Decreasing,
+                });
+            }
         }
 
         // NOTE: The former ConfigDrift trigger was removed — it emitted
@@ -268,7 +288,7 @@ mod tests {
             min_awareness_for_evolution: 0.3,
             ..Default::default()
         };
-        let bridge = TripleFusionBridge::new(config);
+        let mut bridge = TripleFusionBridge::new(config);
         let consciousness = ConsciousnessMetrics::new(ConsciousnessConfig::default());
         let triggers = bridge.consciousness_to_evolution_triggers(&consciousness);
         // Fresh consciousness has low awareness → no triggers.

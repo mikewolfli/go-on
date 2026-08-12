@@ -25,6 +25,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Compute the next monotonic counter from the highest surviving `prefix<N>`
+/// key plus one. Used when restoring persisted state: deriving from `len()`
+/// collides with IDs that survive eviction (which removes the lowest IDs).
+fn max_id_suffix<'a>(keys: impl Iterator<Item = &'a String>, prefix: &str) -> u64 {
+    keys.filter_map(|k| k.strip_prefix(prefix))
+        .filter_map(|s| s.parse::<u64>().ok())
+        .max()
+        .unwrap_or(0)
+        + 1
+}
+
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
@@ -153,13 +164,19 @@ fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
 
     // Insert faults
     for fault in snapshot.faults.values() {
+        // Store via serde, not Debug formatting: `format!("{:?}")` renders
+        // `LatencySpike { delay_ms: 5 }`, which cannot be parsed back and
+        // silently degraded to `Crash` on restore (changing the recovery
+        // action from ScaleUp to RestartNode).
+        let fault_type_json = serde_json::to_string(&fault.fault_type)
+            .unwrap_or_else(|_| format!("{:?}", fault.fault_type));
         if let Err(e) = tx.execute(
             "INSERT INTO faults (id, node_id, fault_type, severity, description, detected_ms, resolved_ms, recovered)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 fault.id,
                 fault.node_id,
-                format!("{:?}", fault.fault_type),
+                fault_type_json,
                 fault.severity as i64,
                 fault.description,
                 fault.detected_ms as i64,
@@ -343,7 +360,12 @@ fn load_sqlite(path: &std::path::Path) -> Option<FaultToleranceSnapshot> {
             Ok((id, node_id, fault_type_str, severity, description, detected_ms, resolved_ms, recovered))
         }) {
             for row in rows.flatten() {
-                let fault_type: FaultType = parse_enum_from_debug(&row.2).unwrap_or(FaultType::Crash);
+                // New stores are serde JSON (`"Crash"` / `{"LatencySpike":...}`);
+                // legacy rows hold Debug text (`Crash`) — try serde first, then
+                // the legacy quoting fallback, so struct variants round-trip.
+                let fault_type: FaultType = serde_json::from_str(&row.2)
+                    .or_else(|_| parse_enum_from_debug(&row.2))
+                    .unwrap_or(FaultType::Crash);
                 let fault = FaultEvent {
                     id: row.0,
                     node_id: row.1,
@@ -377,8 +399,17 @@ fn load_sqlite(path: &std::path::Path) -> Option<FaultToleranceSnapshot> {
             for row in rows.flatten() {
                 let actions: Vec<RecoveryAction> =
                     serde_json::from_str(&row.2).unwrap_or_default();
-                let state: RecoveryState =
-                    parse_enum_from_debug(&row.3).unwrap_or(RecoveryState::Pending);
+                let state: RecoveryState = parse_enum_from_debug(&row.3)
+                    .unwrap_or(RecoveryState::Pending);
+                // A plan persisted as InProgress means the process crashed
+                // between execute and complete — downgrade to Pending so the
+                // recovery cycle resumes it instead of leaving the node
+                // permanently unrecoverable.
+                let state = if state == RecoveryState::InProgress {
+                    RecoveryState::Pending
+                } else {
+                    state
+                };
                 let plan = RecoveryPlan {
                     plan_id: row.0,
                     node_id: row.1,
@@ -608,10 +639,13 @@ impl FaultToleranceEngine {
                 inner.recovery_plans = snapshot.recovery_plans;
                 inner.isolation_groups = snapshot.isolation_groups;
                 inner.heartbeats = snapshot.heartbeats;
-                // Derive counters from loaded data
-                inner.fault_counter = inner.faults.len() as u64;
-                inner.group_counter = inner.isolation_groups.len() as u64;
-                inner.plan_counter = inner.recovery_plans.len() as u64;
+                // Derive counters from the highest surviving ID suffix, not
+                // `len()`: eviction removes the oldest (low-ID) entries, so
+                // `len()` can collide with IDs still present and silently
+                // overwrite a live record on the next insert.
+                inner.fault_counter = max_id_suffix(inner.faults.keys(), "fault-");
+                inner.group_counter = max_id_suffix(inner.isolation_groups.keys(), "group-");
+                inner.plan_counter = max_id_suffix(inner.recovery_plans.keys(), "plan-");
                 tracing::info!(
                     faults = inner.faults.len(),
                     plans = inner.recovery_plans.len(),
@@ -645,12 +679,21 @@ impl FaultToleranceEngine {
                 };
                 inner.faults = snapshot.faults;
                 inner.recovery_plans = snapshot.recovery_plans;
+                // A plan persisted as InProgress means the process crashed
+                // between execute and complete — downgrade to Pending so the
+                // recovery cycle resumes it (same rule as the SQLite path).
+                for plan in inner.recovery_plans.values_mut() {
+                    if plan.state == RecoveryState::InProgress {
+                        plan.state = RecoveryState::Pending;
+                    }
+                }
                 inner.isolation_groups = snapshot.isolation_groups;
                 inner.heartbeats = snapshot.heartbeats;
-                // Derive counters from loaded data
-                inner.fault_counter = inner.faults.len() as u64;
-                inner.group_counter = inner.isolation_groups.len() as u64;
-                inner.plan_counter = inner.recovery_plans.len() as u64;
+                // Derive counters from the highest surviving ID suffix, not
+                // `len()` (see the SQLite restore path for the rationale).
+                inner.fault_counter = max_id_suffix(inner.faults.keys(), "fault-");
+                inner.group_counter = max_id_suffix(inner.isolation_groups.keys(), "group-");
+                inner.plan_counter = max_id_suffix(inner.recovery_plans.keys(), "plan-");
                 tracing::info!(
                     faults = inner.faults.len(),
                     plans = inner.recovery_plans.len(),

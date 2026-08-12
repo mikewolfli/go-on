@@ -1174,8 +1174,11 @@ impl VectorStore {
             anyhow::bail!("HNSW index not available");
         };
 
-        // Prefetch more candidates than top_k because recency blending may re-rank
-        let ef = (top_k * 4).max(hnsw.ef_search);
+        // Prefetch more candidates than top_k because recency blending may re-rank.
+        // `top_k` is user-controlled (request/phase option) with no upper clamp,
+        // so the multiply must saturate instead of overflowing (debug panic /
+        // release ef corruption for top_k >= 2^62).
+        let ef = top_k.saturating_mul(4).max(hnsw.ef_search);
         let results = hnsw.search(query_embedding, ef);
 
         // Do NOT clone the entire metadata Vec (each entry carries the full
@@ -1747,7 +1750,11 @@ mod tests {
     #[test]
     fn hnsw_remove_repairs_entry_point() {
         let mut hnsw = HnswIndex::new(16, 200, 50);
-        // Insert three nodes; the first (idx 0) becomes the initial entry point.
+        // Insert three nodes. The entry point is the node with the highest
+        // random level — with `random_level()` on fastrand, that is NOT
+        // deterministically node 0 (the test previously asserted `Some(0)`
+        // and flaked under parallel runs), so the invariant is asserted
+        // against whichever node was selected.
         for i in 0..3 {
             let mut vec = vec![0.0f32; 64];
             vec[i] = 1.0; // distinct vectors
@@ -1761,14 +1768,15 @@ mod tests {
                 },
             );
         }
-        assert_eq!(
-            hnsw.entry_point,
-            Some(0),
-            "first node is the initial entry point"
+        let entry = hnsw.entry_point.expect("entry point after inserts");
+        assert!(
+            !hnsw.metadata[entry].memory_key.is_empty(),
+            "entry point must be a live node, got idx {entry}"
         );
 
         // Remove the entry point; the index must re-point to a live node.
-        hnsw.remove("key-0");
+        let entry_key = hnsw.metadata[entry].memory_key.clone();
+        hnsw.remove(&entry_key);
         let Some(ep) = hnsw.entry_point else {
             panic!("entry point must be repaired to a live node");
         };
@@ -1778,8 +1786,9 @@ mod tests {
         );
 
         // Removing all nodes clears the entry point entirely.
-        hnsw.remove("key-1");
-        hnsw.remove("key-2");
+        for i in 0..3 {
+            hnsw.remove(&format!("key-{i}"));
+        }
         assert_eq!(hnsw.entry_point, None, "entry point cleared when empty");
     }
 

@@ -151,8 +151,9 @@ impl Skill for PromptBasedSkill {
             // Cumulative deadline: total wall-clock timeout for all retries combined.
             // Worst case: timeout_secs * (max_retries + 1) + total backoff.
             // Using 2x as a safety margin to cover backoff and retry overhead.
-            let overall_deadline = std::time::Duration::from_secs(self.timeout_secs * 2)
-                .max(timeout_duration.saturating_mul(max_attempts as u32));
+            let overall_deadline =
+                std::time::Duration::from_secs(self.timeout_secs.saturating_mul(2))
+                    .max(timeout_duration.saturating_mul(max_attempts as u32));
             let deadline = tokio::time::Instant::now() + overall_deadline;
             let mut last_error: Option<anyhow::Error> = None;
 

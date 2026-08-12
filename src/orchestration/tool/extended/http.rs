@@ -114,9 +114,14 @@ pub(crate) fn read_blocking_body_capped(
 
 /// Extract the first HTTP/HTTPS URL from a text string.
 pub fn extract_url(text: &str) -> Option<String> {
-    let https = text.find("https://");
-    let http = text.find("http://").filter(|_| https.is_none());
-    let start = https.or(http)?;
+    // The earliest occurrence wins regardless of scheme — previously an
+    // `https://` later in the text shadowed an earlier `http://`, so the
+    // wrong URL was fetched/validated.
+    let start = text
+        .find("https://")
+        .into_iter()
+        .chain(text.find("http://"))
+        .min()?;
     let remaining = &text[start..];
     let end = remaining
         .find(|c: char| {
