@@ -103,31 +103,44 @@ pub fn render_to_svg(latex: &str, display_mode: bool) -> Result<String> {
 /// A sorted vector of `MathExpression` values, ordered by their position in the text.
 pub fn extract_math_expressions(text: &str) -> Vec<MathExpression> {
     let mut expressions = Vec::new();
-    let chars: Vec<char> = text.chars().collect();
-    let len = chars.len();
+    // Track byte offsets via char_indices so `start`/`end` are true byte
+    // offsets (the documented contract): consumers slice the original text
+    // with them. Previously these were char indices, which equal byte
+    // offsets only for pure-ASCII text — with CJK/emoji before a math
+    // expression, `replace_range`/`&text[a..b]` either panicked or replaced
+    // the wrong range.
+    let char_indices: Vec<(usize, char)> = text.char_indices().collect();
+    let len = char_indices.len();
     let mut i = 0;
 
     while i < len {
         // Check for $$...$$ (display math)
-        if i + 1 < len && chars[i] == '$' && chars[i + 1] == '$' {
-            let start = i;
+        if i + 1 < len && char_indices[i].1 == '$' && char_indices[i + 1].1 == '$' {
+            let start = char_indices[i].0;
             let mut j = i + 2;
+            let mut found = false;
             while j + 1 < len {
-                if chars[j] == '$' && chars[j + 1] == '$' {
-                    let end = j + 2;
-                    let content: String = chars[(i + 2)..j].iter().collect();
+                if char_indices[j].1 == '$' && char_indices[j + 1].1 == '$' {
+                    let end = if j + 2 < len {
+                        char_indices[j + 2].0
+                    } else {
+                        text.len()
+                    };
+                    let content: String =
+                        char_indices[(i + 2)..j].iter().map(|(_, c)| *c).collect();
                     expressions.push(MathExpression {
                         content: content.trim().to_string(),
                         display_mode: true,
                         start,
                         end,
                     });
-                    i = end;
+                    i = j + 2;
+                    found = true;
                     break;
                 }
                 j += 1;
             }
-            if i == start {
+            if !found {
                 // No closing $$ found, skip past the opening $$
                 i += 2;
             }
@@ -135,27 +148,32 @@ pub fn extract_math_expressions(text: &str) -> Vec<MathExpression> {
         }
 
         // Check for $...$ (inline math)
-        if chars[i] == '$' {
-            let start = i;
+        if char_indices[i].1 == '$' {
+            let start = char_indices[i].0;
             let mut j = i + 1;
             let mut found = false;
             while j < len {
-                if chars[j] == '$' {
+                if char_indices[j].1 == '$' {
                     // Make sure it's not part of a $$ sequence
-                    if j + 1 < len && chars[j + 1] == '$' {
+                    if j + 1 < len && char_indices[j + 1].1 == '$' {
                         // This is actually a $$, skip
                         j += 2;
                         continue;
                     }
-                    let end = j + 1;
-                    let content: String = chars[(i + 1)..j].iter().collect();
+                    let end = if j + 1 < len {
+                        char_indices[j + 1].0
+                    } else {
+                        text.len()
+                    };
+                    let content: String =
+                        char_indices[(i + 1)..j].iter().map(|(_, c)| *c).collect();
                     expressions.push(MathExpression {
                         content: content.trim().to_string(),
                         display_mode: false,
                         start,
                         end,
                     });
-                    i = end;
+                    i = j + 1;
                     found = true;
                     break;
                 }
@@ -229,6 +247,39 @@ mod tests {
     fn test_extract_multiple() {
         let exprs = extract_math_expressions("$a$ and $b$ and $$c$$");
         assert_eq!(exprs.len(), 3);
+    }
+
+    #[test]
+    fn test_offsets_are_byte_offsets_with_cjk_prefix() {
+        // Regression: start/end were char indices used as byte offsets, so
+        // non-ASCII text before a math expression made consumers slice
+        // mid-code-point (panic) or replace the wrong range.
+        // "你好 $x$ 好": 你=3B 好=3B space=1B, so `$x$` spans bytes 7..10.
+        let text = "你好 $x$ 好";
+        let exprs = extract_math_expressions(text);
+        assert_eq!(exprs.len(), 1);
+        assert_eq!(&text[exprs[0].start..exprs[0].end], "$x$");
+        assert_eq!(exprs[0].start, 7);
+        assert_eq!(exprs[0].end, 10);
+    }
+
+    #[test]
+    fn test_render_inline_math_with_cjk_prefix() {
+        // Regression: render_math_in_text must not panic and must preserve
+        // the surrounding CJK text when a math expression follows it.
+        let result = render_math_in_text("你好 $x^2$ 结束").unwrap();
+        assert!(result.contains("<svg"));
+        assert!(result.contains("你好"));
+        assert!(result.contains("结束"));
+        assert!(!result.contains("$x^2$"));
+    }
+
+    #[test]
+    fn test_render_display_math_with_cjk_prefix() {
+        let result = render_math_in_text("公式 $$\\frac{1}{2}$$ 完毕").unwrap();
+        assert!(result.contains("<svg"));
+        assert!(result.contains("公式"));
+        assert!(result.contains("完毕"));
     }
 
     #[test]

@@ -6,7 +6,9 @@
 //! Always compiled (reqwest is already available).
 
 use crate::governance::pua::tool_execution_report;
+use crate::orchestration::tool::extended::utils::extract_xml_tag;
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
+use crate::shared::text::contains_ascii_case_insensitive;
 use anyhow::{Context, Result};
 use std::time::Duration;
 use tracing::info;
@@ -35,30 +37,31 @@ impl Tool for RssReadTool {
         let client = crate::shared::http_client::blocking_http_client()
             .context("failed to build HTTP client")?;
 
-        let response = client
+        let mut response = client
             .get(url)
             .timeout(Duration::from_millis(timeout_ms))
             .send()
             .with_context(|| format!("failed to fetch feed: {url}"))?;
 
         let status = response.status().as_u16();
-        let body = response
-            .text()
-            .with_context(|| format!("failed to read body from {url}"))?;
+        // Body size cap (same policy as http_request) enforced during the
+        // read — a hostile feed must not be fully buffered.
+        let body_bytes = super::http::read_blocking_body_capped(&mut response, url)?;
+        let body = String::from_utf8_lossy(&body_bytes).into_owned();
 
         // Simple XML parsing for RSS 2.0 and Atom feeds
         // Uses basic string extraction to avoid adding an XML crate dependency
         let mut items = Vec::new();
-        let body_lower = body.to_lowercase();
 
-        // Detect feed type
-        let feed_type = if body_lower.contains("<rss") {
+        // Detect feed type (ASCII case-insensitive, no lowercased copy of the
+        // potentially large feed body)
+        let feed_type = if contains_ascii_case_insensitive(&body, "<rss") {
             "RSS 2.0"
-        } else if body_lower.contains("<feed")
-            && body_lower.contains("xmlns=\"http://www.w3.org/2005/atom\"")
+        } else if contains_ascii_case_insensitive(&body, "<feed")
+            && contains_ascii_case_insensitive(&body, "xmlns=\"http://www.w3.org/2005/atom\"")
         {
             "Atom"
-        } else if body_lower.contains("<feed") {
+        } else if contains_ascii_case_insensitive(&body, "<feed") {
             "Atom (likely)"
         } else {
             "Unknown"
@@ -132,17 +135,4 @@ impl Tool for RssReadTool {
             pua_report: Some(report),
         })
     }
-}
-
-/// Extract the content of an XML tag (case-insensitive).
-fn extract_xml_tag(text: &str, tag: &str) -> Option<String> {
-    let open_tag_low = format!("<{}>", tag.to_lowercase());
-    let close_tag_low = format!("</{}>", tag.to_lowercase());
-    let text_lower = text.to_lowercase();
-
-    let start = text_lower.find(&open_tag_low)?;
-    let content_start = start + open_tag_low.len();
-    let remaining = &text_lower[content_start..];
-    let end = remaining.find(&close_tag_low)?;
-    Some(text[content_start..content_start + end].to_string())
 }

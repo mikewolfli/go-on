@@ -273,9 +273,15 @@ fn is_setup_or_upstream_unavailable(err: &anyhow::Error) -> bool {
 }
 
 fn degraded_openai_message(err: &anyhow::Error) -> String {
+    // The default openai_compatible upstream is sourced from the provider
+    // spec (single source) instead of a hard-coded port, so the hint matches
+    // the actual default even if the spec changes.
+    let default_upstream = crate::core::providers::provider_spec_by_name("openai_compatible")
+        .and_then(|spec| spec.url.clone())
+        .unwrap_or_else(|| crate::core::providers::DEFAULT_OPENAI_COMPAT_BASE.to_string());
     format!(
-        "go-on is running, but upstream model service is unavailable. {}. Configure at least one reachable provider (for example set DEEPSEEK_API_KEY) or start your copilot-compatible upstream on 127.0.0.1:8080.",
-        err
+        "go-on is running, but upstream model service is unavailable. {}. Configure at least one reachable provider (for example set DEEPSEEK_API_KEY) or start your copilot-compatible upstream on {}.",
+        err, default_upstream
     )
 }
 
@@ -408,13 +414,13 @@ pub(crate) async fn handle_openai_chat_completions(
     if !openai_req.stream {
         let trace = http_trace_context("openai.chat.completions");
         let ctx = Some(ChatRequestContext::new(user_session.clone()));
-        // Add a 30-second timeout for the entire chat request pipeline.
+        // Add a 300-second timeout for the entire chat request pipeline.
         // The provider API call, keychain fallback, and agent selection
         // should complete well within this window. If it hangs (e.g.,
         // harness review gate, empty agent selection), the client gets
         // a clean error instead of hanging indefinitely.
         let result = match tokio::time::timeout(
-            std::time::Duration::from_secs(300),
+            std::time::Duration::from_secs(crate::acp::r#impl::chat::CHAT_REQUEST_TIMEOUT_SECS),
             crate::acp::r#impl::chat::process_chat_request(
                 server.as_ref(),
                 &mut params,
@@ -498,8 +504,8 @@ pub(crate) async fn handle_openai_chat_completions(
     }
 
     // Periodic flush interval for SSE streaming — flushes every 4 events
-    // to batch syscalls while keeping latency low (same pattern as http.rs).
-    const SSE_FLUSH_INTERVAL: usize = 4;
+    // to batch syscalls while keeping latency low (shared constant from
+    // sse.rs, same pattern as http.rs).
     let mut sse_event_count: usize = 0;
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -600,7 +606,7 @@ pub(crate) async fn handle_openai_chat_completions(
         sse_event_count += 1;
         // Periodic flush: every SSE_FLUSH_INTERVAL events.
         // This batches syscalls while keeping latency low.
-        if sse_event_count.is_multiple_of(SSE_FLUSH_INTERVAL) {
+        if sse_event_count.is_multiple_of(super::sse::SSE_FLUSH_INTERVAL) {
             use super::sse::flush_sse;
             let _ = flush_sse(socket).await;
         }

@@ -166,7 +166,12 @@ fn run_council_route_deliberation(
     let proposal_id = format!("route-{}-{}", phase_name, now_ms);
 
     // Reputation-ranked route selection (primary source of truth for the winner).
-    let score_of = |name: &str| reputation_scores.get(name).copied().unwrap_or(0.5);
+    let score_of = |name: &str| {
+        reputation_scores
+            .get(name)
+            .copied()
+            .unwrap_or(crate::acp::helpers::agent_selector::DEFAULT_REPUTATION_SCORE)
+    };
     let top_score = candidate_agents
         .iter()
         .map(|a| score_of(a))

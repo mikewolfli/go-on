@@ -8,9 +8,12 @@ type CopilotModelsCacheEntry = Option<(u64, Vec<String>)>;
 type CopilotModelsCache = tokio::sync::Mutex<CopilotModelsCacheEntry>;
 static COPILOT_MODELS_CACHE: std::sync::OnceLock<CopilotModelsCache> = std::sync::OnceLock::new();
 
-const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
-const COPILOT_MODELS_URL: &str = "https://api.githubcopilot.com/models";
-const COPILOT_MODELS_CACHE_TTL_SECS: u64 = 300;
+// Copilot endpoints + cache TTL are defined once in `agents/copilot.rs` and
+// re-exported here — the previous per-file copies could drift when an endpoint
+// or TTL changed.
+use crate::agents::copilot::{
+    COPILOT_MODELS_CACHE_TTL_SECS, COPILOT_MODELS_URL, COPILOT_TOKEN_URL,
+};
 
 /// Snapshot of the proxy environment variables that determine which
 /// [`reqwest::Client`] configuration [`build_github_client`] produces. Used to
@@ -172,7 +175,7 @@ fn build_github_client_uncached() -> reqwest::Client {
         .cloned()
         .unwrap_or_else(|_| {
             reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(crate::shared::http_timeouts::HTTP_BODY_READ_TIMEOUT)
                 .build()
                 .expect("reqwest Client build failed (TLS backend?)")
         })
@@ -239,7 +242,7 @@ async fn resolve_copilot_models_dynamic() -> Vec<String> {
         .get(COPILOT_TOKEN_URL)
         .header("Authorization", format!("token {}", github_token))
         .header("Accept", "application/json")
-        .header("User-Agent", "go-on/1.0")
+        .header("User-Agent", crate::shared::http_client::USER_AGENT)
         .send()
         .await
     {
@@ -260,17 +263,16 @@ async fn resolve_copilot_models_dynamic() -> Vec<String> {
         return read_stale_copilot_models_cache().await.unwrap_or(fallback);
     };
 
-    let models_resp = match client
+    let mut models_req = client
         .get(COPILOT_MODELS_URL)
-        .header("Authorization", format!("Bearer {}", copilot_token))
+        .header("Authorization", format!("Bearer {copilot_token}"))
         .header("Accept", "application/json")
-        .header("User-Agent", "go-on/1.0")
-        .header("Editor-Version", "vscode/1.90.0")
-        .header("Editor-Plugin-Version", "copilot-chat/0.17.0")
-        .header("Copilot-Integration-Id", "copilot-chat")
-        .send()
-        .await
-    {
+        .header("User-Agent", crate::shared::http_client::USER_AGENT);
+    // Editor identity headers — shared constant with agents/copilot.rs.
+    for (name, value) in crate::agents::copilot::COPILOT_EDITOR_HEADERS {
+        models_req = models_req.header(name, value);
+    }
+    let models_resp = match models_req.send().await {
         Ok(resp) => resp,
         Err(_) => return read_stale_copilot_models_cache().await.unwrap_or(fallback),
     };
@@ -1363,8 +1365,8 @@ pub(super) async fn handle_copilot_device_code_request(
         .get("client_id")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .unwrap_or("01ab8ac9400c4e429b23");
-    let device_code_url = "https://github.com/login/device/code";
+        .unwrap_or(crate::agents::copilot::copilot_client_id());
+    let device_code_url = crate::agents::copilot::GITHUB_DEVICE_CODE_URL;
     let scope = params
         .get("scope")
         .and_then(Value::as_str)
@@ -1397,7 +1399,7 @@ pub(super) async fn handle_copilot_device_code_request(
                     let user_code = body["user_code"].as_str().unwrap_or("").to_string();
                     let verification_uri = body["verification_uri"]
                         .as_str()
-                        .unwrap_or("https://github.com/login/device")
+                        .unwrap_or(crate::agents::copilot::GITHUB_DEVICE_VERIFY_URL)
                         .to_string();
                     let interval = body["interval"].as_u64().unwrap_or(5);
 
@@ -1448,15 +1450,16 @@ pub(super) async fn handle_copilot_device_code_poll(
 
     info!(
         "Copilot Device Code poll: device_code={}",
-        &device_code[..8.min(device_code.len())]
+        // Char-safe log prefix (the code may be non-ASCII).
+        crate::shared::truncate::truncate_chars(&device_code, 8, "")
     );
 
     let client_id = params
         .get("client_id")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .unwrap_or("01ab8ac9400c4e429b23");
-    let token_url = "https://github.com/login/oauth/access_token";
+        .unwrap_or(crate::agents::copilot::copilot_client_id());
+    let token_url = crate::agents::copilot::GITHUB_OAUTH_TOKEN_URL;
 
     let client = build_github_client().await;
 

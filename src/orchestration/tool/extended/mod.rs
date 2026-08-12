@@ -131,21 +131,20 @@ pub use filesystem::{
     ListDirectoryTool,
 };
 pub use format::FormatCodeTool;
-#[cfg(any(
-    feature = "game-online",
-    feature = "game-process",
-    feature = "game-screen",
-    feature = "game-input",
-    feature = "game-agent",
-    feature = "game-state",
-    feature = "game-modding"
-))]
-pub use game::{
-    GameAchievementTool, GameAutoGrindTool, GameCoachingAssistantTool, GameKeyboardInputTool,
-    GameLaunchTool, GameMatchmakingTool, GameModInstallTool, GameModListTool, GameMonitorTool,
-    GameMouseInputTool, GamePriceTrackerTool, GameReplayRecorderTool, GameSaveManagerTool,
-    GameScreenCaptureTool, GameServerQueryTool,
-};
+#[cfg(feature = "game-state")]
+pub use game::{GameAchievementTool, GameSaveManagerTool};
+#[cfg(feature = "game-agent")]
+pub use game::{GameAutoGrindTool, GameCoachingAssistantTool};
+#[cfg(feature = "game-input")]
+pub use game::{GameKeyboardInputTool, GameMouseInputTool};
+#[cfg(feature = "game-process")]
+pub use game::{GameLaunchTool, GameMonitorTool};
+#[cfg(feature = "game-online")]
+pub use game::{GameMatchmakingTool, GamePriceTrackerTool, GameServerQueryTool};
+#[cfg(feature = "game-modding")]
+pub use game::{GameModInstallTool, GameModListTool};
+#[cfg(feature = "game-screen")]
+pub use game::{GameReplayRecorderTool, GameScreenCaptureTool};
 #[cfg(feature = "cam-gcode")]
 pub use gcode::GcodeReadTool;
 #[cfg(feature = "cad-geo")]

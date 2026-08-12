@@ -10,6 +10,20 @@ use std::sync::OnceLock;
 
 use crate::core::config::types::ProviderSpec;
 
+/// Default DeepSeek API base URL — single source shared by the provider spec
+/// and the agent-registry fallback.
+pub const DEFAULT_DEEPSEEK_BASE: &str = "https://api.deepseek.com";
+/// Default DeepSeek model — single source shared by the provider spec and the
+/// agent-registry / intel-hub fallbacks.
+pub const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-flash";
+/// Default Anthropic API base URL — single source shared by the provider spec
+/// and the agent-registry fallback.
+pub const DEFAULT_ANTHROPIC_BASE: &str = "https://api.anthropic.com";
+/// Default openai_compatible upstream base URL (local Copilot-compatible
+/// server) — single source shared by the provider spec and the degraded-mode
+/// hint.
+pub const DEFAULT_OPENAI_COMPAT_BASE: &str = "http://127.0.0.1:8080/v1";
+
 static PROVIDER_SPECS: OnceLock<Vec<ProviderSpec>> = OnceLock::new();
 
 /// Combined indices for O(1) lookups by name (unique) and agent_type (may have
@@ -65,7 +79,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
         ProviderSpec {
             name: "openai".to_string(),
             agent_type: "openai".to_string(),
-            url: Some("https://api.openai.com/v1".to_string()),
+            url: Some(crate::shared::http_client::OPENAI_DEFAULT_BASE_URL.to_string()),
             chat_path: None,
             model: Some("gpt-4o-mini".to_string()),
             model_suggestions: vec![
@@ -100,7 +114,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
         ProviderSpec {
             name: "openai_compatible".to_string(),
             agent_type: "openai_compatible".to_string(),
-            url: Some("http://127.0.0.1:8080/v1".to_string()),
+            url: Some(crate::core::providers::DEFAULT_OPENAI_COMPAT_BASE.to_string()),
             chat_path: None,
             model: Some("compatible-model".to_string()),
             model_suggestions: vec![],
@@ -126,7 +140,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
         ProviderSpec {
             name: "anthropic".to_string(),
             agent_type: "claude".to_string(),
-            url: Some("https://api.anthropic.com".to_string()),
+            url: Some(DEFAULT_ANTHROPIC_BASE.to_string()),
             chat_path: None,
             model: Some("claude-sonnet-4-20250514".to_string()),
             model_suggestions: vec![
@@ -192,9 +206,9 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
         ProviderSpec {
             name: "deepseek".to_string(),
             agent_type: "deepseek".to_string(),
-            url: Some("https://api.deepseek.com".to_string()),
+            url: Some(DEFAULT_DEEPSEEK_BASE.to_string()),
             chat_path: None,
-            model: Some("deepseek-v4-flash".to_string()),
+            model: Some(DEFAULT_DEEPSEEK_MODEL.to_string()),
             model_suggestions: vec![
                 "deepseek-v4-flash".to_string(),
                 "deepseek-v4-pro".to_string(),

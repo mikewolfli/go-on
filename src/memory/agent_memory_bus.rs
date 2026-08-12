@@ -261,10 +261,7 @@ impl AgentMemoryBus {
             };
             match vs.clone().search(&phase, query, limit, 0.0, 512).await {
                 Ok((hits, _)) if !hits.is_empty() => {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0);
+                    let now = crate::shared::timestamps::now_ts_ms_u64();
                     return hits
                         .into_iter()
                         .map(|hit| MemoryEntry {

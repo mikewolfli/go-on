@@ -6,23 +6,11 @@
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
-use go_on_web_search::{SearchProvider, WebSearchClient, WebSearchConfig};
+use go_on_web_search::{WebSearchClient, WebSearchConfig};
 use serde_json::Value;
 
 use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
-
-/// Shared tokio runtime for web search operations.
-static WEB_SEARCH_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-fn web_search_runtime() -> &'static tokio::runtime::Runtime {
-    WEB_SEARCH_RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build shared web_search runtime")
-    })
-}
 
 // ---------------------------------------------------------------------------
 // WebSearchTool
@@ -77,28 +65,14 @@ impl Tool for WebSearchTool {
             .clamp(1, 20) as usize;
 
         // Use the shared blocking runtime to run the async search synchronously.
-        // Always uses the dedicated runtime to avoid block_on on an async thread.
-        let result = web_search_runtime().block_on(self.search_impl(&query, max_results))?;
+        // Always uses the dedicated runtime to avoid block_on on an async thread;
+        // the guard serializes concurrent sync `run()` calls on the shared
+        // current-thread runtime.
+        let result = crate::orchestration::tool::exec_common::with_blocking_runtime(|rt| {
+            rt.block_on(self.search_impl(&query, max_results))
+        })?;
 
-        Ok(ToolOutput {
-            success: true,
-            result: Some(serde_json::json!({
-                "results": result,
-                "total": result.len(),
-                "query": query,
-            })),
-            error: None,
-            verification: Some("web_search_completed".to_string()),
-            audit_log: Some(format!(
-                "web_search: query='{}' returned {} results",
-                query,
-                result.len()
-            )),
-            pua_report: Some(tool_execution_report(
-                "web_search",
-                Some("web_search_completed"),
-            )),
-        })
+        Ok(build_output(query, result, max_results))
     }
 
     fn run_async(
@@ -118,26 +92,32 @@ impl Tool for WebSearchTool {
 
             let result = self.search_impl(&query, max_results).await?;
 
-            Ok(ToolOutput {
-                success: true,
-                result: Some(serde_json::json!({
-                    "results": result,
-                    "total": result.len(),
-                    "query": query,
-                })),
-                error: None,
-                verification: Some("web_search_completed".to_string()),
-                audit_log: Some(format!(
-                    "web_search: query='{}' returned {} results",
-                    query,
-                    result.len()
-                )),
-                pua_report: Some(tool_execution_report(
-                    "web_search",
-                    Some("web_search_completed"),
-                )),
-            })
+            Ok(build_output(query, result, max_results))
         })
+    }
+}
+
+/// Shared `ToolOutput` construction for both `run` and `run_async` — the two
+/// entry points previously duplicated the payload/audit/pua construction.
+fn build_output(query: String, result: Vec<serde_json::Value>, _max_results: usize) -> ToolOutput {
+    ToolOutput {
+        success: true,
+        result: Some(serde_json::json!({
+            "results": result,
+            "total": result.len(),
+            "query": query,
+        })),
+        error: None,
+        verification: Some("web_search_completed".to_string()),
+        audit_log: Some(format!(
+            "web_search: query='{}' returned {} results",
+            query,
+            result.len()
+        )),
+        pua_report: Some(tool_execution_report(
+            "web_search",
+            Some("web_search_completed"),
+        )),
     }
 }
 
@@ -147,15 +127,16 @@ impl WebSearchTool {
     /// The HTTP client is built once and reused across searches (connection
     /// pooling); only the query and result limit vary per call.
     async fn search_impl(&self, query: &str, max_results: usize) -> Result<Vec<serde_json::Value>> {
+        // Client is built once with fixed defaults and reused across searches
+        // (connection pooling). It must NOT depend on per-call parameters: the
+        // previous `max_results` capture meant the first call fixed the client
+        // config globally (and the field is unused by `search()` anyway — the
+        // result limit is passed per call). timeout_secs 15 matches the crate
+        // default; per-call limits are always honored via `client.search(...)`.
         static CLIENT: OnceLock<Result<WebSearchClient, String>> = OnceLock::new();
         let client = CLIENT
             .get_or_init(|| {
-                WebSearchClient::new(WebSearchConfig {
-                    provider: SearchProvider::DuckDuckGo,
-                    timeout_secs: 15,
-                    max_results,
-                })
-                .map_err(|e| e.to_string())
+                WebSearchClient::new(WebSearchConfig::default()).map_err(|e| e.to_string())
             })
             .as_ref()
             .map_err(|e| anyhow::anyhow!("web_search client init failed: {}", e))?;

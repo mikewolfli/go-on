@@ -63,6 +63,55 @@ fn url_policy() -> &'static UrlPolicyConfig {
         .unwrap_or_else(|| &URL_POLICY_DEFAULT)
 }
 
+/// Read a blocking response body with the policy size cap enforced DURING
+/// the read (content-length pre-check + `Read::take`), so a huge response is
+/// rejected without ever being fully buffered. Shared by http_request's sync
+/// path, web_scrape and rss_read.
+pub(crate) fn read_blocking_body_capped(
+    response: &mut reqwest::blocking::Response,
+    url: &str,
+) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let max_bytes = url_policy().max_response_bytes;
+    if let Some(declared) = response.content_length() {
+        if declared > max_bytes as u64 {
+            warn!(
+                "http_request BLOCKED (response too large): declared {} bytes > {} max — url={}",
+                declared, max_bytes, url
+            );
+            anyhow::bail!(
+                "{}",
+                tf(
+                    "error.http_response_too_large",
+                    &[
+                        ("size", &declared.to_string()),
+                        ("max", &max_bytes.to_string())
+                    ]
+                )
+            );
+        }
+    }
+    let mut body_bytes: Vec<u8> = Vec::new();
+    let read = response
+        .take(max_bytes as u64 + 1)
+        .read_to_end(&mut body_bytes)
+        .with_context(|| format!("failed to read response body from {url}"))?;
+    if read > max_bytes {
+        warn!(
+            "http_request BLOCKED (response too large): {} bytes > {} max — url={}",
+            read, max_bytes, url
+        );
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.http_response_too_large",
+                &[("size", &read.to_string()), ("max", &max_bytes.to_string())]
+            )
+        );
+    }
+    Ok(body_bytes)
+}
+
 /// Extract the first HTTP/HTTPS URL from a text string.
 pub fn extract_url(text: &str) -> Option<String> {
     let https = text.find("https://");
@@ -78,7 +127,11 @@ pub fn extract_url(text: &str) -> Option<String> {
 }
 
 /// Check if a hostname resolves to a private/internal IP address.
-fn is_private_host(host: &str) -> bool {
+///
+/// `pub(crate)` — shared with the observe-phase URL pre-fetch guard in
+/// `acp/impl/chat_phases.rs` so both SSRF surfaces use the same definition
+/// (loopback / private / link-local / multicast / unspecified / IPv6 variants).
+pub(crate) fn is_private_host(host: &str) -> bool {
     if host.eq_ignore_ascii_case("localhost")
         || host.eq_ignore_ascii_case("127.0.0.1")
         || host.eq_ignore_ascii_case("::1")
@@ -95,7 +148,17 @@ fn is_private_host(host: &str) -> bool {
         return is_private_ip(ip);
     }
 
-    // No DNS resolution here to avoid DNS rebinding attacks.
+    // Hostname (not an IP literal): best-effort resolution now, blocking if
+    // ANY resolved address is private (e.g. `metadata.google.internal` →
+    // 169.254.169.254, or an internal DNS name → 10.x). This is a mitigation,
+    // not a full DNS-rebinding defense — the later connect performs its own
+    // lookup — but it closes the plain "hostname points at an internal
+    // address" hole that the literal-IP check alone leaves open. Unresolvable
+    // hostnames are allowed through; the connect fails with a clear error.
+    use std::net::ToSocketAddrs;
+    if let Ok(mut addrs) = (host, 0u16).to_socket_addrs() {
+        return addrs.any(|addr| is_private_ip(addr.ip()));
+    }
     false
 }
 
@@ -170,6 +233,68 @@ pub(crate) fn validate_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Timeout for the blocking hostname SSRF check (DNS resolution), so a slow
+/// or offline resolver cannot stall an async worker. Shared with
+/// `skill_import`'s RemoteSkill endpoint validation.
+pub(crate) const SSRF_DNS_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Async variant of [`validate_url`] for use on tokio workers.
+///
+/// The hostname SSRF check performs a (blocking) DNS resolution, which must
+/// not run on an async worker; it is moved to the blocking pool with a
+/// bounded timeout. On timeout the check is skipped (hostname treated as
+/// public, matching the pre-DNS-resolution behavior) and reqwest's own
+/// connect timeout applies. Note: after the timeout fires, the detached
+/// blocking task keeps occupying one blocking-pool thread until the resolver
+/// returns (accepted trade-off: workers are never stalled).
+pub(crate) async fn validate_url_async(url: &str) -> Result<()> {
+    let url_owned = url.to_string();
+    let url_for_msg = url_owned.clone();
+    match tokio::time::timeout(
+        SSRF_DNS_CHECK_TIMEOUT,
+        tokio::task::spawn_blocking(move || validate_url(&url_owned)),
+    )
+    .await
+    {
+        Ok(Ok(Ok(()))) => Ok(()),
+        Ok(Ok(Err(validation_error))) => Err(validation_error),
+        Ok(Err(join_err)) => Err(anyhow::anyhow!("SSRF check task failed: {join_err}")),
+        Err(_) => {
+            warn!(
+                "SSRF hostname check timed out for url={url_for_msg} — proceeding (DNS check skipped)"
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Async variant of [`is_private_host`] for use on tokio workers.
+///
+/// Same blocking-DNS caveat as [`validate_url_async`]: the resolution runs on
+/// the blocking pool with a bounded timeout; on timeout the host is treated
+/// as public.
+pub(crate) async fn is_private_host_async(host: &str) -> bool {
+    let host_owned = host.to_string();
+    let host_for_msg = host_owned.clone();
+    match tokio::time::timeout(
+        SSRF_DNS_CHECK_TIMEOUT,
+        tokio::task::spawn_blocking(move || is_private_host(&host_owned)),
+    )
+    .await
+    {
+        Ok(Ok(private)) => private,
+        // Check task failed unexpectedly: fail closed (treat as private).
+        Ok(Err(_)) => true,
+        Err(_) => {
+            warn!("SSRF hostname check timed out for host={host_for_msg} — treating as public");
+            false
+        }
+    }
+}
+
+/// Maximum redirect hops for the http_request tool (10).
+const MAX_REDIRECTS: usize = 10;
+
 /// Shared async reqwest client — built once and reused to benefit from
 /// connection pooling. Per-request timeouts are applied at the request
 /// builder level so the pooled client serves every timeout class.
@@ -177,7 +302,7 @@ fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(10))
+            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
             .build()
             .expect("failed to build shared HTTP client")
     })
@@ -188,7 +313,7 @@ fn blocking_client() -> &'static reqwest::blocking::Client {
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(10))
+            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
             .build()
             .expect("failed to build shared blocking HTTP client")
     })
@@ -272,7 +397,10 @@ impl Tool for HttpRequestTool {
             };
 
             // ── 2. Runtime sandbox: URL validation (LAYER 2) ──────────
-            validate_url(&url).map_err(|e| {
+            // validate_url_async runs the (blocking) hostname DNS SSRF check
+            // on the blocking pool with a bounded timeout, so a slow resolver
+            // cannot stall this async worker.
+            validate_url_async(&url).await.map_err(|e| {
                 warn!("http_request BLOCKED (sandbox): {} — url={}", e, url);
                 e
             })?;
@@ -394,29 +522,70 @@ impl Tool for HttpRequestTool {
             let status = response.status().as_u16();
 
             // ── 9. Runtime sandbox: response body size limit ──────────
-            let response_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "(body read failed)".to_string());
-
-            if response_body.len() > max_response_bytes {
+            // Enforce the cap DURING the read: check the declared
+            // Content-Length first (before buffering any body bytes), then
+            // stream the body with a hard cap so an oversized response is
+            // rejected without ever being fully resident in memory.
+            // (Previously `response.text()` buffered the whole body before
+            // the limit was checked, so the 10MB default didn't protect
+            // memory at all.)
+            let max_bytes = max_response_bytes;
+            if let Some(declared) = response.content_length() {
+                if declared > max_bytes as u64 {
+                    warn!(
+                        "http_request BLOCKED (response too large): declared {} bytes > {} max — url={}",
+                        declared,
+                        max_bytes,
+                        url
+                    );
+                    anyhow::bail!(
+                        "{}",
+                        tf(
+                            "error.http_response_too_large",
+                            &[
+                                ("size", &declared.to_string()),
+                                ("max", &max_bytes.to_string())
+                            ]
+                        )
+                    );
+                }
+            }
+            use futures_util::StreamExt;
+            let mut body_stream = response.bytes_stream();
+            let mut body_bytes: Vec<u8> = Vec::new();
+            let body_read_result: Result<()> = loop {
+                match body_stream.next().await {
+                    Some(Ok(chunk)) => {
+                        body_bytes.extend_from_slice(&chunk);
+                        if body_bytes.len() > max_bytes {
+                            break Err(anyhow::anyhow!(
+                                "{}",
+                                tf(
+                                    "error.http_response_too_large",
+                                    &[
+                                        ("size", &body_bytes.len().to_string()),
+                                        ("max", &max_bytes.to_string())
+                                    ]
+                                )
+                            ));
+                        }
+                    }
+                    Some(Err(e)) => {
+                        break Err(anyhow::anyhow!("failed to read response body: {e}"));
+                    }
+                    None => break Ok(()),
+                }
+            };
+            if let Err(e) = body_read_result {
                 warn!(
                     "http_request BLOCKED (response too large): {} bytes > {} max — url={}",
-                    response_body.len(),
-                    max_response_bytes,
+                    body_bytes.len(),
+                    max_bytes,
                     url
                 );
-                anyhow::bail!(
-                    "{}",
-                    tf(
-                        "error.http_response_too_large",
-                        &[
-                            ("size", &response_body.len().to_string()),
-                            ("max", &max_response_bytes.to_string())
-                        ]
-                    )
-                );
+                return Err(e);
             }
+            let response_body = String::from_utf8_lossy(&body_bytes).into_owned();
 
             let success = (200..400).contains(&status);
 
@@ -483,8 +652,6 @@ impl HttpRequestTool {
                     .and_then(|v| v.parse::<u64>().ok())
             })
             .unwrap_or(15_000);
-
-        let max_response_bytes: usize = url_policy().max_response_bytes;
 
         let client = blocking_client();
 
@@ -572,28 +739,13 @@ impl HttpRequestTool {
 
         let response = request_builder.send().context("HTTP request failed")?;
         let status = response.status().as_u16();
-        let response_body = response
-            .text()
-            .unwrap_or_else(|_| "(body read failed)".to_string());
 
-        if response_body.len() > max_response_bytes {
-            warn!(
-                "http_request BLOCKED (response too large): {} bytes > {} max — url={}",
-                response_body.len(),
-                max_response_bytes,
-                url
-            );
-            anyhow::bail!(
-                "{}",
-                tf(
-                    "error.http_response_too_large",
-                    &[
-                        ("size", &response_body.len().to_string()),
-                        ("max", &max_response_bytes.to_string())
-                    ]
-                )
-            );
-        }
+        // ── Runtime sandbox: response body size limit ──────────────────
+        // Shared capped reader (content-length pre-check + `Read::take`), so
+        // a huge response is never fully buffered.
+        let mut response = response;
+        let body_bytes = read_blocking_body_capped(&mut response, &url)?;
+        let response_body = String::from_utf8_lossy(&body_bytes).into_owned();
 
         let success = (200..400).contains(&status);
 

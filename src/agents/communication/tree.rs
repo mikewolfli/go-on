@@ -28,10 +28,7 @@ impl AgentNodeMetadata {
     /// Create metadata with default values (created now, fork_context=true).
     pub fn new() -> Self {
         Self {
-            created_at_ms: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
+            created_at_ms: crate::shared::timestamps::now_ts_ms_u64(),
             role: None,
             model: None,
             token_budget: None,

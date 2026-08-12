@@ -9,6 +9,9 @@ use tracing::info;
 
 use crate::orchestration::skill::SkillRegistry;
 
+/// Poll interval for the i18n hot-reload watcher (5s).
+pub(crate) const I18N_WATCH_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Configuration for the bootstrap process.
 ///
 /// Used by [`perform_bootstrap`] during application startup and constructed
@@ -65,7 +68,8 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry
                 // embedders that construct the watcher directly.
                 let watcher_started = crate::i18n::watcher::start_watcher(
                     lang_dir,
-                    std::time::Duration::from_secs(5),
+                    // Poll interval for the i18n hot-reload watcher.
+                    I18N_WATCH_POLL_INTERVAL,
                 );
                 if let Ok(true) = watcher_started {
                     info!("I18n hot-reload watcher started");

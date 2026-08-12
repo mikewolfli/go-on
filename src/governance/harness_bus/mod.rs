@@ -661,7 +661,7 @@ pub fn default_harness_bus() -> HarnessBus {
     let budget = Arc::new(Mutex::new(BudgetTracker::new(TaskBudget::default())));
     let idempotency = Arc::new(Mutex::new(IdempotencyCache::new(Duration::from_secs(3600))));
     let runtime_control = Arc::new(Mutex::new(OnlineControllerState::default()));
-    let guard = Arc::new(Mutex::new(SelfRationalizationGuard::new(0.6)));
+    let guard = Arc::new(Mutex::new(SelfRationalizationGuard::default()));
     // Share the process-wide canonical audit sink.
     let audit_log = Arc::new(crate::governance::audit::global_audit_log().clone());
 
@@ -713,7 +713,8 @@ pub fn config_aware_harness_bus(config: &crate::config::AppConfig) -> HarnessBus
     let idempotency = Arc::new(Mutex::new(IdempotencyCache::new(Duration::from_secs(3600))));
 
     let runtime_control = Arc::new(Mutex::new(OnlineControllerState::default()));
-    let guard = Arc::new(Mutex::new(SelfRationalizationGuard::new(0.6)));
+    // Default threshold (0.6) — see SelfRationalizationGuard::default().
+    let guard = Arc::new(Mutex::new(SelfRationalizationGuard::default()));
     // Share the process-wide canonical audit sink.
     let audit_log = Arc::new(crate::governance::audit::global_audit_log().clone());
 

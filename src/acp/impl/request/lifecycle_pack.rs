@@ -48,17 +48,12 @@ fn waterline_status(bytes: u64, warn_bytes: u64, critical_bytes: u64) -> &'stati
     }
 }
 
-fn select_ledger_dir(base_dir: &Path) -> PathBuf {
-    let candidates = [
-        base_dir.join("artifacts"),
-        base_dir.join("target").join("artifacts"),
-        base_dir.join(".artifacts"),
-    ];
-    candidates
-        .iter()
-        .find(|path| path.exists())
-        .cloned()
-        .unwrap_or_else(|| base_dir.join("artifacts"))
+fn select_ledger_dir(config_path: Option<&str>) -> PathBuf {
+    // Real artifact ledger root is the canonical go-on data dir (`.goon`),
+    // resolved the same way ArtifactLedger does. The previous candidate list
+    // (artifacts/target/artifacts/.artifacts) never matched the real root, so
+    // data.lifecycle always reported the ledger as missing.
+    crate::shared::goon_paths::resolve_goon_root(config_path.map(Path::new))
 }
 
 fn storage_target_report(
@@ -139,13 +134,50 @@ pub(super) async fn data_lifecycle_payload(server: &AcpServer, params: Value) ->
         .unwrap_or_default();
 
     let base_dir = super::repro_pack::resolve_workspace_root(server.config_path.as_deref());
-    let ledger_dir = select_ledger_dir(&base_dir);
+    let ledger_dir = select_ledger_dir(server.config_path.as_deref());
+
+    // Resolve the real cache/vector store paths from the loaded configuration
+    // (same parse-and-resolve semantics as the transport factory), falling back
+    // to the historical defaults only when no config file is available. The
+    // previous hard-coded `sqlite3/acp_cache.sqlite3` / `sqlite3/acp_vector.sqlite3`
+    // silently drifted from user-configured paths.
+    let (cache_path, vector_path) = match server.config_path.as_deref() {
+        Some(config_path) => {
+            let config = crate::config::AppConfig::load(Path::new(config_path)).ok();
+            let resolve = |raw: &str| {
+                let candidate = PathBuf::from(raw);
+                if candidate.is_absolute() {
+                    candidate
+                } else {
+                    Path::new(config_path)
+                        .parent()
+                        .unwrap_or_else(|| Path::new("."))
+                        .join(candidate)
+                }
+            };
+            let cache = config
+                .as_ref()
+                .and_then(|c| c.cache.as_ref())
+                .map(|c| resolve(&c.path))
+                .unwrap_or_else(|| base_dir.join("sqlite3/acp_cache.sqlite3"));
+            let vector = config
+                .as_ref()
+                .and_then(|c| c.vector.as_ref())
+                .map(|c| resolve(&c.path))
+                .unwrap_or_else(|| base_dir.join("sqlite3/acp_vector.sqlite3"));
+            (cache, vector)
+        }
+        None => (
+            base_dir.join("sqlite3/acp_cache.sqlite3"),
+            base_dir.join("sqlite3/acp_vector.sqlite3"),
+        ),
+    };
 
     let targets = vec![
         storage_target_report(
             &base_dir,
             "cache",
-            &base_dir.join("sqlite3/acp_cache.sqlite3"),
+            &cache_path,
             false,
             512 * 1024 * 1024,
             1024 * 1024 * 1024,
@@ -153,7 +185,7 @@ pub(super) async fn data_lifecycle_payload(server: &AcpServer, params: Value) ->
         storage_target_report(
             &base_dir,
             "vector",
-            &base_dir.join("sqlite3/acp_vector.sqlite3"),
+            &vector_path,
             false,
             1024 * 1024 * 1024,
             4 * 1024 * 1024 * 1024,

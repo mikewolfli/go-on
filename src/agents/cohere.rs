@@ -175,7 +175,7 @@ impl Agent for CohereAgent {
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "cohere.api_key_env")?;
-        let endpoint = format!("{}/v1/chat", self.base_url.trim_end_matches('/'));
+        let endpoint = crate::shared::url_join::join_url(&self.base_url, "v1/chat");
         let payload = self.build_payload(messages, principles, options);
 
         let response = self

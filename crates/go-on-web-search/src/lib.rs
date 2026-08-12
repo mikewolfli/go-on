@@ -7,6 +7,32 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+/// DuckDuckGo Instant Answer API base URL (free, no API key).
+const DDG_API_BASE: &str = "https://api.duckduckgo.com";
+
+/// Cap for search API response bodies: a hostile/buggy endpoint must not be
+/// able to grow the client's memory unboundedly (aligned with the backend's
+/// MAX_BODY_SIZE).
+const MAX_SEARCH_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
+/// Read a response body with a byte cap enforced DURING the read, then parse
+/// it as JSON (replaces bare `response.json()`, which buffers the whole
+/// payload before parsing).
+async fn capped_json(mut response: reqwest::Response) -> Result<serde_json::Value> {
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .context("failed to read search API response")?
+    {
+        body.extend_from_slice(&chunk);
+        if body.len() > MAX_SEARCH_RESPONSE_BYTES {
+            anyhow::bail!("search API response exceeds the {MAX_SEARCH_RESPONSE_BYTES} byte limit");
+        }
+    }
+    serde_json::from_slice(&body).context("failed to parse search API response")
+}
+
 // ---------------------------------------------------------------------------
 // SearchResult
 // ---------------------------------------------------------------------------
@@ -116,7 +142,8 @@ impl WebSearchClient {
     pub fn new(config: WebSearchConfig) -> Result<Self> {
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
-            .user_agent("go-on-web-search/0.1.0")
+            // Versioned from the crate version so the UA never drifts.
+            .user_agent(concat!("go-on-web-search/", env!("CARGO_PKG_VERSION")))
             .build()
             .context("Failed to create HTTP client")?;
 
@@ -147,7 +174,7 @@ impl WebSearchClient {
         max_results: usize,
     ) -> Result<Vec<SearchResult>> {
         let url = format!(
-            "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1",
+            "{DDG_API_BASE}/?q={}&format=json&no_html=1&skip_disambig=1",
             urlencoding(query)
         );
 
@@ -165,9 +192,7 @@ impl WebSearchClient {
             );
         }
 
-        let ddg_response: DuckDuckGoResponse = response
-            .json()
-            .await
+        let ddg_response: DuckDuckGoResponse = serde_json::from_value(capped_json(response).await?)
             .context("Failed to parse DuckDuckGo API response")?;
 
         let mut results: Vec<SearchResult> = Vec::new();
@@ -235,9 +260,12 @@ impl WebSearchClient {
             );
         }
 
-        // Try to parse as a generic JSON array of results, or fall back
-        // to a raw text response.
-        let body: serde_json::Value = response.json().await?;
+        // Parse the response as JSON. NOTE: the comment below historically
+        // promised a "raw text response" fallback that was never implemented;
+        // custom endpoints must return the generic JSON results shape
+        // parse_generic_json_results expects. The body is read with a byte
+        // cap so a hostile endpoint cannot OOM the client.
+        let body: serde_json::Value = capped_json(response).await?;
 
         let results = parse_generic_json_results(&body, max_results)?;
 

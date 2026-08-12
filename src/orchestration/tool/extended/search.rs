@@ -113,18 +113,56 @@ fn collect_grep_matches(
 
         *state.files_scanned += 1;
 
-        // Try to read file as UTF-8 text
-        if let Ok(content) = fs::read_to_string(&path) {
-            for (line_num, line) in content.lines().enumerate() {
+        // Stream the file line-by-line instead of buffering the whole file:
+        // a model-picked 10GB file must not OOM the process. Each line is
+        // bounded (oversized lines are skipped); line numbers stay true to
+        // the file.
+        use std::io::{BufRead, Read};
+        const MAX_LINE_BYTES: usize = 1024 * 1024; // 1 MiB per line
+        if let Ok(file) = std::fs::File::open(&path) {
+            let mut reader = std::io::BufReader::new(file);
+            let mut line_num = 0u64;
+            let mut line_buf: Vec<u8> = Vec::new();
+            loop {
+                line_buf.clear();
+                let n = (&mut reader)
+                    .take(MAX_LINE_BYTES as u64 + 1)
+                    .read_until(b'\n', &mut line_buf)
+                    .unwrap_or(0);
+                if n == 0 {
+                    break; // EOF
+                }
+                line_num += 1;
+                if line_buf.len() > MAX_LINE_BYTES {
+                    // Oversized line: drain the remainder to stay aligned,
+                    // then skip (never buffer the whole line).
+                    let mut drain = [0u8; 1024];
+                    while line_buf.last() != Some(&b'\n') {
+                        let r = reader.read(&mut drain).unwrap_or(0);
+                        if r == 0 {
+                            break;
+                        }
+                        if drain[..r].contains(&b'\n') {
+                            break;
+                        }
+                    }
+                    continue;
+                }
                 if *state.total_matches >= state.max_matches {
                     break;
                 }
-                if regex.is_match(line) {
+                while matches!(line_buf.last(), Some(b'\n') | Some(b'\r')) {
+                    line_buf.pop();
+                }
+                let Ok(line) = String::from_utf8(line_buf.clone()) else {
+                    continue;
+                };
+                if regex.is_match(&line) {
                     *state.total_matches += 1;
                     let relative = path.strip_prefix(root).unwrap_or(&path);
                     state.matches.push(serde_json::json!({
                         "file": relative.to_string_lossy(),
-                        "line": line_num + 1,
+                        "line": line_num,
                         "content": line,
                     }));
                 }

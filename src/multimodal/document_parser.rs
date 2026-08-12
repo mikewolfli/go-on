@@ -303,18 +303,27 @@ impl DocumentParser {
 
     /// Cap `text_content` to [`max_text_length`] if it exceeds the limit
     /// and record a `"truncated"` metadata entry.
+    ///
+    /// Truncation is byte-budgeted but char-safe: `String::truncate` panics
+    /// when the boundary falls inside a multi-byte UTF-8 code point (likely
+    /// with CJK/emoji-heavy documents), so we step back to the nearest char
+    /// boundary — same class of bug already fixed in chat_phases.rs.
     fn truncate_content(&self, content: &mut ParsedContent) {
         if content.text_content.len() > self.max_text_length {
             let original_len = content.text_content.len();
-            content.text_content.truncate(self.max_text_length);
+            let mut boundary = self.max_text_length;
+            while !content.text_content.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            content.text_content.truncate(boundary);
             content
                 .text_content
                 .push_str("\n\n[... content truncated ...]");
             content.metadata.insert(
                 "truncated".to_string(),
                 format!(
-                    "text_content was truncated from {} to {} bytes",
-                    original_len, self.max_text_length
+                    "text_content was truncated from {} to {} bytes (char-safe boundary {})",
+                    original_len, boundary, boundary
                 ),
             );
         }
@@ -609,174 +618,35 @@ impl DocumentParser {
 
     #[cfg(feature = "document-html")]
     fn parse_html_str(&self, html_str: &str) -> Result<ParsedContent, DocumentParserError> {
-        use scraper::{Html, Selector};
+        use scraper::Html;
 
         let document = Html::parse_document(html_str);
-        let mut content = ParsedContent::default();
-
-        // 1. Extract visible text from common block / inline elements.
-        let text_selectors = [
-            "p",
-            "h1",
-            "h2",
-            "h3",
-            "h4",
-            "h5",
-            "h6",
-            "li",
-            "td",
-            "th",
-            "div",
-            "span",
-            "blockquote",
-            "pre",
-            "code",
-            "article",
-            "section",
-            "figcaption",
-        ];
-        let mut text_parts: Vec<String> = Vec::new();
-        for tag in &text_selectors {
-            if let Ok(sel) = Selector::parse(tag) {
-                for elem in document.select(&sel) {
-                    let t: String = elem.text().collect::<Vec<_>>().join(" ");
-                    let t = t.trim().to_string();
-                    if !t.is_empty() {
-                        text_parts.push(t);
-                    }
-                }
-            }
-        }
-        content.text_content = text_parts.join("\n");
-
-        // 2. Extract <a> links as metadata.
-        if let Ok(sel) = Selector::parse("a[href]") {
-            for elem in document.select(&sel) {
-                if let Some(href) = elem.value().attr("href") {
-                    let label: String = elem.text().collect();
-                    let key = if label.is_empty() {
-                        "link".to_string()
-                    } else {
-                        format!("link:{}", label)
-                    };
-                    // Avoid overwriting duplicate labels with the same key.
-                    content
-                        .metadata
-                        .entry(key)
-                        .or_insert_with(|| href.to_string());
-                }
-            }
-        }
-
-        // 3. Extract <table> elements.
-        if let Ok(table_sel) = Selector::parse("table") {
-            for table_elem in document.select(&table_sel) {
-                let mut table = Table {
-                    caption: None,
-                    headers: Vec::new(),
-                    rows: Vec::new(),
-                };
-
-                // Optional <caption>
-                if let Ok(cap_sel) = Selector::parse("caption") {
-                    if let Some(cap) = table_elem.select(&cap_sel).next() {
-                        table.caption = Some(cap.text().collect::<String>().trim().to_string());
-                    }
-                }
-
-                // <thead> → headers
-                if let Ok(thead_sel) = Selector::parse("thead tr th, thead tr td") {
-                    for th in table_elem.select(&thead_sel) {
-                        table
-                            .headers
-                            .push(th.text().collect::<String>().trim().to_string());
-                    }
-                }
-
-                // Pre-parse known-valid CSS selectors for table cell extraction.
-                // These selectors are static strings guaranteed to be valid,
-                // but we use if-let to avoid any potential panic surface.
-                let cell_selector_opt = Selector::parse("td, th").ok();
-                let cell_selector = match cell_selector_opt.as_ref() {
-                    Some(s) => s,
-                    None => {
-                        tracing::error!("Failed to parse static selector 'td, th' - this is a bug");
-                        continue;
-                    }
-                };
-
-                // <tr> rows (skip the <thead> row if headers were captured)
-                if let Ok(tr_sel) = Selector::parse("tr") {
-                    let mut row_idx = 0usize;
-                    for tr in table_elem.select(&tr_sel) {
-                        // If we got headers from <thead>, skip the first <tr> too.
-                        let is_header_row = if !table.headers.is_empty() && row_idx == 0 {
-                            row_idx += 1;
-                            continue;
-                        } else {
-                            // Use the first <tr> as header if no <thead> was found.
-                            row_idx == 0 && table.headers.is_empty()
-                        };
-
-                        let cells: Vec<String> = tr
-                            .select(cell_selector)
-                            .map(|cell| cell.text().collect::<String>().trim().to_string())
-                            .collect();
-                        if !cells.is_empty() {
-                            if is_header_row {
-                                table.headers = cells;
-                            } else {
-                                table.rows.push(cells);
-                            }
-                        }
-                        row_idx += 1;
-                    }
-                }
-
-                content.tables.push(table);
-            }
-        }
-
-        // 4. <img> metadata.
-        if let Ok(img_sel) = Selector::parse("img[src]") {
-            for (i, img) in document.select(&img_sel).enumerate() {
-                if let Some(src) = img.value().attr("src") {
-                    content
-                        .metadata
-                        .insert(format!("img_{i}_src"), src.to_string());
-                }
-                if let Some(alt) = img.value().attr("alt") {
-                    content
-                        .metadata
-                        .insert(format!("img_{i}_alt"), alt.to_string());
-                }
-            }
-        }
-
-        // 5. <title>
-        if let Ok(title_sel) = Selector::parse("title") {
-            if let Some(title_elem) = document.select(&title_sel).next() {
-                content
-                    .metadata
-                    .insert("title".to_string(), title_elem.text().collect());
-            }
-        }
-
-        // 6. <meta name="description" content="...">
-        if let Ok(meta_sel) = Selector::parse("meta[name=description]") {
-            if let Some(meta) = document.select(&meta_sel).next() {
-                if let Some(desc) = meta.value().attr("content") {
-                    content
-                        .metadata
-                        .insert("description".to_string(), desc.to_string());
-                }
-            }
-        }
-
-        content
-            .metadata
-            .insert("parser".to_string(), "scraper".to_string());
-
+        let content = extract_from_html(
+            &document,
+            "scraper",
+            &[
+                "p",
+                "h1",
+                "h2",
+                "h3",
+                "h4",
+                "h5",
+                "h6",
+                "li",
+                "td",
+                "th",
+                "div",
+                "span",
+                "blockquote",
+                "pre",
+                "code",
+                "article",
+                "section",
+                "figcaption",
+            ],
+            TableHeaderMode::Thead,
+            true,
+        );
         Ok(content)
     }
 
@@ -810,112 +680,30 @@ impl DocumentParser {
     #[cfg(feature = "document-markdown")]
     fn parse_markdown_str(&self, md_str: &str) -> Result<ParsedContent, DocumentParserError> {
         use comrak::{markdown_to_html, Options};
-        use scraper::{Html, Selector};
+        use scraper::Html;
 
-        // Render to HTML, then reuse the HTML parser for extraction.
+        // Render to HTML, then reuse the shared HTML extraction helper.
         let html = markdown_to_html(md_str, &Options::default());
         let document = Html::parse_document(&html);
-        let mut content = ParsedContent::default();
-
-        // 1. Plain text from common block elements.
-        let text_selectors = [
-            "p",
-            "h1",
-            "h2",
-            "h3",
-            "h4",
-            "h5",
-            "h6",
-            "li",
-            "blockquote",
-            "pre",
-            "code",
-        ];
-        let mut text_parts: Vec<String> = Vec::new();
-        for tag in &text_selectors {
-            if let Ok(sel) = Selector::parse(tag) {
-                for elem in document.select(&sel) {
-                    let t: String = elem.text().collect::<Vec<_>>().join(" ");
-                    let t = t.trim().to_string();
-                    if !t.is_empty() {
-                        text_parts.push(t);
-                    }
-                }
-            }
-        }
-        content.text_content = text_parts.join("\n");
-
-        // 2. Tables (GFM tables render as <table>).
-        if let Ok(table_sel) = Selector::parse("table") {
-            for table_elem in document.select(&table_sel) {
-                let mut table = Table {
-                    caption: None,
-                    headers: Vec::new(),
-                    rows: Vec::new(),
-                };
-                // Pre-parse selector once - static string known to be valid.
-                let cell_selector = match Selector::parse("th, td").ok() {
-                    Some(s) => s,
-                    None => {
-                        tracing::error!("Failed to parse static selector 'th, td' - this is a bug");
-                        continue;
-                    }
-                };
-                if let Ok(tr_sel) = Selector::parse("tr") {
-                    for (row_idx, tr) in table_elem.select(&tr_sel).enumerate() {
-                        let cells: Vec<String> = tr
-                            .select(&cell_selector)
-                            .map(|cell| cell.text().collect::<String>().trim().to_string())
-                            .collect();
-                        if row_idx == 0 {
-                            table.headers = cells;
-                        } else {
-                            table.rows.push(cells);
-                        }
-                    }
-                }
-                content.tables.push(table);
-            }
-        }
-
-        // 3. Images — comrak renders `![alt](src)` as `<img>`.
-        if let Ok(img_sel) = Selector::parse("img[src]") {
-            for (i, img) in document.select(&img_sel).enumerate() {
-                if let Some(src) = img.value().attr("src") {
-                    content
-                        .metadata
-                        .insert(format!("img_{i}_src"), src.to_string());
-                }
-                if let Some(alt) = img.value().attr("alt") {
-                    content
-                        .metadata
-                        .insert(format!("img_{i}_alt"), alt.to_string());
-                }
-            }
-        }
-
-        // 4. Links.
-        if let Ok(a_sel) = Selector::parse("a[href]") {
-            for elem in document.select(&a_sel) {
-                if let Some(href) = elem.value().attr("href") {
-                    let label: String = elem.text().collect();
-                    let key = if label.is_empty() {
-                        "link".to_string()
-                    } else {
-                        format!("link:{label}")
-                    };
-                    content
-                        .metadata
-                        .entry(key)
-                        .or_insert_with(|| href.to_string());
-                }
-            }
-        }
-
-        content
-            .metadata
-            .insert("parser".to_string(), "comrak+scraper".to_string());
-
+        let content = extract_from_html(
+            &document,
+            "comrak+scraper",
+            &[
+                "p",
+                "h1",
+                "h2",
+                "h3",
+                "h4",
+                "h5",
+                "h6",
+                "li",
+                "blockquote",
+                "pre",
+                "code",
+            ],
+            TableHeaderMode::FirstRow,
+            false,
+        );
         Ok(content)
     }
 
@@ -973,6 +761,216 @@ impl DocumentParser {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// How the header row of a `<table>` is identified during HTML extraction.
+#[cfg(any(feature = "document-html", feature = "document-markdown"))]
+enum TableHeaderMode {
+    /// HTML backend: honor `<caption>` and `<thead>`; the first `<tr>` becomes
+    /// the header row only when no `<thead>` is present, and rows that contain
+    /// no cells are skipped.
+    Thead,
+    /// Markdown backend: GFM tables always start with a header row, so the
+    /// first `<tr>` is unconditionally treated as the header row.
+    FirstRow,
+}
+
+/// Extracts structured content from a parsed HTML document.
+///
+/// Shared by the HTML and Markdown backends: `parse_html_str` walks the raw
+/// document, while `parse_markdown_str` renders Markdown to HTML first and
+/// walks the result. The backends differ only in the element selector set,
+/// how table header rows are determined, whether `title`/`meta` description
+/// are extracted, and the `parser` tag value — all passed in as parameters so
+/// each backend keeps its exact previous output.
+#[cfg(any(feature = "document-html", feature = "document-markdown"))]
+fn extract_from_html(
+    document: &scraper::Html,
+    parser_tag: &str,
+    text_selectors: &[&str],
+    table_mode: TableHeaderMode,
+    extract_title_and_meta: bool,
+) -> ParsedContent {
+    use scraper::Selector;
+
+    let mut content = ParsedContent::default();
+
+    // 1. Extract visible text from the given block / inline elements.
+    let mut text_parts: Vec<String> = Vec::new();
+    for tag in text_selectors {
+        if let Ok(sel) = Selector::parse(tag) {
+            for elem in document.select(&sel) {
+                let t: String = elem.text().collect::<Vec<_>>().join(" ");
+                let t = t.trim().to_string();
+                if !t.is_empty() {
+                    text_parts.push(t);
+                }
+            }
+        }
+    }
+    content.text_content = text_parts.join("\n");
+
+    // 2. Extract <a> links as metadata.
+    if let Ok(sel) = Selector::parse("a[href]") {
+        for elem in document.select(&sel) {
+            if let Some(href) = elem.value().attr("href") {
+                let label: String = elem.text().collect();
+                let key = if label.is_empty() {
+                    "link".to_string()
+                } else {
+                    format!("link:{label}")
+                };
+                // Avoid overwriting duplicate labels with the same key.
+                content
+                    .metadata
+                    .entry(key)
+                    .or_insert_with(|| href.to_string());
+            }
+        }
+    }
+
+    // 3. Extract <table> elements. Header handling differs per backend:
+    //    the HTML backend honors <caption>/<thead> and skips cell-less rows,
+    //    while GFM tables (Markdown) always start with a header row.
+    if let Ok(table_sel) = Selector::parse("table") {
+        for table_elem in document.select(&table_sel) {
+            let mut table = Table {
+                caption: None,
+                headers: Vec::new(),
+                rows: Vec::new(),
+            };
+
+            match table_mode {
+                TableHeaderMode::Thead => {
+                    // Optional <caption>
+                    if let Ok(cap_sel) = Selector::parse("caption") {
+                        if let Some(cap) = table_elem.select(&cap_sel).next() {
+                            table.caption = Some(cap.text().collect::<String>().trim().to_string());
+                        }
+                    }
+
+                    // <thead> → headers
+                    if let Ok(thead_sel) = Selector::parse("thead tr th, thead tr td") {
+                        for th in table_elem.select(&thead_sel) {
+                            table
+                                .headers
+                                .push(th.text().collect::<String>().trim().to_string());
+                        }
+                    }
+
+                    // Pre-parse the static cell selector (guaranteed valid) and
+                    // match defensively to avoid any potential panic surface.
+                    let cell_selector = match Selector::parse("td, th").ok() {
+                        Some(s) => s,
+                        None => {
+                            tracing::error!(
+                                "Failed to parse static selector 'td, th' - this is a bug"
+                            );
+                            continue;
+                        }
+                    };
+
+                    // <tr> rows (skip the <thead> row if headers were captured)
+                    if let Ok(tr_sel) = Selector::parse("tr") {
+                        let mut row_idx = 0usize;
+                        for tr in table_elem.select(&tr_sel) {
+                            // If we got headers from <thead>, skip the first <tr> too.
+                            if !table.headers.is_empty() && row_idx == 0 {
+                                row_idx += 1;
+                                continue;
+                            }
+
+                            let cells: Vec<String> = tr
+                                .select(&cell_selector)
+                                .map(|cell| cell.text().collect::<String>().trim().to_string())
+                                .collect();
+                            if !cells.is_empty() {
+                                // Use the first <tr> as header if no <thead> was found.
+                                if row_idx == 0 {
+                                    table.headers = cells;
+                                } else {
+                                    table.rows.push(cells);
+                                }
+                            }
+                            row_idx += 1;
+                        }
+                    }
+                }
+                TableHeaderMode::FirstRow => {
+                    // Pre-parse the static cell selector once - known to be valid.
+                    let cell_selector = match Selector::parse("th, td").ok() {
+                        Some(s) => s,
+                        None => {
+                            tracing::error!(
+                                "Failed to parse static selector 'th, td' - this is a bug"
+                            );
+                            continue;
+                        }
+                    };
+                    if let Ok(tr_sel) = Selector::parse("tr") {
+                        for (row_idx, tr) in table_elem.select(&tr_sel).enumerate() {
+                            let cells: Vec<String> = tr
+                                .select(&cell_selector)
+                                .map(|cell| cell.text().collect::<String>().trim().to_string())
+                                .collect();
+                            if row_idx == 0 {
+                                table.headers = cells;
+                            } else {
+                                table.rows.push(cells);
+                            }
+                        }
+                    }
+                }
+            }
+
+            content.tables.push(table);
+        }
+    }
+
+    // 4. <img> metadata.
+    if let Ok(img_sel) = Selector::parse("img[src]") {
+        for (i, img) in document.select(&img_sel).enumerate() {
+            if let Some(src) = img.value().attr("src") {
+                content
+                    .metadata
+                    .insert(format!("img_{i}_src"), src.to_string());
+            }
+            if let Some(alt) = img.value().attr("alt") {
+                content
+                    .metadata
+                    .insert(format!("img_{i}_alt"), alt.to_string());
+            }
+        }
+    }
+
+    // 5. <title> and <meta name="description"> — HTML documents only.
+    if extract_title_and_meta {
+        if let Ok(title_sel) = Selector::parse("title") {
+            if let Some(title_elem) = document.select(&title_sel).next() {
+                content
+                    .metadata
+                    .insert("title".to_string(), title_elem.text().collect());
+            }
+        }
+
+        if let Ok(meta_sel) = Selector::parse("meta[name=description]") {
+            if let Some(meta) = document.select(&meta_sel).next() {
+                if let Some(desc) = meta.value().attr("content") {
+                    content
+                        .metadata
+                        .insert("description".to_string(), desc.to_string());
+                }
+            }
+        }
+    }
+
+    // 6. Parser tag identifying the backend.
+    content
+        .metadata
+        .insert("parser".to_string(), parser_tag.to_string());
+
+    content
+}
+
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1015,6 +1013,27 @@ mod tests {
         parser.truncate_content(&mut content);
         assert_eq!(content.text_content, "Short text.");
         assert!(!content.metadata.contains_key("truncated"));
+    }
+
+    #[test]
+    fn test_text_truncation_is_char_safe_with_multibyte() {
+        // Regression: `String::truncate` panics when the cut lands inside a
+        // multi-byte UTF-8 code point. CJK text with a byte limit in the
+        // middle of a 3-byte char must not panic and must keep the suffix.
+        let parser = DocumentParser {
+            max_text_length: 10,
+        };
+        let mut content = ParsedContent {
+            text_content: "中文内容测试abc".to_string(), // 5 × 3 bytes + 3
+            ..Default::default()
+        };
+        parser.truncate_content(&mut content);
+        assert!(content.metadata.contains_key("truncated"));
+        assert!(
+            content.text_content.contains("[... content truncated ...]"),
+            "suffix must be appended: {}",
+            content.text_content
+        );
     }
 
     #[test]

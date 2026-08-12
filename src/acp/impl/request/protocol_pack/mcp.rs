@@ -337,9 +337,12 @@ pub async fn mcp_tools_call_payload(server: &AcpServer, params: Value) -> Result
     };
     record_mcp_tool_audit(name, &arguments, true, "tool executed successfully");
 
+    // Same text shape as the native MCP arm (prefers the structured payload's
+    // `message` field, falling back to serialized JSON).
+    let tool_text = crate::mcp::mcp_tool_result_text(&structured);
     let mut content = serde_json::Map::new();
     content.insert("type".to_string(), Value::String("text".to_string()));
-    content.insert("text".to_string(), Value::String(structured.to_string()));
+    content.insert("text".to_string(), Value::String(tool_text));
     let result = McpCallToolResult::new(vec![Value::Object(content)], Some(structured));
     Ok(serde_json::to_value(&result)?)
 }
@@ -394,9 +397,12 @@ pub async fn acp_tools_call_payload(server: &AcpServer, params: Value) -> Result
         super::session::send_chunk(sid, "agent_message_chunk", &msg).await;
     }
 
+    // Same text shape as the native MCP arm (prefers the structured payload's
+    // `message` field, falling back to serialized JSON).
+    let tool_text = crate::mcp::mcp_tool_result_text(&structured);
     let mut content = serde_json::Map::new();
     content.insert("type".to_string(), Value::String("text".to_string()));
-    content.insert("text".to_string(), Value::String(structured.to_string()));
+    content.insert("text".to_string(), Value::String(tool_text));
 
     Ok(serde_json::json!({
         "content": [Value::Object(content)],

@@ -115,8 +115,10 @@ struct AuditLogInner {
     dropped_count: u64,
     /// Channel to the background NDJSON writer thread (set when `log_path` is
     /// configured). The write is fire-and-forget so the request hot path never
-    /// performs synchronous disk I/O.
-    writer: Option<std::sync::mpsc::Sender<AuditWriterMsg>>,
+    /// performs synchronous disk I/O. Bounded (`SyncSender`): the writer
+    /// thread is a single consumer, and `try_send` drops entries when it
+    /// falls behind instead of queuing unboundedly.
+    writer: Option<std::sync::mpsc::SyncSender<AuditWriterMsg>>,
 }
 
 /// Messages consumed by the background audit writer thread.
@@ -164,7 +166,7 @@ impl ThreadSafeAuditLog {
         // sends the entry over an unbounded channel — no synchronous disk write.
         // The same thread also owns the hash-chain append, so the log line and
         // its chain entry are written in exact order by a single producer.
-        let (tx, rx) = std::sync::mpsc::channel::<AuditWriterMsg>();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<AuditWriterMsg>(4096);
         let writer_path = log_path.clone();
         let chain_path = log_path
             .parent()
@@ -220,12 +222,30 @@ impl ThreadSafeAuditLog {
                                     }
                                 }
                                 if chain.is_some() {
-                                    if let Err(e) = rotate_chain_if_needed(
+                                    match rotate_chain_if_needed(
                                         &mut chain,
                                         &chain_path,
                                         CHAIN_ROTATION_BYTES,
                                     ) {
-                                        tracing::warn!("audit: chain rotation failed: {}", e);
+                                        Ok(true) => {
+                                            // Chain archives use a different
+                                            // stem — clean them up too,
+                                            // otherwise they accumulate
+                                            // forever (disk growth stays
+                                            // bounded only for the NDJSON
+                                            // archives).
+                                            if let Some(parent) = chain_path.parent() {
+                                                cleanup_old_archives(
+                                                    parent,
+                                                    "audit_chain.ndjson",
+                                                    max_archives,
+                                                );
+                                            }
+                                        }
+                                        Ok(false) => {}
+                                        Err(e) => {
+                                            tracing::warn!("audit: chain rotation failed: {}", e);
+                                        }
                                     }
                                 }
                             }
@@ -287,8 +307,12 @@ impl ThreadSafeAuditLog {
         // channel send is non-blocking (unbounded), so the request hot path
         // never performs open/append/close disk I/O.
         if let Some(ref tx) = inner.writer {
-            if let Err(e) = tx.send(AuditWriterMsg::Entry(entry)) {
-                tracing::warn!("audit: writer channel closed: {}", e);
+            // Bounded channel: on overflow (writer thread backed up under a
+            // burst), drop the entry and count it instead of letting the
+            // queue grow unboundedly.
+            if tx.try_send(AuditWriterMsg::Entry(entry)).is_err() {
+                inner.dropped_count += 1;
+                tracing::warn!("audit: writer queue full, dropping entry");
             }
         }
     }
@@ -382,23 +406,35 @@ fn append_ndjson_entry(path: &Path, entry: &AuditLogEntry) -> Result<bool, Audit
 
 /// Rotate a file by compressing it to a gzip archive and starting fresh.
 fn rotate_file(path: &Path) -> Result<(), AuditError> {
-    use std::io::Read;
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
 
-    let archive_path = path.with_extension("ndjson.1.gz");
-    let mut original = fs::File::open(path)?;
-    let mut data = Vec::new();
-    original.read_to_end(&mut data)?;
-
-    let compressed = {
-        use flate2::write::GzEncoder;
-        use flate2::Compression;
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(&data)?;
-        encoder.finish()?
+    // Find the next free archive slot. Overwriting a fixed `<stem>.1.gz` on
+    // every rotation silently dropped the previous archive — audit history
+    // had gaps — while `cleanup_old_archives` expects numbered `.N.gz` files.
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let mut n = 1usize;
+    let archive_path = loop {
+        let candidate = dir.join(format!("{file_name}.{n}.gz"));
+        if !candidate.exists() {
+            break candidate;
+        }
+        n += 1;
     };
 
-    let compressed_len = compressed.len();
-    fs::write(&archive_path, &compressed)?;
+    // Stream the source into the gzip encoder (the previous implementation
+    // buffered the whole multi-hundred-MB file in memory before compressing).
+    let mut original = fs::File::open(path)?;
+    let out = fs::File::create(&archive_path)?;
+    let mut encoder = GzEncoder::new(out, Compression::default());
+    std::io::copy(&mut original, &mut encoder)?;
+    let out = encoder.finish()?;
+    let compressed_len = out.metadata().map(|m| m.len()).unwrap_or(0);
+
     tracing::info!(
         "Audit log rotated: {} -> {} ({} bytes compressed)",
         path.display(),
@@ -423,10 +459,21 @@ fn cleanup_old_archives(dir: &Path, stem: &str, max_to_keep: usize) {
     let Ok(mut entries) = fs::read_dir(dir).map(|e| {
         e.filter_map(|e| e.ok())
             .filter(|e| {
+                // Strict `<stem>.<digits>.gz` match: a bare prefix match would
+                // also delete unrelated files like `audit.ndjson.backup.gz`.
                 e.path()
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .map(|n| n.starts_with(stem) && n.ends_with(".gz"))
+                    .map(|n| {
+                        n.strip_prefix(stem)
+                            .and_then(|rest| rest.strip_suffix(".gz"))
+                            .map(|num| {
+                                !num.is_empty()
+                                    && num.starts_with('.')
+                                    && num[1..].chars().all(|c| c.is_ascii_digit())
+                            })
+                            .unwrap_or(false)
+                    })
                     .unwrap_or(false)
             })
             .collect::<Vec<_>>()
@@ -598,7 +645,17 @@ pub fn redact_sensitive(value: &serde_json::Value) -> serde_json::Value {
             if s.len() > 20
                 && (s.starts_with("sk-") || s.starts_with("pk-") || s.starts_with("AKIA"))
             {
-                Value::String(format!("{}...{}", &s[..2], &s[s.len() - 2..]))
+                // Prefix is ASCII by construction (sk-/pk-/AKIA); the tail is
+                // sliced char-safely so a multi-byte ending cannot panic.
+                let tail: String = s
+                    .chars()
+                    .rev()
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                Value::String(format!("{}...{}", &s[..2], tail))
             } else {
                 Value::String(s.clone())
             }
@@ -798,5 +855,43 @@ mod tests {
             fresh.verify_integrity(None).expect("verify").is_empty(),
             "fresh period chain must be intact"
         );
+    }
+
+    #[test]
+    fn test_cleanup_old_archives_matches_only_numbered_archives() {
+        // Regression: a bare prefix match (`starts_with(stem)`) would also
+        // delete unrelated files like `audit.ndjson.backup.gz`.
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let keep = dir.path().join("audit.ndjson.1.gz");
+        let keep2 = dir.path().join("audit.ndjson.12.gz");
+        let unrelated = dir.path().join("audit.ndjson.backup.gz");
+        let also_unrelated = dir.path().join("audit_chain.ndjson.1.gz");
+        for f in [&keep, &keep2, &unrelated, &also_unrelated] {
+            std::fs::write(f, b"x").unwrap();
+        }
+
+        cleanup_old_archives(dir.path(), "audit.ndjson", 100);
+
+        // Numbered archives survive; unrelated files must NOT be deleted.
+        assert!(keep.exists(), "numbered archive must be kept");
+        assert!(keep2.exists(), "numbered archive must be kept");
+        assert!(
+            unrelated.exists(),
+            "non-numbered file must not be deleted by prefix match"
+        );
+        assert!(
+            also_unrelated.exists(),
+            "other stem's archives must not be deleted"
+        );
+
+        // With a keep-limit of 1, the oldest by mtime is removed (here the
+        // first-created `keep`), while the unrelated files still survive.
+        let older = dir.path().join("audit.ndjson.0.gz");
+        std::fs::write(&older, b"x").unwrap();
+        cleanup_old_archives(dir.path(), "audit.ndjson", 1);
+        assert!(!keep.exists(), "oldest-by-mtime numbered archive removed");
+        assert!(keep2.exists() || older.exists(), "newer archives kept");
+        assert!(unrelated.exists(), "unrelated still untouched");
+        assert!(also_unrelated.exists(), "other stem still untouched");
     }
 }

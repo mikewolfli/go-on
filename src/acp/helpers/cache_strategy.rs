@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::agent::Message;
 use crate::intelligence::token_cache::{CacheEntry, TokenMultiLevelCache};
+use crate::shared::text::contains_ascii_case_insensitive;
 
 /// Decision from the cache strategy
 #[derive(Debug, Clone)]
@@ -56,29 +57,6 @@ impl CacheStrategy {
             .iter()
             .any(|hint| contains_ascii_case_insensitive(messages_text, hint))
     }
-}
-
-/// Case-insensitive substring scan over a UTF-8 haystack for an ASCII needle.
-///
-/// Never allocates a lowercased copy; folds both sides to lowercase per byte.
-fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
-    let needle_bytes = needle.as_bytes();
-    if needle_bytes.is_empty() {
-        return true;
-    }
-    let hay_bytes = haystack.as_bytes();
-    if needle_bytes.len() > hay_bytes.len() {
-        return false;
-    }
-    'outer: for i in 0..=(hay_bytes.len() - needle_bytes.len()) {
-        for (j, &nb) in needle_bytes.iter().enumerate() {
-            if !hay_bytes[i + j].eq_ignore_ascii_case(&nb) {
-                continue 'outer;
-            }
-        }
-        return true;
-    }
-    false
 }
 
 impl CacheStrategy {

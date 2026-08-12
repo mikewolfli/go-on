@@ -40,6 +40,13 @@ impl Tool for ImageResizeTool {
         let maintain_aspect = input.payload["maintain_aspect"].as_bool().unwrap_or(true);
         let crop = input.payload["crop"].as_bool().unwrap_or(false);
 
+        // Guard external inputs like ImageGenerateTool: zero dimensions or
+        // giant values would OOM/overflow inside the image crate.
+        const MAX_IMAGE_DIM: u64 = 8192;
+        if width == 0 || height == 0 || width > MAX_IMAGE_DIM || height > MAX_IMAGE_DIM {
+            anyhow::bail!("width/height must be in 1..={MAX_IMAGE_DIM} (got {width}x{height})");
+        }
+
         let validated_path = sanitize_path(input, path)?;
         let validated_output = sanitize_path(input, output_path)?;
 
@@ -354,6 +361,13 @@ impl Tool for ImageGenerateTool {
         let kind = input.payload["kind"].as_str().unwrap_or("solid");
         let color = input.payload["color"].as_str().unwrap_or("#808080");
 
+        // Guard external inputs: zero dimensions would underflow allocations,
+        // giant dimensions would OOM (DoS). Cap at a sane maximum.
+        const MAX_IMAGE_DIM: u64 = 8192;
+        if width == 0 || height == 0 || width > MAX_IMAGE_DIM || height > MAX_IMAGE_DIM {
+            anyhow::bail!("width/height must be in 1..={MAX_IMAGE_DIM} (got {width}x{height})");
+        }
+
         let validated_output = sanitize_path(input, output_path)?;
 
         debug!(
@@ -379,7 +393,7 @@ impl Tool for ImageGenerateTool {
                 image::Rgba([r, g, b, a]),
             ),
             "checkerboard" => {
-                let cell_size = input.payload["cell_size"].as_u64().unwrap_or(32) as u32;
+                let cell_size = input.payload["cell_size"].as_u64().unwrap_or(32).max(1) as u32;
                 let color2_hex = input.payload["color2"].as_str().unwrap_or("#FFFFFF");
                 let hex2 = color2_hex.trim_start_matches('#');
                 let r2 = u8::from_str_radix(hex2.get(0..2).unwrap_or("FF"), 16).unwrap_or(255);

@@ -241,7 +241,7 @@ impl AgentVoter for DeepSeekVoter {
 
     async fn vote(&self, context: &str) -> Vote {
         let payload = self.build_payload(context);
-        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let url = crate::shared::url_join::join_url(&self.base_url, "chat/completions");
 
         // Fail fast with a conservative vote when no API key is configured
         // (previously an empty Authorization header was sent and the HTTP
@@ -271,6 +271,8 @@ impl AgentVoter for DeepSeekVoter {
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&payload)
+            // Per-request timeout for the voter HTTP call (10s — bounded so a
+            // stuck upstream cannot hang a Delphi debate).
             .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
@@ -297,6 +299,7 @@ impl AgentVoter for DeepSeekVoter {
                         let confidence = parsed
                             .get("confidence")
                             .and_then(|v| v.as_f64())
+                            // Unparseable/missing confidence → neutral 0.5.
                             .unwrap_or(0.5)
                             .clamp(0.0, 1.0);
                         return Vote {

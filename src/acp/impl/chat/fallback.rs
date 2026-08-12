@@ -243,6 +243,9 @@ pub(crate) async fn execute_fallback_agents(
         let _tenant_id_owned = tenant_id.to_string();
 
         let fut = async move {
+            // Semaphore acquire timeout (30s) — bounded so a saturated
+            // concurrency pool fails fast instead of parking callers; this is
+            // NOT an HTTP timeout (unrelated to the shared 30s HTTP constants).
             let permit_timeout = std::time::Duration::from_secs(30);
             let _permit = tokio::time::timeout(permit_timeout, sem_clone.acquire())
                 .await

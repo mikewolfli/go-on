@@ -164,6 +164,9 @@ pub(super) fn summarize_hardness(task: &str, params: &Value) -> HardnessProfile 
         .map(|raw| raw.len() as f64)
         .unwrap_or(0.0);
     let context_scale =
+        // Task length normalized against 1200 chars (60%) + payload size
+        // against 6000 bytes (40%) — weights favor task text as the primary
+        // hardness signal.
         scale_to_unit(task_chars, 1200.0) * 0.6 + scale_to_unit(payload_size, 6000.0) * 0.4;
 
     let changed_files = params

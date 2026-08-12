@@ -33,7 +33,11 @@ use std::net::UdpSocket;
 use std::path::PathBuf;
 #[cfg(any(feature = "game-online", feature = "game-state"))]
 use std::time::Duration;
-#[cfg(any(feature = "game-process", feature = "game-state"))]
+#[cfg(any(
+    feature = "game-process",
+    feature = "game-state",
+    feature = "game-modding"
+))]
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
@@ -617,9 +621,11 @@ impl Tool for GameMonitorTool {
             .as_ref()
             .and_then(|s| {
                 // Format: pid (comm) state ppid pgrp session tty_nr tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime ...
-                // Find the closing paren of comm, then skip spaces
+                // Find the closing paren of comm, then skip spaces. The paren
+                // is ASCII, so `closing_paren + 1` is a valid boundary; the
+                // trailing `)` byte is always ASCII too.
                 let closing_paren = s.rfind(')')?;
-                let after = &s[closing_paren + 2..]; // skip ") "
+                let after = s[closing_paren + 1..].trim_start();
                 let fields: Vec<&str> = after.split_whitespace().collect();
                 if fields.len() < 23 {
                     return None;

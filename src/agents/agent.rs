@@ -2,9 +2,8 @@
 //!
 //! This module defines the Agent trait, AgentRegistry, and related functionality
 //! for managing and interacting with different AI agents.
-//! These structures are intentional framework definitions for Phase 0-9 architecture.
-//! They define task contracts, audit schemas, and agent interfaces that will be wired
-//! into the execution flow once orchestration logic is implemented.
+//! These structures define task contracts, audit schemas, and agent interfaces
+//! used by the ACP runtime, orchestration, and CLI entry points.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -12,6 +11,12 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use crate::i18n::runtime::tf;
 use crate::intelligence::capability_graph::{CapabilityDecl, CapabilityGraph};
 use crate::intelligence::token_cache::{CachedAgentWrapper, TokenMultiLevelCache as TokenCache};
+
+/// Default OpenAI-compatible chat completions path.
+const DEFAULT_OPENAI_CHAT_PATH: &str = "/v1/chat/completions";
+/// Default OpenAI-compatible chat completions path for providers that expose
+/// the endpoint at the root (DeepSeek, Doubao, Qwen, Groq family, …).
+const DEFAULT_ROOT_CHAT_PATH: &str = "/chat/completions";
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -995,14 +1000,24 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
         }
         "deepseek" => {
             let api_key_env = required_field("deepseek", &config.api_key_env, "api_key_env")?;
+            // Default base URL comes from the provider spec (single source);
+            // the fallback literal is only used when the spec is absent.
+            let spec_url = crate::core::providers::provider_spec_by_name("deepseek")
+                .and_then(|spec| spec.url.clone());
             let base_url = config
                 .url
                 .clone()
-                .unwrap_or_else(|| "https://api.deepseek.com".to_string());
+                .or(spec_url)
+                .unwrap_or_else(|| crate::core::providers::DEFAULT_DEEPSEEK_BASE.to_string());
             let model = config
                 .model
                 .clone()
-                .unwrap_or_else(|| "deepseek-v4-flash".to_string());
+                // Default model from the provider spec (single source).
+                .or_else(|| {
+                    crate::core::providers::provider_spec_by_name("deepseek")
+                        .and_then(|spec| spec.model.clone())
+                })
+                .unwrap_or_else(|| crate::core::providers::DEFAULT_DEEPSEEK_MODEL.to_string());
             Ok(Arc::new(DeepSeekAgent::new(
                 base_url,
                 api_key_env,
@@ -1027,7 +1042,7 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let chat_path = config
                 .chat_path
                 .clone()
-                .unwrap_or_else(|| "/v1/chat/completions".to_string());
+                .unwrap_or_else(|| DEFAULT_OPENAI_CHAT_PATH.to_string());
             let api_key_env =
                 required_field("openai_compatible", &config.api_key_env, "api_key_env")?;
             let model = required_field("openai_compatible", &config.model, "model")?;
@@ -1046,7 +1061,7 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let chat_path = config
                 .chat_path
                 .clone()
-                .unwrap_or_else(|| "/chat/completions".to_string());
+                .unwrap_or_else(|| DEFAULT_ROOT_CHAT_PATH.to_string());
             let api_key_env = required_field("doubao", &config.api_key_env, "api_key_env")?;
             let model = required_field("doubao", &config.model, "model")?;
             let supports_system = config.supports_system.unwrap_or(true);
@@ -1060,17 +1075,34 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             )))
         }
         "claude" => {
+            // Default base URL comes from the provider spec (single source).
+            let spec_url = crate::core::providers::provider_spec_by_name("anthropic")
+                .and_then(|spec| spec.url.clone());
             let url = config
                 .url
                 .clone()
-                .unwrap_or_else(|| "https://api.anthropic.com".to_string());
+                .or(spec_url)
+                .unwrap_or_else(|| crate::core::providers::DEFAULT_ANTHROPIC_BASE.to_string());
             let api_key_env = required_field("claude", &config.api_key_env, "api_key_env")?;
             let model = required_field("claude", &config.model, "model")?;
             let anthropic_version = config
                 .anthropic_version
                 .clone()
+                // Spec default (single source); literal is only a last resort.
+                .or_else(|| {
+                    crate::core::providers::provider_spec_by_name("anthropic")
+                        .and_then(|spec| spec.anthropic_version.clone())
+                })
                 .unwrap_or_else(|| "2023-06-01".to_string());
-            let max_tokens = config.max_tokens.unwrap_or(4096);
+            // Spec default max_tokens (8192); the old 4096 fallback disagreed
+            // with the spec and was silently used when config lacked max_tokens.
+            let max_tokens = config
+                .max_tokens
+                .or_else(|| {
+                    crate::core::providers::provider_spec_by_name("anthropic")
+                        .and_then(|spec| spec.max_tokens)
+                })
+                .unwrap_or(4096);
             Ok(Arc::new(AnthropicAgent::new(
                 url,
                 api_key_env,
@@ -1087,7 +1119,7 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let chat_path = config
                 .chat_path
                 .clone()
-                .unwrap_or_else(|| "/v1/chat/completions".to_string());
+                .unwrap_or_else(|| DEFAULT_OPENAI_CHAT_PATH.to_string());
             let supports_system = config.supports_system.unwrap_or(true);
             Ok(Arc::new(OpenAiCompatibleAgent::new_with_compression(
                 url,
@@ -1105,7 +1137,7 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let model = required_field(agent_type, &config.model, "model")?;
             Ok(Arc::new(OpenAiCompatibleAgent::new_with_compression(
                 url,
-                "/chat/completions".to_string(),
+                DEFAULT_ROOT_CHAT_PATH.to_string(),
                 api_key_env,
                 model,
                 true,
@@ -1121,7 +1153,7 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let model = required_field(agent_type, &config.model, "model")?;
             Ok(Arc::new(OpenAiCompatibleAgent::new(
                 url,
-                "/chat/completions".to_string(),
+                DEFAULT_ROOT_CHAT_PATH.to_string(),
                 api_key_env,
                 model,
                 true,
@@ -1159,7 +1191,7 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let chat_path = config
                 .chat_path
                 .clone()
-                .unwrap_or_else(|| "/chat/completions".to_string());
+                .unwrap_or_else(|| DEFAULT_ROOT_CHAT_PATH.to_string());
             let model = required_field("qwen", &config.model, "model")?;
             let supports_system = config.supports_system.unwrap_or(true);
             Ok(Arc::new(OpenAiCompatibleAgent::new(
@@ -1332,7 +1364,6 @@ mod tests {
             },
             compliance: None,
             startup_context: None,
-            reputation: None,
             protocol: None,
         };
 

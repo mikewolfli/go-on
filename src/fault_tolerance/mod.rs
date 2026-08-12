@@ -499,7 +499,7 @@ pub(crate) fn cluster_health_from_counts_with_config(
     }
     let offline_ratio = offline_nodes as f64 / total_nodes as f64;
     let degraded_ratio = degraded_nodes as f64 / total_nodes as f64;
-    if offline_ratio >= config.healthy_threshold || active_faults >= 10 {
+    if offline_ratio >= config.healthy_threshold || active_faults >= config.critical_fault_count {
         ClusterHealth::Critical
     } else if offline_ratio >= config.degraded_threshold
         || degraded_ratio >= config.unhealthy_threshold

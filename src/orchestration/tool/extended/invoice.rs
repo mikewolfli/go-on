@@ -382,7 +382,10 @@ fn regex_lite(pattern: &str, text: &str) -> Option<String> {
         let prefix = &stripped[..start].trim();
         let text_lower = text.to_lowercase();
         if let Some(pos) = text_lower.find(&prefix.to_lowercase()) {
-            let after = &text[pos + prefix.len()..];
+            // Slice the lowercased copy (same coordinate space) — lowercase
+            // can change byte length (K/İ/ẞ), so slicing `text` with `pos`
+            // from `text_lower` would panic mid-code-point.
+            let after = &text_lower[pos + prefix.len()..];
             let line_end = after.find('\n').unwrap_or(after.len());
             let val = after[..line_end].trim().trim_matches(':').trim();
             if !val.is_empty() {

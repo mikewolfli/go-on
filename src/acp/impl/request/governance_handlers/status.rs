@@ -118,6 +118,10 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
     let compliance_framework_profile = json!({
         "enabled": compliance_config.enabled,
         "standards": compliance_config.standards,
+        // Declared retention target. NOTE: the audit writer rotates by size
+        // (100 MB) and archive count (10), NOT by day — day-based pruning is
+        // not implemented because deleting mid-chain entries would break the
+        // tamper-evident hash chain. This field is advisory/observability.
         "audit_retention_days": compliance_config.audit_retention_days,
         "pii_field_count": compliance_config.pii_fields.len(),
         "default_data_classification": compliance_config.data_classification_default,

@@ -215,7 +215,6 @@ mod unit_tests {
             },
             compliance: None,
             startup_context: None,
-            reputation: None,
             protocol: None,
         }
     }

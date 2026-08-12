@@ -774,7 +774,7 @@ impl DistributedMemoryBus {
                 .map(|(node_id, address)| {
                     let client = &client;
                     let endpoint = if address.contains("://") {
-                        format!("{}/rpc", address.trim_end_matches('/'))
+                        crate::shared::url_join::join_url(address, "rpc")
                     } else {
                         format!("http://{}/rpc", address)
                     };

@@ -80,6 +80,9 @@ const ONLINE_CONTROLLER_FAILURE_ESCALATION: f64 = 0.25;
 const ONLINE_CONTROLLER_P95_LATENCY_MS_ESCALATION: u64 = 15_000;
 const ONLINE_CONTROLLER_MIN_AGENT_SAMPLES: u64 = 3;
 const ONLINE_CONTROLLER_BANDIT_EXPLORATION: f64 = 1.4;
+/// Neutral reliability for phases with no recorded history (mid-point, same
+/// convention as the agent selector's DEFAULT_REPUTATION_SCORE).
+const DEFAULT_PHASE_RELIABILITY: f64 = 0.5;
 
 #[derive(Debug, Default, Clone)]
 struct AgentSignalWindow {
@@ -364,7 +367,9 @@ impl OnlineControllerState {
             .iter()
             .enumerate()
             .map(|(idx, name)| {
-                let reliability = self.phase_reliability_score(name).unwrap_or(0.5);
+                let reliability = self
+                    .phase_reliability_score(name)
+                    .unwrap_or(DEFAULT_PHASE_RELIABILITY);
                 let (bandit_ucb, mean_reward, pulls) = self
                     .phase_bandit_arms
                     .get(name)
@@ -404,7 +409,9 @@ impl OnlineControllerState {
         phase_candidates
             .iter()
             .map(|name| {
-                let reliability = self.phase_reliability_score(name).unwrap_or(0.5);
+                let reliability = self
+                    .phase_reliability_score(name)
+                    .unwrap_or(DEFAULT_PHASE_RELIABILITY);
                 let (mean_reward, pulls) = self
                     .phase_bandit_arms
                     .get(name)

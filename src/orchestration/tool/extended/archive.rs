@@ -12,6 +12,8 @@ use crate::orchestration::tool::{
 use anyhow::{Context, Result};
 use std::fs;
 use std::io::{Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -242,9 +244,12 @@ fn inspect_zip(path: &Path) -> Result<Vec<ArchiveEntry>> {
     let mut archive = zip::ZipArchive::new(file)
         .with_context(|| format!("failed to read zip archive: {}", path.display()))?;
 
-    let mut entries = Vec::with_capacity(archive.len());
+    let mut entries = Vec::with_capacity(archive.len().min(MAX_ARCHIVE_ENTRIES));
 
     for i in 0..archive.len() {
+        if entries.len() >= MAX_ARCHIVE_ENTRIES {
+            anyhow::bail!("archive_inspect: archive has more than {MAX_ARCHIVE_ENTRIES} entries");
+        }
         let entry = archive
             .by_index(i)
             .with_context(|| format!("failed to read zip entry {i}"))?;
@@ -287,6 +292,9 @@ fn inspect_tar_impl<R: Read>(reader: R, path: &Path) -> Result<Vec<ArchiveEntry>
         .entries()
         .with_context(|| format!("failed to read tar entries from: {}", path.display()))?
     {
+        if entries.len() >= MAX_ARCHIVE_ENTRIES {
+            anyhow::bail!("archive_inspect: archive has more than {MAX_ARCHIVE_ENTRIES} entries");
+        }
         let entry = entry_result
             .with_context(|| format!("failed to read tar entry in: {}", path.display()))?;
 
@@ -310,6 +318,14 @@ fn inspect_tar_impl<R: Read>(reader: R, path: &Path) -> Result<Vec<ArchiveEntry>
 
 // ── Zip extraction ──────────────────────────────────────────────────────────
 
+/// Max entries an `archive_extract` call will process (zip/tar): a hostile
+/// archive with millions of tiny entries would otherwise grind the extractor.
+const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+
+/// Max total decompressed bytes an `archive_extract` call will write (zip/tar):
+/// disk-fill protection, aligned with the gzip decompression cap.
+const MAX_ARCHIVE_EXTRACT_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
+
 fn extract_zip(path: &Path, output_dir: &Path, filter: Option<&str>) -> Result<usize> {
     let file = fs::File::open(path)
         .with_context(|| format!("failed to open zip file: {}", path.display()))?;
@@ -317,9 +333,13 @@ fn extract_zip(path: &Path, output_dir: &Path, filter: Option<&str>) -> Result<u
         .with_context(|| format!("failed to read zip archive: {}", path.display()))?;
 
     let mut extracted_count = 0usize;
+    let mut total_bytes: u64 = 0;
 
     for i in 0..archive.len() {
-        let mut entry = archive
+        if i >= MAX_ARCHIVE_ENTRIES {
+            anyhow::bail!("archive_extract: archive has more than {MAX_ARCHIVE_ENTRIES} entries");
+        }
+        let entry = archive
             .by_index(i)
             .with_context(|| format!("failed to read zip entry {i}"))?;
 
@@ -334,6 +354,21 @@ fn extract_zip(path: &Path, output_dir: &Path, filter: Option<&str>) -> Result<u
             }
         }
 
+        // Zip-slip guard: refuse entries that would escape `output_dir`.
+        // `PathBuf::join` with an absolute entry replaces the base entirely
+        // (e.g. `/etc/passwd`), and `..` components climb out of it; a
+        // backslash separator is the Windows-style variant of the same
+        // attack. Fail closed on the whole archive rather than extracting
+        // around a malicious entry.
+        if entry_path.split('/').any(|seg| seg == "..")
+            || entry_path.contains('\\')
+            || Path::new(&entry_path).is_absolute()
+        {
+            anyhow::bail!(
+                "archive_extract: refusing to extract entry '{entry_path}' (path traversal)"
+            );
+        }
+
         let target = output_dir.join(&entry_path);
 
         if entry.is_dir() {
@@ -345,10 +380,20 @@ fn extract_zip(path: &Path, output_dir: &Path, filter: Option<&str>) -> Result<u
                     format!("failed to create parent directory: {}", parent.display())
                 })?;
             }
+            // Disk-fill guard: cap both the per-entry read and the total
+            // extracted size (`take` stops reading once the cap is reached).
+            let remaining = MAX_ARCHIVE_EXTRACT_BYTES.saturating_sub(total_bytes);
             let mut outfile = fs::File::create(&target)
                 .with_context(|| format!("failed to create file: {}", target.display()))?;
-            std::io::copy(&mut entry, &mut outfile)
-                .with_context(|| format!("failed to extract '{}'", entry_path))?;
+            let copied = std::io::copy(&mut entry.take(remaining + 1), &mut outfile)
+                .with_context(|| format!("failed to extract '{entry_path}'"))?;
+            total_bytes += copied;
+            if copied > remaining {
+                anyhow::bail!(
+                    "archive_extract: extraction exceeds the {} byte limit",
+                    MAX_ARCHIVE_EXTRACT_BYTES
+                );
+            }
             extracted_count += 1;
         }
     }
@@ -379,12 +424,20 @@ fn extract_tar_impl<R: Read>(
 ) -> Result<usize> {
     let mut archive = tar::Archive::new(reader);
     let mut extracted_count = 0usize;
+    let mut total_bytes: u64 = 0;
 
-    for entry_result in archive
+    // Count every processed entry (including dirs and filter-skipped ones),
+    // so a hostile archive of a million directory entries cannot grind the
+    // extractor — the zip path counts by archive index.
+    for (processed_entries, entry_result) in archive
         .entries()
         .with_context(|| format!("failed to read tar entries from: {}", path.display()))?
+        .enumerate()
     {
-        let mut entry = entry_result
+        if processed_entries >= MAX_ARCHIVE_ENTRIES {
+            anyhow::bail!("archive_extract: archive has more than {MAX_ARCHIVE_ENTRIES} entries");
+        }
+        let entry = entry_result
             .with_context(|| format!("failed to read tar entry in: {}", path.display()))?;
 
         let entry_path = entry
@@ -401,21 +454,67 @@ fn extract_tar_impl<R: Read>(
             }
         }
 
+        // Path-traversal guard (same as the zip path): `tar::Entry::unpack`
+        // writes exactly to the given path WITHOUT validating it (only
+        // `unpack_in` does), so a hostile archive with `..`/absolute/
+        // backslash entries would escape `output_dir`.
+        if entry_path.split('/').any(|seg| seg == "..")
+            || entry_path.contains('\\')
+            || Path::new(&entry_path).is_absolute()
+        {
+            anyhow::bail!(
+                "archive_extract: refusing to extract entry '{entry_path}' (path traversal)"
+            );
+        }
+
         let target = output_dir.join(&entry_path);
 
         if entry.header().entry_type().is_dir() {
             fs::create_dir_all(&target)
                 .with_context(|| format!("failed to create directory: {}", target.display()))?;
-        } else {
+        } else if entry.header().entry_type().is_file() {
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent).with_context(|| {
                     format!("failed to create parent directory: {}", parent.display())
                 })?;
             }
-            entry
-                .unpack(&target)
-                .with_context(|| format!("failed to extract '{}'", entry_path))?;
+            // Disk-fill guard: cap the per-entry read and the total
+            // extracted size (`take` stops reading once the cap is reached);
+            // the mode from the tar header is preserved to match `unpack`
+            // semantics for regular files.
+            let remaining = MAX_ARCHIVE_EXTRACT_BYTES.saturating_sub(total_bytes);
+            let mode = entry.header().mode().ok();
+            let mut outfile = fs::File::create(&target)
+                .with_context(|| format!("failed to create file: {}", target.display()))?;
+            let copied = std::io::copy(&mut entry.take(remaining + 1), &mut outfile)
+                .with_context(|| format!("failed to extract '{entry_path}'"))?;
+            drop(outfile);
+            total_bytes += copied;
+            if copied > remaining {
+                anyhow::bail!(
+                    "archive_extract: extraction exceeds the {} byte limit",
+                    MAX_ARCHIVE_EXTRACT_BYTES
+                );
+            }
+            if let Some(mode) = mode {
+                if let Err(e) = fs::set_permissions(&target, fs::Permissions::from_mode(mode)) {
+                    debug!(
+                        "archive_extract: failed to set permissions on {}: {}",
+                        target.display(),
+                        e
+                    );
+                }
+            }
             extracted_count += 1;
+        } else {
+            // Symlinks / hardlinks / special entries: rejected outright.
+            // `tar::Entry::unpack` does not validate a link's target, so a
+            // hostile archive could plant a link pointing outside
+            // `output_dir` and then write THROUGH it with a later entry
+            // (e.g. symlink `ln` → `/etc` + regular file `ln/evil`).
+            anyhow::bail!(
+                "archive_extract: refusing entry '{entry_path}' (symlink/hardlink/special file not supported)"
+            );
         }
     }
 
@@ -425,8 +524,13 @@ fn extract_tar_impl<R: Read>(
 // ── Plain gzip extraction ───────────────────────────────────────────────────
 
 fn extract_gzip_single(path: &Path, output_dir: &Path, _filter: Option<&str>) -> Result<usize> {
-    let input_data =
-        fs::read(path).with_context(|| format!("failed to read gzip file: {}", path.display()))?;
+    // Input-side cap (aligned with the decompression output cap): a huge
+    // .gz input must not be fully buffered.
+    let input_data = crate::orchestration::tool::exec_common::read_file_capped(
+        path,
+        super::compress::MAX_DECOMPRESSED_TOOL_BYTES,
+    )
+    .with_context(|| format!("failed to read gzip file: {}", path.display()))?;
 
     // Shared gzip decompression (single implementation with the `decompress` tool).
     let decompressed = super::compress::decompress_gzip_bytes(&input_data)?;
@@ -445,4 +549,95 @@ fn extract_gzip_single(path: &Path, output_dir: &Path, _filter: Option<&str>) ->
         .with_context(|| format!("failed to write decompressed data to: {}", target.display()))?;
 
     Ok(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn extract_zip_rejects_path_traversal_entries() {
+        // Regression: zip-slip — zip entry names carrying `..` components,
+        // absolute paths, or Windows backslash separators must be refused
+        // instead of escaping `output_dir` (PathBuf::join replaces the base
+        // for absolute entries).
+        let tmp = TempDir::new().unwrap();
+        let out_dir = tmp.path().join("out");
+
+        for evil_name in [
+            "../evil.txt",
+            "/tmp/evil.txt",
+            "a/../../evil.txt",
+            "..\\evil.txt",
+        ] {
+            let zip_path = tmp.path().join(format!(
+                "evil-{}.zip",
+                evil_name.replace(['/', '\\', '.'], "_")
+            ));
+            {
+                let file = fs::File::create(&zip_path).unwrap();
+                let mut writer = zip::ZipWriter::new(file);
+                let options = zip::write::SimpleFileOptions::default();
+                writer.start_file(evil_name, options).unwrap();
+                writer.write_all(b"pwned").unwrap();
+                writer.finish().unwrap();
+            }
+            let err = extract_zip(&zip_path, &out_dir, None).unwrap_err();
+            assert!(
+                err.to_string().contains("path traversal"),
+                "entry {evil_name:?} should be rejected, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_tar_rejects_path_traversal_entries() {
+        // Regression (tar-slip): `tar::Entry::unpack` writes exactly to the
+        // given path without validating it, so traversal entries must be
+        // rejected before unpacking. The tar crate's own Builder refuses to
+        // WRITE such names, but a hostile archive produced by other tools
+        // must still be rejected by the extractor.
+        let tmp = TempDir::new().unwrap();
+        let out_dir = tmp.path().join("out");
+        let tar_path = tmp.path().join("evil.tar");
+
+        // Manually craft a minimal ustar archive containing "../evil.txt"
+        // (512-byte header + 5-byte payload + two zero end blocks).
+        let mut header = [0u8; 512];
+        let name = b"../evil.txt";
+        header[..name.len()].copy_from_slice(name);
+        header[100..108].copy_from_slice(b"0000644\0");
+        header[108..116].copy_from_slice(b"0000000\0");
+        header[116..124].copy_from_slice(b"0000000\0");
+        header[124..136].copy_from_slice(b"00000000005\0"); // size 5 (octal)
+        header[136..148].copy_from_slice(b"00000000000\0"); // mtime
+        header[156] = b'0'; // typeflag: regular file
+        header[257..263].copy_from_slice(b"ustar\0"); // magic
+                                                      // ustar checksum: sum of all bytes with the checksum field as spaces.
+        let sum: u32 = header
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                if (148..156).contains(&i) {
+                    b' ' as u32
+                } else {
+                    *b as u32
+                }
+            })
+            .sum();
+        let chksum = format!("{:06o}\0 ", sum);
+        header[148..156].copy_from_slice(chksum.as_bytes());
+        let mut tar_bytes = Vec::new();
+        tar_bytes.extend_from_slice(&header);
+        tar_bytes.extend_from_slice(b"pwned");
+        tar_bytes.extend_from_slice(&[0u8; 1024]);
+        fs::write(&tar_path, &tar_bytes).unwrap();
+
+        let err = extract_tar(&tar_path, &out_dir, None).unwrap_err();
+        assert!(
+            err.to_string().contains("path traversal"),
+            "tar entry should be rejected, got: {err}"
+        );
+    }
 }

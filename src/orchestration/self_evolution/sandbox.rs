@@ -164,7 +164,9 @@ impl CodePatch {
         let mut to_remove_sorted = to_remove;
         to_remove_sorted.sort_unstable_by(|a, b| b.cmp(a));
         for ln in to_remove_sorted {
-            if ln <= lines.len() {
+            // Line numbers are 1-based; `ln == 0` (from a hostile patch) must
+            // not underflow `ln - 1` (panic in debug, wrap in release).
+            if ln >= 1 && ln <= lines.len() {
                 lines.remove(ln - 1);
             }
         }
@@ -173,7 +175,7 @@ impl CodePatch {
         let mut change_count = 0u64;
         for (ln, new_content) in &self.patched_lines {
             let idx = *ln;
-            if idx <= lines.len() {
+            if idx >= 1 && idx <= lines.len() {
                 // Check if this line is also in original — update or insert
                 if orig_lns.contains(ln) {
                     lines[idx - 1] = new_content;
@@ -183,10 +185,15 @@ impl CodePatch {
                     lines.insert(idx - 1, new_content);
                     change_count += 1;
                 }
-            } else {
+            } else if idx > lines.len() {
+                // Insert beyond the current end → append. (Line numbers in a
+                // patch are 1-based positions; a value past the end means the
+                // new line goes at the bottom of the file.)
                 lines.push(new_content);
                 change_count += 1;
             }
+            // idx == 0: invalid line number from a hostile patch — skip (no
+            // underflow, no append; mirrors the removal path above).
         }
 
         let new_content = lines.join("\n");
@@ -687,6 +694,15 @@ impl SandboxExecutor {
             return true;
         }
 
+        // Reject path traversal outright: a `..` component makes
+        // `workdir.join(target)` resolve outside the whitelisted tree (e.g.
+        // "src/../lib.rs" escapes `src`; "src/../../x.rs" leaves the project
+        // root entirely) even when the literal string starts with a whitelisted
+        // prefix.
+        if target.split('/').any(|seg| seg == "..") {
+            return false;
+        }
+
         self.allowed_targets.iter().any(|pattern| {
             let trimmed = pattern.trim_end_matches('/');
             if trimmed == "*" || trimmed == "**" {
@@ -711,13 +727,16 @@ impl SandboxExecutor {
         if pattern == "**/*" || pattern == "**" || pattern == "*" {
             return true;
         }
-        // Handle pattern/**/* : recursive match under directory
+        // Handle pattern/**/* : recursive match under directory. Segment
+        // boundaries matter: `src/**/*.rs` must NOT match `src2/foo.rs` or
+        // `src_evil/bar.rs` — only paths under `src/` (at least one segment
+        // after the prefix) qualify.
         if let Some(prefix) = pattern.strip_suffix("/**/*") {
-            return target_prefix.starts_with(prefix);
+            return target_prefix.starts_with(&format!("{prefix}/"));
         }
-        // Handle src/** pattern: starts with src
+        // Handle src/** pattern: `src` itself or anything under `src/`.
         if let Some(prefix) = pattern.strip_suffix("/**") {
-            return target_prefix.starts_with(prefix) || target_prefix == prefix;
+            return target_prefix == prefix || target_prefix.starts_with(&format!("{prefix}/"));
         }
         // Handle src/* pattern: direct child of src
         if let Some(prefix) = pattern.strip_suffix("/*") {
@@ -726,17 +745,11 @@ impl SandboxExecutor {
             }
             return false;
         }
-        // Simple prefix match (or exact match for simple patterns like 'src')
-        // Also handle 'src/**' collapsed forms where ** can be '/' in target
-        if target_prefix.starts_with(
-            pattern
-                .trim_end_matches("**")
-                .trim_end_matches('*')
-                .trim_end_matches('/'),
-        ) {
-            return true;
-        }
-        target_prefix == pattern
+        // Remaining patterns are exact file matches (any trailing `*`/`**`
+        // was consumed above). Exact comparison avoids prefix bleed where an
+        // exact pattern like `src/lib` would otherwise also match
+        // `src/library`.
+        target_prefix == pattern.trim_end_matches('*').trim_end_matches('/')
     }
 
     /// Apply network sandboxing by setting environment variables that restrict
@@ -804,6 +817,31 @@ mod tests {
         assert!(patch.diff.contains("fn old()"));
         assert!(patch.diff.contains("fn new()"));
         assert!(patch.patch_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_apply_to_file_ignores_zero_line_numbers() {
+        // Regression: a hostile patch with line number 0 must not underflow
+        // `ln - 1` (panic in debug builds); the `ln >= 1` guard keeps the
+        // file untouched instead.
+        let workdir = TempDir::new().unwrap();
+        let target = workdir.path().join("src/main.rs");
+        fs::create_dir_all(workdir.path().join("src"))
+            .await
+            .unwrap();
+        fs::write(&target, "fn a() {}\nfn b() {}\n").await.unwrap();
+
+        let patch = CodePatch::new(
+            "src/main.rs".to_string(),
+            vec![(0, "fn a() {}".to_string())],
+            vec![(0, "pwned".to_string())],
+            "hostile zero-line patch".to_string(),
+        );
+        let changed = patch.apply_to_file(workdir.path()).await.unwrap();
+        assert_eq!(changed, 0, "zero-line numbers must not change the file");
+        let content = fs::read_to_string(&target).await.unwrap();
+        assert!(content.contains("fn a() {}"));
+        assert!(!content.contains("pwned"));
     }
 
     #[test]
@@ -879,6 +917,33 @@ mod tests {
         assert!(executor.is_target_allowed("src/main.rs"));
         assert!(executor.is_target_allowed("src/orchestration/mod.rs"));
         assert!(!executor.is_target_allowed("config.toml"));
+    }
+
+    #[test]
+    fn test_is_target_allowed_rejects_boundary_and_traversal() {
+        let workdir = TempDir::new().unwrap();
+        let executor = SandboxExecutor::new(workdir.path().to_path_buf(), 5)
+            .with_allowed_targets(vec!["src/**/*.rs".to_string()]);
+        // Segment boundary: src2/ and src_evil/ are NOT under src/.
+        assert!(!executor.is_target_allowed("src2/foo.rs"));
+        assert!(!executor.is_target_allowed("src_evil/bar.rs"));
+        // Path traversal: `..` components must never be accepted (they would
+        // escape the whitelisted tree via workdir.join).
+        assert!(!executor.is_target_allowed("src/../lib.rs"));
+        assert!(!executor.is_target_allowed("src/../../other.rs"));
+        // Normal whitelisted paths still pass.
+        assert!(executor.is_target_allowed("src/main.rs"));
+        assert!(executor.is_target_allowed("src/orchestration/mod.rs"));
+    }
+
+    #[test]
+    fn test_is_target_allowed_exact_pattern_no_prefix_bleed() {
+        let workdir = TempDir::new().unwrap();
+        let executor = SandboxExecutor::new(workdir.path().to_path_buf(), 5)
+            .with_allowed_targets(vec!["src/lib.rs".to_string()]);
+        assert!(executor.is_target_allowed("src/lib.rs"));
+        assert!(!executor.is_target_allowed("src/library.rs"));
+        assert!(!executor.is_target_allowed("src2/lib.rs"));
     }
 
     #[test]

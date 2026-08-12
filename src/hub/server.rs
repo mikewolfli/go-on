@@ -144,7 +144,9 @@ impl HubServer {
         info!(
             "Hub ready: {} (token: {}...)",
             self.bind_addr,
-            &self.api_token[..8]
+            // Char-safe first-8 prefix: the token may come from the
+            // GOON_MEMORY_AUTH_TOKEN env (user-controlled length/content).
+            self.api_token.chars().take(8).collect::<String>()
         );
         Ok(self.bind_addr.clone())
     }
@@ -183,9 +185,9 @@ async fn handle_rpc(
         if line.is_empty() {
             break;
         }
-        // Bound header size (aligned with the MCP/ACP arms' 64 KiB limit) so
-        // a hostile client cannot grow memory unboundedly with header lines.
-        if line.len() > 64 * 1024 {
+        // Bound header size (shared constant with the MCP/ACP arms) so a
+        // hostile client cannot grow memory unboundedly with header lines.
+        if line.len() > crate::shared::http_timeouts::MAX_HTTP_HEADER_SIZE {
             return write_json(
                 &mut stream,
                 431,
@@ -206,15 +208,24 @@ async fn handle_rpc(
         }
     }
 
-    // Validate Bearer token.
-    if !auth.contains(&format!("Bearer {}", &api_token)) {
+    // Validate Bearer token. Exact match: a substring `contains` check would
+    // accept "Bearer <token>garbage" or "<junk>Bearer <token>". The scheme
+    // is case-insensitive per RFC 7235; the credential itself must match
+    // byte-for-byte.
+    let token_matches = auth
+        .strip_prefix("Bearer ")
+        .or_else(|| auth.strip_prefix("bearer "))
+        .map(|token| token.trim() == api_token)
+        .unwrap_or(false);
+    if !token_matches {
         return write_json(&mut stream, 401, json!({"error":"unauthorized"})).await;
     }
 
     // Read body.
-    // Bound the body like the ACP/MCP arms (10 MiB) so an authenticated but
-    // hostile client cannot force a large allocation via Content-Length.
-    if content_length > 10 * 1024 * 1024 {
+    // Bound the body like the ACP/MCP arms (shared MAX_BODY_SIZE) so an
+    // authenticated but hostile client cannot force a large allocation via
+    // Content-Length.
+    if content_length > crate::protocol::mcp_server::MAX_BODY_SIZE {
         return write_json(
             &mut stream,
             413,

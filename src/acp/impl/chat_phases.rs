@@ -22,6 +22,20 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Instant;
 
+// ── observe_phase constants ─────────────────────────────────────────────
+/// Timeout for the pre-fetch GET request (3s).
+const PREFETCH_GET_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+/// Timeout for reading the pre-fetch response body (2s).
+const PREFETCH_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+/// Timeout for the SPA API probe POST (10s).
+const SPA_API_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// Timeout for reading the SPA API probe response body (5s).
+const SPA_API_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Pre-fetch body truncation limit (8192 bytes).
+const PREFETCH_BODY_LIMIT: usize = 8192;
+/// SPA API probe body truncation limit (4096 bytes).
+const SPA_API_BODY_LIMIT: usize = 4096;
+
 use anyhow::Result;
 use futures_util::future::join_all;
 use opentelemetry::Context as OtelContext;
@@ -368,35 +382,46 @@ pub(crate) async fn observe_phase(
                 // Phase 1: Fetch all URLs in parallel
                 let fetch_futures: Vec<_> = url_entries
                     .iter()
-                    .filter_map(|(msg_idx, url)| {
-                        let url_lower = url.to_lowercase();
-                        if url_lower.starts_with("http://localhost")
-                            || url_lower.starts_with("http://127.0.0.1")
-                            || url_lower.starts_with("https://localhost")
-                            || url_lower.starts_with("https://127.0.0.1")
-                            || url_lower.starts_with("http://10.")
-                            || url_lower.starts_with("http://192.168.")
-                            || url_lower.starts_with("https://10.")
-                            || url_lower.starts_with("https://192.168.")
-                        {
-                            tracing::info!(
-                                "observe_phase: skipping pre-fetch for local/private URL: {}",
-                                url
-                            );
-                            return None;
-                        }
-
-                        let fetch_url = url.split('#').next().unwrap_or(url).to_string();
+                    .map(|(msg_idx, url)| {
+                        let host_owned = url::Url::parse(url)
+                            .ok()
+                            .and_then(|u| u.host_str().map(str::to_string));
                         let url_owned = url.clone();
                         let msg_idx = *msg_idx;
-                        Some(async move {
+                        async move {
+                            // Skip pre-fetch for local/private URLs. Uses the same
+                            // private-host definition as the http_request tool
+                            // (is_private_host covers loopback, private ranges,
+                            // link-local, multicast, unspecified, and IPv6); the
+                            // hostname DNS check runs on the blocking pool with a
+                            // bounded timeout (is_private_host_async) so a slow
+                            // resolver cannot stall this worker.
+                            let is_private = match &host_owned {
+                                Some(host) => crate::orchestration::tool_extended::http::
+                                    is_private_host_async(host)
+                                    .await,
+                                None => false,
+                            };
+                            if is_private {
+                                tracing::info!(
+                                    "observe_phase: skipping pre-fetch for local/private URL: {}",
+                                    url_owned
+                                );
+                                return None;
+                            }
+
+                            let fetch_url = url_owned
+                                .split('#')
+                                .next()
+                                .unwrap_or(&url_owned)
+                                .to_string();
                             tracing::info!(
                                 "observe_phase: auto-detected URL, pre-fetching: {}",
                                 url_owned
                             );
 
                             let result = match tokio::time::timeout(
-                                std::time::Duration::from_secs(3),
+                                PREFETCH_GET_TIMEOUT,
                                 crate::shared::http_client::http_client()
                                     .expect("shared HTTP client must build")
                                     .get(&fetch_url)
@@ -406,20 +431,49 @@ pub(crate) async fn observe_phase(
                             {
                                 Ok(Ok(resp)) => {
                                     let status = resp.status().to_string();
-                                    match tokio::time::timeout(
-                                        std::time::Duration::from_secs(2),
-                                        resp.text(),
-                                    )
-                                    .await
-                                    {
-                                        Ok(Ok(body)) => Some((status, body)),
-                                        _ => None,
-                                    }
+                                    // Bound the body read like http_request:
+                                    // stream at most PREFETCH_BODY_LIMIT (+one
+                                    // chunk) so a huge response is never fully
+                                    // buffered — the consumer truncates to
+                                    // PREFETCH_BODY_LIMIT anyway. Previously
+                                    // `resp.text()` buffered the whole body
+                                    // before truncating.
+                                    let body_bytes =
+                                        tokio::time::timeout(PREFETCH_BODY_TIMEOUT, async {
+                                            use futures_util::StreamExt;
+                                            let mut body =
+                                                Vec::with_capacity(PREFETCH_BODY_LIMIT.min(8192));
+                                            let mut stream = resp.bytes_stream();
+                                            while body.len() <= PREFETCH_BODY_LIMIT {
+                                                match stream.next().await {
+                                                    Some(Ok(chunk)) => {
+                                                        body.extend_from_slice(&chunk);
+                                                    }
+                                                    Some(Err(e)) => {
+                                                        tracing::debug!(
+                                                            "observe_phase: pre-fetch body read error for {}: {}",
+                                                            url_owned,
+                                                            e
+                                                        );
+                                                        return None;
+                                                    }
+                                                    None => break,
+                                                }
+                                            }
+                                            Some(body)
+                                        })
+                                        .await
+                                        .ok()
+                                        .flatten();
+                                    body_bytes.map(|bytes| {
+                                        let body = String::from_utf8_lossy(&bytes).into_owned();
+                                        (status, body)
+                                    })
                                 }
                                 _ => None,
                             };
-                            (msg_idx, url_owned, fetch_url, result)
-                        })
+                            Some((msg_idx, url_owned, fetch_url, result))
+                        }
                     })
                     .collect();
 
@@ -430,10 +484,19 @@ pub(crate) async fn observe_phase(
                 // (after the join) so this block can run concurrently with multimodal
                 // detection.
                 let mut url_inserts: Vec<(usize, Message)> = Vec::new();
-                for (msg_idx, url, fetch_url, fetch_result) in fetch_results {
+                for item in fetch_results.into_iter().flatten() {
+                    let (msg_idx, url, fetch_url, fetch_result) = item;
                     if let Some((status, body)) = fetch_result {
-                        let truncated = if body.len() > 8192 {
-                            format!("{}...\n[Response truncated at 8192 bytes]", &body[..8192])
+                        let truncated = if body.len() > PREFETCH_BODY_LIMIT {
+                            format!(
+                                "{}...\n[Response truncated at {} bytes]",
+                                crate::shared::truncate::truncate_chars(
+                                    &body,
+                                    PREFETCH_BODY_LIMIT,
+                                    ""
+                                ),
+                                PREFETCH_BODY_LIMIT
+                            )
                         } else {
                             body.clone()
                         };
@@ -509,7 +572,7 @@ pub(crate) async fn observe_phase(
                                     });
 
                                     match tokio::time::timeout(
-                                        std::time::Duration::from_secs(10),
+                                        SPA_API_PROBE_TIMEOUT,
                                         crate::shared::http_client::http_client()
                                             .expect("shared HTTP client must build")
                                             .post(&api_url)
@@ -522,16 +585,22 @@ pub(crate) async fn observe_phase(
                                         Ok(Ok(api_resp)) => {
                                             let api_status = api_resp.status();
                                             match tokio::time::timeout(
-                                                std::time::Duration::from_secs(5),
+                                                SPA_API_BODY_TIMEOUT,
                                                 api_resp.text(),
                                             )
                                             .await
                                             {
                                                 Ok(Ok(api_body_text)) => {
-                                                    let t = if api_body_text.len() > 4096 {
+                                                    let t = if api_body_text.len()
+                                                        > SPA_API_BODY_LIMIT
+                                                    {
                                                         format!(
                                                             "{}...\n[truncated]",
-                                                            &api_body_text[..4096]
+                                                            crate::shared::truncate::truncate_chars(
+                                                                &api_body_text,
+                                                                SPA_API_BODY_LIMIT,
+                                                                ""
+                                                            )
                                                         )
                                                     } else {
                                                         api_body_text.clone()
@@ -2040,6 +2109,8 @@ pub(crate) async fn reflect_phase(
                         exec_out.response_text.clone()
                     },
                     timestamp: crate::shared::timestamps::now_ts_ms().to_string(),
+                    // Neutral usefulness for auto-recorded episodic memory
+                    // (not user-rated).
                     usefulness: 0.5,
                     staleness: 0,
                     user_id: None,
@@ -2089,7 +2160,12 @@ pub(crate) async fn reflect_phase(
             use crate::intelligence::metacognitive_persistence::MetacognitivePersistence;
             let storage_dir = crate::shared::goon_paths::goon_subdir("metacognitive");
             if let Ok(persistence) = MetacognitivePersistence::new(storage_dir) {
-                let _ = persistence.save(&meta);
+                if let Err(e) = persistence.save(&meta) {
+                    tracing::debug!(
+                        target: "metacognitive_persistence",
+                        "fire-and-forget save failed: {e}"
+                    );
+                }
             }
         });
     }

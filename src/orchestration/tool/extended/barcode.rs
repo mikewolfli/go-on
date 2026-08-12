@@ -104,7 +104,7 @@ fn code128b_modules(data: &str) -> Vec<u8> {
         } else {
             0 // space for unsupported characters
         };
-        checksum += value * (i as u32 + 1);
+        checksum = checksum.wrapping_add(value.wrapping_mul(i as u32 + 1));
         let idx = (value % 32) as usize;
         modules.extend_from_slice(&TABLE[idx]);
     }
@@ -225,7 +225,11 @@ fn render_svg_bars(modules: &[u8], height: u32) -> String {
     let total_width: u32 = if modules.is_empty() {
         200
     } else {
-        modules.iter().map(|&m| m as u32 * bar_width).sum()
+        // Wrapping sum: modules come from barcode data (bounded in practice),
+        // but a hostile >~119MB payload must not overflow in debug builds.
+        modules.iter().fold(0u32, |acc, &m| {
+            acc.wrapping_add((m as u32).wrapping_mul(bar_width))
+        })
     };
 
     let mut svg = String::with_capacity(512 + modules.len() * 20);

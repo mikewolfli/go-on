@@ -246,11 +246,16 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
 
         "git" => McpTool {
             name: name.to_string(),
-            description: Some("Execute git commands (status, diff, log, add, commit, etc.). Returns command output.".to_string()),
+            // Read-only whitelist: keep in sync with ALLOWED_GIT_SUBCOMMANDS
+            // in orchestration/tool/extended/git.rs.
+            description: Some(
+                "Execute safe, read-only git commands (status, diff, log, show, stash). Returns command output."
+                    .to_string(),
+            ),
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "subcommand": {"type": "string", "description": "Git subcommand (e.g. 'status', 'diff', 'log', 'add', 'commit')"},
+                    "subcommand": {"type": "string", "description": "Git subcommand (e.g. 'status', 'diff', 'log', 'show', 'stash')"},
                     "args": {"type": "array", "items": {"type": "string"}, "description": "Additional arguments for the git command"},
                     "directory": {"type": "string", "description": "Git repository directory (default: current)"}
                 },
@@ -314,8 +319,7 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "directory": {"type": "string", "description": "Project directory containing Cargo.toml"},
-                    "features": {"type": "string", "description": "Optional feature flags (e.g. '--features local')"}
+                    "directory": {"type": "string", "description": "Project directory containing Cargo.toml"}
                 },
                 "required": []
             })),
@@ -323,27 +327,29 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
 
         "compress" => McpTool {
             name: name.to_string(),
-            description: Some("Compress a file or directory into a compressed archive (zip/tar.gz).".to_string()),
+            description: Some(
+                "Compress a file using gzip compression into an output .gz file.".to_string(),
+            ),
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "source": {"type": "string", "description": "Source file or directory path"},
-                    "destination": {"type": "string", "description": "Output archive path"},
-                    "format": {"type": "string", "enum": ["zip", "tar.gz"], "description": "Archive format", "default": "zip"}
+                    "path": {"type": "string", "description": "Source file path"},
+                    "output_path": {"type": "string", "description": "Output .gz file path"},
+                    "level": {"type": "integer", "description": "gzip compression level 1-9 (default 6)"}
                 },
-                "required": ["source", "destination"]
+                "required": ["path", "output_path"]
             })),
         },
         "decompress" => McpTool {
             name: name.to_string(),
-            description: Some("Decompress an archive file (zip/tar.gz/tar.bz2).".to_string()),
+            description: Some("Decompress a gzip file into an output file.".to_string()),
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "source": {"type": "string", "description": "Archive file path"},
-                    "destination": {"type": "string", "description": "Output directory (default: current)"}
+                    "path": {"type": "string", "description": "Compressed .gz file path"},
+                    "output_path": {"type": "string", "description": "Output file path"}
                 },
-                "required": ["source"]
+                "required": ["path", "output_path"]
             })),
         },
         "date_time" => McpTool {
@@ -525,14 +531,14 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
         },
         "archive_extract" => McpTool {
             name: name.to_string(),
-            description: Some("Extract an archive file (zip, tar, tar.gz) to a destination directory.".to_string()),
+            description: Some("Extract an archive file (zip, tar, tar.gz).".to_string()),
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Path to the archive file"},
-                    "destination": {"type": "string", "description": "Destination directory (default: current directory)"}
+                    "output_dir": {"type": "string", "description": "Destination directory"}
                 },
-                "required": ["path"]
+                "required": ["path", "output_dir"]
             })),
         },
         "diagnostics" => McpTool {
@@ -1928,9 +1934,9 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
         }
         "compress" | "decompress" => {
             tool_input
-                .get("source")
+                .get("path")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("{} requires arguments.source", tool_name))?;
+                .ok_or_else(|| anyhow::anyhow!("{} requires arguments.path", tool_name))?;
         }
         "dns_lookup" => {
             tool_input

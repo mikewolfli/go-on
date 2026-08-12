@@ -501,8 +501,8 @@ fn collect_config_warnings_detailed(config_path: &Path, config: &AppConfig) -> V
         if runtime.otel_enabled && runtime.otel_endpoint.is_none() {
             warnings.push(ConfigWarning {
                 code: "OTEL_ENDPOINT_DEFAULTED".to_string(),
-                severity: ConfigWarningSeverity::Info,
-                message: "runtime.otel_enabled=true without otel_endpoint; default collector endpoint http://localhost:4317 will be used".to_string(),
+                severity: ConfigWarningSeverity::Warn,
+                message: "runtime.otel_enabled=true but otel_endpoint is not set; OTLP traces will NOT be exported unless OTEL_EXPORTER_OTLP_ENDPOINT is set".to_string(),
             });
         }
 

@@ -20,7 +20,16 @@
 //! See docs/log/log-20260811-6.md (debt #4 verdict: keep).
 
 use std::sync::OnceLock;
-use std::time::Duration;
+
+/// Canonical OpenAI-compatible API base URL. Single source shared by the
+/// provider spec, embedding provider, and audio transcriber — the previous
+/// literal was repeated in four places and could drift.
+pub const OPENAI_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+
+/// Canonical HTTP User-Agent, versioned from the crate version (single
+/// source — the previous `"go-on/1.0"` literal was repeated in 7 places and
+/// drifted from the actual package version).
+pub const USER_AGENT: &str = concat!("go-on/", env!("CARGO_PKG_VERSION"));
 
 /// Inner storage that separates initialization success from the public API.
 ///
@@ -41,8 +50,9 @@ static CLIENT: OnceLock<Result<reqwest::Client, reqwest::Error>> = OnceLock::new
 pub fn http_client() -> Result<&'static reqwest::Client, &'static reqwest::Error> {
     let result = CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .user_agent("go-on/1.0")
+            // Global default request timeout (shared 30s constant).
+            .timeout(crate::shared::http_timeouts::HTTP_BODY_READ_TIMEOUT)
+            .user_agent(USER_AGENT)
             .build()
     });
     result.as_ref()
@@ -67,7 +77,7 @@ pub fn blocking_http_client() -> Result<&'static reqwest::blocking::Client, &'st
 {
     let result = BLOCKING_CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
-            .user_agent("go-on/1.0")
+            .user_agent(USER_AGENT)
             .build()
     });
     result.as_ref()

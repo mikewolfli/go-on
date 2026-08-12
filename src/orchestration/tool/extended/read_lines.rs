@@ -74,24 +74,66 @@ impl Tool for ReadFileLinesTool {
             "tool: reading file lines"
         );
 
-        let content = std::fs::read_to_string(&validated).context("failed to read file")?;
+        // Stream the file line-by-line instead of buffering the whole file:
+        // a 10GB file read for lines 1-50 must not allocate 10GB. Each line
+        // is bounded (oversized lines are reported and skipped); the scan
+        // stops after `end_line`.
+        use std::io::{BufRead, Read};
+        const MAX_LINE_BYTES: usize = 1024 * 1024; // 1 MiB per line
+        let file = std::fs::File::open(&validated).context("failed to read file")?;
+        let mut reader = std::io::BufReader::new(file);
+        let mut total_lines = 0usize;
+        let mut lines: Vec<String> = Vec::new();
+        let mut line_buf: Vec<u8> = Vec::new();
+        loop {
+            line_buf.clear();
+            let n = (&mut reader)
+                .take(MAX_LINE_BYTES as u64 + 1)
+                .read_until(b'\n', &mut line_buf)
+                .context("failed to read file")?;
+            if n == 0 {
+                break; // EOF
+            }
+            total_lines += 1;
+            if total_lines < start_line {
+                continue;
+            }
+            if total_lines > end_line {
+                break; // scanned past the requested window
+            }
+            if line_buf.len() > MAX_LINE_BYTES {
+                // Oversized line: drain the remainder to stay aligned, then
+                // report it without buffering the whole line.
+                let mut drain = [0u8; 1024];
+                while line_buf.last() != Some(&b'\n') {
+                    let r = reader.read(&mut drain).unwrap_or(0);
+                    if r == 0 {
+                        break;
+                    }
+                    if drain[..r].contains(&b'\n') {
+                        break;
+                    }
+                }
+                lines.push(format!("[line too long — > {MAX_LINE_BYTES} bytes]"));
+                continue;
+            }
+            while matches!(line_buf.last(), Some(b'\n') | Some(b'\r')) {
+                line_buf.pop();
+            }
+            lines.push(String::from_utf8_lossy(&line_buf).into_owned());
+        }
 
-        let total_lines = content.lines().count();
-
-        // Clamp end_line to the total number of lines
-        let actual_end = end_line.min(total_lines);
-        let actual_start = start_line.min(total_lines.max(1));
-
-        let lines: Vec<&str> = content
-            .lines()
-            .skip(actual_start - 1)
-            .take(actual_end - actual_start + 1)
-            .collect();
-
-        let truncated = actual_end < end_line || actual_end < total_lines && actual_end == end_line;
+        let truncated = total_lines > end_line;
+        let reported_total = if truncated {
+            total_lines - 1
+        } else {
+            total_lines
+        };
+        let actual_start = start_line.min(reported_total.max(1));
+        let actual_end = end_line.min(reported_total);
 
         debug!(
-            total_lines = %total_lines,
+            total_lines = %reported_total,
             returned_lines = %lines.len(),
             truncated = %truncated,
             "tool: read_file_lines complete"
@@ -103,7 +145,7 @@ impl Tool for ReadFileLinesTool {
                 "lines": lines,
                 "start_line": actual_start,
                 "end_line": actual_end,
-                "total_lines": total_lines,
+                "total_lines": reported_total,
                 "returned_count": lines.len(),
                 "truncated": truncated,
                 "path": validated.to_string_lossy(),
@@ -115,7 +157,7 @@ impl Tool for ReadFileLinesTool {
                 actual_start,
                 actual_end,
                 validated.display(),
-                total_lines,
+                reported_total,
             )),
             pua_report: Some(tool_execution_report(
                 "read_file_lines",
@@ -281,5 +323,23 @@ mod tests {
             result.is_err(),
             "read_file_lines should fail when start_line > end_line"
         );
+    }
+
+    #[test]
+    fn empty_file_does_not_panic() {
+        // Regression: an empty file made `actual_end - actual_start + 1`
+        // underflow (0usize - 1usize) and panic in debug builds.
+        let tmp = TempDir::new().expect("temp dir");
+        let path = tmp.path().join("empty.txt");
+        std::fs::write(&path, "").expect("write empty file");
+        let input = tool_input(serde_json::json!({
+            "path": path.to_str().unwrap(),
+        }));
+        let tool = ReadFileLinesTool;
+        let result = tool.run(&input).expect("empty file must not panic");
+        assert!(result.success);
+        let payload = result.result.expect("result payload");
+        let lines = payload["lines"].as_array().expect("lines array");
+        assert!(lines.is_empty());
     }
 }

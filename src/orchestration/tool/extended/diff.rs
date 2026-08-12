@@ -83,7 +83,7 @@ impl Tool for DiffTool {
                     std::fs::read_to_string(&path_a).context("failed to read file_a")?;
                 let content_b =
                     std::fs::read_to_string(&path_b).context("failed to read file_b")?;
-                (builtin_diff(&content_a, &content_b, context_lines), false)
+                (builtin_diff(&content_a, &content_b, context_lines)?, false)
             }
         };
 
@@ -144,15 +144,31 @@ fn try_system_diff(
     }
 }
 
+/// Line-count guard for the built-in LCS diff.
+///
+/// The DP table is O(m×n) with 8 bytes per cell, so diffing two large files
+/// would allocate quadratically and OOM (50k lines each → ~20 GB). System
+/// `diff` has no such issue; this only guards the fallback path.
+const MAX_BUILTIN_DIFF_LINES: usize = 5_000;
+
 /// Built-in LCS-based line diff when system `diff` is unavailable.
 ///
 /// Produces unified-diff-like output prefixed with `---`/`+++` headers.
-fn builtin_diff(content_a: &str, content_b: &str, context: usize) -> String {
+fn builtin_diff(content_a: &str, content_b: &str, context: usize) -> Result<String> {
     let lines_a: Vec<&str> = content_a.lines().collect();
     let lines_b: Vec<&str> = content_b.lines().collect();
 
     if lines_a == lines_b {
-        return String::new();
+        return Ok(String::new());
+    }
+
+    if lines_a.len() > MAX_BUILTIN_DIFF_LINES || lines_b.len() > MAX_BUILTIN_DIFF_LINES {
+        anyhow::bail!(
+            "builtin diff limit exceeded: {} vs {} lines (max {} per file). Install the system `diff` command for large files.",
+            lines_a.len(),
+            lines_b.len(),
+            MAX_BUILTIN_DIFF_LINES
+        );
     }
 
     // Compute LCS table
@@ -233,7 +249,7 @@ fn builtin_diff(content_a: &str, content_b: &str, context: usize) -> String {
     }
 
     if hunks.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
 
     // Build unified diff output
@@ -353,7 +369,7 @@ fn builtin_diff(content_a: &str, content_b: &str, context: usize) -> String {
     result.push_str(&header_b);
     result.push('\n');
     result.push_str(&output);
-    result
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -436,7 +452,7 @@ mod tests {
         // Test the built-in LCS diff directly
         let a = "a\nb\nc\nd\ne\n";
         let b = "a\nb\nx\nd\ne\n";
-        let result = builtin_diff(a, b, 1);
+        let result = builtin_diff(a, b, 1).unwrap();
         assert!(!result.is_empty(), "builtin diff should find changes");
         assert!(
             result.contains("-c") || result.contains("+x"),

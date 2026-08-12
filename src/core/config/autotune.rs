@@ -36,40 +36,40 @@ pub struct AutoTuneConfig {
     pub summary_trigger_max: usize,
 }
 
-fn default_autotune_evaluate_interval() -> usize {
+pub(crate) fn default_autotune_evaluate_interval() -> usize {
     20
 }
-fn default_autotune_min_query_chars_step() -> usize {
+pub(crate) fn default_autotune_min_query_chars_step() -> usize {
     20
 }
-fn default_autotune_min_query_chars_min() -> usize {
+pub(crate) fn default_autotune_min_query_chars_min() -> usize {
     40
 }
-fn default_autotune_min_query_chars_max() -> usize {
+pub(crate) fn default_autotune_min_query_chars_max() -> usize {
     300
 }
-fn default_autotune_max_top_k() -> usize {
+pub(crate) fn default_autotune_max_top_k() -> usize {
     4
 }
-fn default_autotune_low_precision() -> f32 {
+pub(crate) fn default_autotune_low_precision() -> f32 {
     0.35
 }
-fn default_autotune_high_precision() -> f32 {
+pub(crate) fn default_autotune_high_precision() -> f32 {
     0.75
 }
-fn default_autotune_state_path() -> String {
+pub(crate) fn default_autotune_state_path() -> String {
     "sqlite3/acp_autotune_state.json".to_string()
 }
-fn default_autotune_cooldown_windows() -> usize {
+pub(crate) fn default_autotune_cooldown_windows() -> usize {
     2
 }
-fn default_autotune_min_vector_searches() -> usize {
+pub(crate) fn default_autotune_min_vector_searches() -> usize {
     5
 }
-fn default_autotune_summary_trigger_min() -> usize {
+pub(crate) fn default_autotune_summary_trigger_min() -> usize {
     3
 }
-fn default_autotune_summary_trigger_max() -> usize {
+pub(crate) fn default_autotune_summary_trigger_max() -> usize {
     20
 }
 

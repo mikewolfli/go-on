@@ -104,13 +104,6 @@ pub(super) fn reproducible_build_summary(config_path: Option<&str>) -> Value {
         ),
         build_repro_file_info(
             &base_dir,
-            &base_dir.join("GUI").join("package-lock.json"),
-            "gui_package_lock",
-            "dependency_lock",
-            true,
-        ),
-        build_repro_file_info(
-            &base_dir,
             &base_dir.join("vscode-addon").join("package-lock.json"),
             "addon_package_lock",
             "dependency_lock",
@@ -126,9 +119,13 @@ pub(super) fn reproducible_build_summary(config_path: Option<&str>) -> Value {
             "manifest",
             true,
         ),
+        // The GUI is a Rust crate (gui/Cargo.toml) that shares the workspace
+        // Cargo.lock above — it has no package.json/package-lock.json, so the
+        // previous GUI/ (uppercase) paths were never found and the report was
+        // permanently "reproducible_incomplete".
         build_repro_file_info(
             &base_dir,
-            &base_dir.join("GUI").join("package.json"),
+            &base_dir.join("gui").join("Cargo.toml"),
             "gui_manifest",
             "manifest",
             true,
@@ -159,8 +156,8 @@ pub(super) fn reproducible_build_summary(config_path: Option<&str>) -> Value {
         ),
         build_repro_file_info(
             &base_dir,
-            &base_dir.join("GUI").join("dist").join("index.html"),
-            "gui_dist_index",
+            &base_dir.join("gui").join("src").join("main.rs"),
+            "gui_source",
             "artifact",
             false,
         ),

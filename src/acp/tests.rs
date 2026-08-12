@@ -96,7 +96,6 @@ mod test_suite {
             },
             compliance: None,
             startup_context: None,
-            reputation: None,
             protocol: None,
         };
 

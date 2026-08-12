@@ -525,6 +525,7 @@ pub(crate) async fn handle_workflow_execute(
         && params
             .get("consultation_confidence_threshold")
             .and_then(Value::as_f64)
+            // Missing threshold → default to neutral 0.5 (comparison below).
             .unwrap_or(0.5)
             > 0.9
     {

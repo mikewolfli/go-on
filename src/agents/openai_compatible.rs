@@ -73,15 +73,7 @@ impl OpenAiCompatibleAgent {
     }
 
     fn chat_endpoint(&self) -> String {
-        format!(
-            "{}{}",
-            self.base_url.trim_end_matches('/'),
-            if self.chat_path.starts_with('/') {
-                self.chat_path.clone()
-            } else {
-                format!("/{}", self.chat_path)
-            }
-        )
+        crate::shared::url_join::join_url(&self.base_url, &self.chat_path)
     }
 
     fn build_payload(

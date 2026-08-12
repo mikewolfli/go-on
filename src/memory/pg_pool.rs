@@ -24,6 +24,11 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 
 use anyhow::Result;
 
+/// Default PostgreSQL pool size (write/read pools). Single definition shared
+/// by the response cache and vector store backends — the two previously
+/// re-typed the literal `8` in each `new_with_replica`.
+pub(crate) const DEFAULT_PG_POOL_SIZE: usize = 8;
+
 /// A [`Manager`] that creates and recycles `postgres::Client` connections.
 ///
 /// deadpool's `Manager` trait uses `impl Future` return types, so we

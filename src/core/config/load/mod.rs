@@ -842,7 +842,11 @@ mod tests {
         assert!(codes
             .iter()
             .any(|code| code == "PRODUCTION_STRICT_RECOMMENDED"));
-        assert_eq!(report.warn_count, 3);
+        // 4 warnings: MEMORY_LAYERS_DISABLED + RUNTIME_OBSERVABILITY_OVERHEAD_RISK
+        // + PRODUCTION_STRICT_RECOMMENDED + OTEL_ENDPOINT_DEFAULTED (the OTEL
+        // warning is a real misconfiguration — tracing enabled but no endpoint —
+        // so it is graded Warn and counted here).
+        assert_eq!(report.warn_count, 4);
         // warn_count >= 3 maps to the real multi-users-server profile.
         assert_eq!(report.profile_recommendation, "multi-users-server");
         assert!(report

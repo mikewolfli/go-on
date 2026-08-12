@@ -165,8 +165,11 @@ impl DateTimeTool {
         use std::num::ParseIntError;
 
         fn parse_two_digit(s: &str) -> Result<u64, ParseIntError> {
-            if s.len() >= 2 {
-                s[..2].parse()
+            // Char-safe: the field may carry non-ASCII digits (CJK/full-width),
+            // so a naive `&s[..2]` byte slice could land mid-code-point.
+            let head: String = s.chars().take(2).collect();
+            if head.len() >= 2 || head.len() == s.len() {
+                head.parse()
             } else {
                 s.parse()
             }
@@ -200,6 +203,18 @@ impl DateTimeTool {
         let day: u64 =
             parse_two_digit(date_fields[2]).map_err(|_| anyhow::anyhow!("failed to parse day"))?;
 
+        // Validate ranges before any arithmetic: a hostile date like
+        // "2024-01-00" or "9999999999-01-01" must not underflow `day - 1`,
+        // hang the year loop, or overflow `total_days * 86400`.
+        if !(1970..=2100).contains(&year) {
+            anyhow::bail!("year out of supported range 1970-2100: {year}");
+        }
+        if !(1..=12).contains(&month) {
+            anyhow::bail!("month out of range 1-12: {month}");
+        }
+        if day == 0 || day > days_in_month(year, month) {
+            anyhow::bail!("day out of range for {year}-{month:02}: {day}");
+        }
         let hour: u64 = if !time_fields.is_empty() {
             parse_two_digit(time_fields[0]).unwrap_or(0)
         } else {
@@ -215,6 +230,9 @@ impl DateTimeTool {
         } else {
             0
         };
+        if hour > 23 || minute > 59 || second > 59 {
+            anyhow::bail!("time out of range: {hour}:{minute}:{second}");
+        }
 
         // Approximate Unix timestamp using a basic days-since-epoch calculation.
         // This handles dates from 1970 to 2100 reasonably well.
@@ -294,7 +312,12 @@ impl DateTimeTool {
 
 /// Format a Unix timestamp as ISO 8601 (e.g. "2024-01-15T10:30:00Z").
 /// Uses only stdlib date/time calculations.
+///
+/// Input is clamped to a sane range (≈ 1970-01-01 .. 2239-01-01): a hostile
+/// u64::MAX timestamp would otherwise loop ~5.8e11 years (minute-scale hang).
 fn iso_from_unix(unix_secs: u64) -> String {
+    const MAX_UNIX_SECS: u64 = 8_500_000_000; // ≈ 2239-01-01
+    let unix_secs = unix_secs.min(MAX_UNIX_SECS);
     let days_since_epoch = unix_secs / 86400;
     let remaining_secs = unix_secs % 86400;
 

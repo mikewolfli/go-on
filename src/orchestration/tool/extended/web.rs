@@ -40,16 +40,17 @@ impl Tool for WebScrapeTool {
         let client = crate::shared::http_client::blocking_http_client()
             .context("failed to build HTTP client")?;
 
-        let response = client
+        let mut response = client
             .get(url)
             .timeout(Duration::from_millis(timeout_ms))
             .send()
             .with_context(|| format!("failed to fetch {url}"))?;
 
         let status = response.status().as_u16();
-        let html = response
-            .text()
-            .with_context(|| format!("failed to read response body from {url}"))?;
+        // Body size cap (same policy as http_request) enforced during the
+        // read — a hostile page must not be fully buffered.
+        let body_bytes = super::http::read_blocking_body_capped(&mut response, url)?;
+        let html = String::from_utf8_lossy(&body_bytes).into_owned();
 
         let document = scraper::Html::parse_document(&html);
 

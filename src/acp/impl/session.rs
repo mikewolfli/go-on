@@ -94,6 +94,12 @@ impl Default for AuthConfig {
     }
 }
 
+/// Maximum token TTL when deriving [`AuthConfig`] from runtime config: bounds
+/// pathological values (e.g. `u64::MAX`), which would otherwise wrap negative
+/// when scaled by 1000 and make every session expire instantly (silent
+/// misconfiguration). 1 year is far beyond any real deployment need.
+pub const MAX_TOKEN_TTL_SECS: u64 = 365 * 24 * 60 * 60;
+
 impl From<&RuntimeConfig> for AuthConfig {
     fn from(cfg: &RuntimeConfig) -> Self {
         // Resolve the token secret: env var override > config file > default.
@@ -101,10 +107,14 @@ impl From<&RuntimeConfig> for AuthConfig {
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| cfg.user_auth_token_secret.clone());
 
+        // `u64::MAX as i64 * 1000` wraps to a negative offset, making every
+        // session instantly expire; clamp to [1s, 1y].
+        let ttl_seconds = cfg.user_auth_token_ttl_seconds.clamp(1, MAX_TOKEN_TTL_SECS);
+
         Self {
             user_auth_enabled: cfg.user_auth_enabled,
             user_auth_token_secret: secret,
-            user_auth_token_ttl_seconds: cfg.user_auth_token_ttl_seconds,
+            user_auth_token_ttl_seconds: ttl_seconds,
             // Deliberately constant `true`: production has no token-issuing
             // endpoint (`issue_token` is test-only), so auto-provision is
             // what lets externally pre-signed tokens (per the documented
@@ -182,13 +192,18 @@ impl SessionManager {
     /// to user permissions (not admin+wildcard) for safer local deploys.
     pub fn authenticate(&self, token: &str) -> TokenIntrospectResult {
         if !self.auth_cfg.user_auth_enabled {
+            // TTL is derived from the configured value (same source as
+            // `validate_token`'s auto-provisioned sessions) instead of a
+            // hard-coded 24h, so a custom `user_auth_token_ttl_seconds` is
+            // honored even when auth is disabled.
+            let ttl_ms = self.auth_cfg.user_auth_token_ttl_seconds as i64 * 1000;
             let user_session = UserSession {
                 user_id: "local-user".into(),
                 roles: vec!["user".into()],
                 tenant_id: None,
                 permissions: vec!["read".into(), "write".into(), "execute".into()],
                 issued_at: now_ms(),
-                expires_at: now_ms() + 86_400_000,
+                expires_at: now_ms() + ttl_ms,
                 token_type: "bearer".into(),
             };
             return TokenIntrospectResult {

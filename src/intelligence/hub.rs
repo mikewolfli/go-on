@@ -146,10 +146,18 @@ pub fn init_intelligence_hub(
             "intel_hub: DEEPSEEK_API_KEY not set — DeepSeekVoter not registered (delphi debates use local voters only)"
         );
     } else {
+        // Base URL from the provider spec (single source — same default the
+        // agent registry uses), so spec changes propagate here too.
+        let deepseek_url = crate::core::providers::provider_spec_by_name("deepseek")
+            .and_then(|spec| spec.url.clone())
+            .unwrap_or_else(|| crate::core::providers::DEFAULT_DEEPSEEK_BASE.to_string());
+        let deepseek_model = crate::core::providers::provider_spec_by_name("deepseek")
+            .and_then(|spec| spec.model.clone())
+            .unwrap_or_else(|| crate::core::providers::DEFAULT_DEEPSEEK_MODEL.to_string());
         voters.push(Box::new(DeepSeekVoter::new(
             "deepseek",
-            "https://api.deepseek.com",
-            "deepseek-v4-flash",
+            &deepseek_url,
+            &deepseek_model,
             deepseek_api_key,
         )));
     }
@@ -469,7 +477,9 @@ pub async fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (
                 tracing::warn!("unified_knowledge_bus lock poisoned – recovered");
                 poisoned.into_inner()
             });
-            let agent_reputation = ukb.get_reputation(agent).unwrap_or(0.5);
+            let agent_reputation = ukb
+                .get_reputation(agent)
+                .unwrap_or(crate::acp::helpers::agent_selector::DEFAULT_REPUTATION_SCORE);
             drop(ukb);
             reputations.insert("capability-bus".to_string(), agent_reputation);
         }
@@ -496,11 +506,13 @@ pub async fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (
         // Delphi approved — continue to standard rationalization checks
     }
 
-    // Task complexity: longer tasks with more structure are more complex
+    // Task complexity: longer tasks with more structure are more complex.
+    // 200 words ≈ a fully-specified task; complexity saturates at that point.
     let word_count = task.split_whitespace().count().max(1) as f64;
     let complexity_score = (word_count / 200.0).min(1.0);
 
     // Combine factors: higher risk + higher complexity = higher threshold
+    // (risk carries 0.4, complexity 0.3, baseline 0.3).
     let dynamic_threshold = 0.3 + risk_score * 0.4 + complexity_score * 0.3;
     let adjusted_confidence = confidence * (1.0 - risk_score * 0.3);
 

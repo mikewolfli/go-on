@@ -447,7 +447,7 @@ impl Agent for AnthropicAgent {
         let api_key = resolve_secret(&self.api_key_env, "claude.api_key_env")?;
 
         let payload = self.to_anthropic_payload(messages, principles, options, None);
-        let endpoint = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
+        let endpoint = crate::shared::url_join::join_url(&self.base_url, "v1/messages");
 
         let response = self
             .client

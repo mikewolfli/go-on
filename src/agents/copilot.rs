@@ -24,10 +24,42 @@ use crate::agents::{apply_openai_common_options, check_api_response, option_stri
 use crate::i18n::runtime::tf;
 use crate::orchestration::autonomy_runtime::build_model_used_token;
 
-const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
-const COPILOT_MODELS_URL: &str = "https://api.githubcopilot.com/models";
+pub(crate) const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
+pub(crate) const COPILOT_MODELS_URL: &str = "https://api.githubcopilot.com/models";
 const COPILOT_COMPLETIONS_URL: &str = "https://api.githubcopilot.com/chat/completions";
-const COPILOT_MODELS_CACHE_TTL_SECS: u64 = 300;
+pub(crate) const COPILOT_MODELS_CACHE_TTL_SECS: u64 = 300;
+
+/// Default GitHub Copilot OAuth device-flow client id (public, non-secret;
+/// see BLUE65-K3). Overridable via `GO_ON_COPILOT_CLIENT_ID` — the same env
+/// override the vscode-addon uses.
+pub(crate) const DEFAULT_COPILOT_CLIENT_ID: &str = "01ab8ac9400c4e429b23";
+
+/// GitHub OAuth device-code initiation endpoint.
+pub(crate) const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
+/// GitHub device verification page shown to the user.
+pub(crate) const GITHUB_DEVICE_VERIFY_URL: &str = "https://github.com/login/device";
+/// GitHub OAuth token-exchange endpoint (device flow poll).
+pub(crate) const GITHUB_OAUTH_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
+
+/// Resolve the Copilot OAuth client id: `GO_ON_COPILOT_CLIENT_ID` env wins,
+/// otherwise the public default.
+pub(crate) fn copilot_client_id() -> &'static str {
+    // SAFETY: the env value, when present, is leaked for a process-lifetime
+    // static — acceptable for a startup-read configuration value.
+    match std::env::var("GO_ON_COPILOT_CLIENT_ID") {
+        Ok(v) if !v.trim().is_empty() => Box::leak(v.trim().to_string().into_boxed_str()),
+        _ => DEFAULT_COPILOT_CLIENT_ID,
+    }
+}
+
+/// Editor-identifying headers GitHub's Copilot backend expects. Single
+/// definition shared by the Copilot agent and the runtime pack's model
+/// discovery so the identity cannot drift between the two surfaces.
+pub(crate) const COPILOT_EDITOR_HEADERS: [(&str, &str); 3] = [
+    ("Editor-Version", "vscode/1.90.0"),
+    ("Editor-Plugin-Version", "copilot-chat/0.17.0"),
+    ("Copilot-Integration-Id", "copilot-chat"),
+];
 
 pub(crate) const COPILOT_FALLBACK_MODEL_PRIORITY: &[&str] = &[
     "claude-opus-4",
@@ -252,13 +284,17 @@ impl CopilotAgent {
             .get(COPILOT_MODELS_URL)
             .header("Authorization", format!("Bearer {api_token}"))
             .header("Accept", "application/json")
-            .header("User-Agent", "go-on/1.0")
-            .header("Editor-Version", "vscode/1.90.0")
-            .header("Editor-Plugin-Version", "copilot-chat/0.17.0")
-            .header("Copilot-Integration-Id", "copilot-chat")
-            .send()
-            .await
-            .with_context(|| "copilot models endpoint request failed".to_string())?;
+            .header("User-Agent", crate::shared::http_client::USER_AGENT);
+        let response = {
+            let mut req = response;
+            for (name, value) in COPILOT_EDITOR_HEADERS {
+                req = req.header(name, value);
+            }
+            req
+        }
+        .send()
+        .await
+        .with_context(|| "copilot models endpoint request failed".to_string())?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -319,7 +355,7 @@ impl CopilotAgent {
             .get(COPILOT_TOKEN_URL)
             .header("Authorization", format!("token {}", github_token))
             .header("Accept", "application/json")
-            .header("User-Agent", "go-on/1.0")
+            .header("User-Agent", crate::shared::http_client::USER_AGENT)
             .send()
             .await
             .with_context(|| tf("error.copilot_token_endpoint_failed", &[]))?;
@@ -400,19 +436,18 @@ impl Agent for CopilotAgent {
         let api_token = self.copilot_token().await?;
         let payload = self.build_payload(merged, options);
 
-        let response = self
+        let mut request = self
             .client
             .post(COPILOT_COMPLETIONS_URL)
             .header("Authorization", format!("Bearer {api_token}"))
             .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            // These headers identify the editor to GitHub's backend.
-            .header("Editor-Version", "vscode/1.90.0")
-            .header("Editor-Plugin-Version", "copilot-chat/0.17.0")
-            .header("Copilot-Integration-Id", "copilot-chat")
-            .json(&payload)
-            .send()
-            .await?;
+            .header("Accept", "application/json");
+        // These headers identify the editor to GitHub's backend (shared
+        // constant — same identity as the models/token discovery calls).
+        for (name, value) in COPILOT_EDITOR_HEADERS {
+            request = request.header(name, value);
+        }
+        let response = request.json(&payload).send().await?;
 
         let response = check_api_response(response, "copilot").await?;
 
@@ -422,6 +457,9 @@ impl Agent for CopilotAgent {
         let actual_model = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
         let capture = actual_model.clone();
         let stream_sender = sender.clone();
+        // Per-stream tool-call accumulator (dropped on every stream end path;
+        // see ToolCallAccumulator in agents/mod.rs).
+        let mut tool_acc = crate::agents::ToolCallAccumulator::default();
 
         crate::agents::stream_sse_events(response, move |data| {
             use crate::agents::SseEventAction;
@@ -443,7 +481,7 @@ impl Agent for CopilotAgent {
 
             // Reuse the shared [DONE]/token-extraction handling instead of
             // reimplementing it inline.
-            if crate::agents::sse_event_to_sender(data, &stream_sender) {
+            if crate::agents::sse_event_to_sender(data, &stream_sender, &mut tool_acc) {
                 Ok(SseEventAction::Stop)
             } else {
                 Ok(SseEventAction::Continue)
@@ -550,7 +588,8 @@ impl Agent for CopilotAgent {
                                 // still try next model after exhausting retries
                                 if attempt < 2 {
                                     last_error = Some(err);
-                                    sleep(Duration::from_secs(retry_backoff_secs(attempt as u32))).await;
+                                    sleep(Duration::from_secs(retry_backoff_secs(attempt as u32)))
+                                        .await;
                                     continue;
                                 }
                                 continue 'models;
@@ -558,7 +597,8 @@ impl Agent for CopilotAgent {
                             // Non-auto: retry with backoff
                             if attempt < 2 {
                                 last_error = Some(err);
-                                sleep(Duration::from_secs(retry_backoff_secs(attempt as u32))).await;
+                                sleep(Duration::from_secs(retry_backoff_secs(attempt as u32)))
+                                    .await;
                             } else {
                                 last_error = Some(err);
                             }

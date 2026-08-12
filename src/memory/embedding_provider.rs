@@ -26,6 +26,9 @@ pub trait EmbeddingProvider: Send + Sync {
 const LOCAL_EMBED_MAX_TOKEN_COUNT: usize = 1024;
 const LOCAL_MINHASH_NUM_HASHES: usize = 4;
 
+/// Default DashScope (Alibaba Cloud) embedding endpoint base.
+pub(crate) const DEFAULT_DASHSCOPE_BASE: &str = "https://dashscope.aliyuncs.com";
+
 fn local_tokenize(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_alphanumeric())
         .filter_map(|token| {
@@ -129,7 +132,7 @@ pub struct OpenAiEmbeddingConfig {
 impl Default for OpenAiEmbeddingConfig {
     fn default() -> Self {
         Self {
-            api_base: "https://api.openai.com/v1".to_string(),
+            api_base: crate::shared::http_client::OPENAI_DEFAULT_BASE_URL.to_string(),
             model: "text-embedding-3-small".to_string(),
             api_key: String::new(),
             dimensions: 1536,
@@ -161,7 +164,7 @@ impl EmbeddingProvider for OpenAiEmbeddingProvider {
             return local_hash_embed(text, self.config.dimensions);
         }
 
-        let url = format!("{}/embeddings", self.config.api_base.trim_end_matches('/'));
+        let url = crate::shared::url_join::join_url(&self.config.api_base, "embeddings");
         let body = serde_json::json!({
             "model": self.config.model,
             "input": text,
@@ -174,7 +177,7 @@ impl EmbeddingProvider for OpenAiEmbeddingProvider {
                     .post(&url)
                     .header("Authorization", format!("Bearer {}", self.config.api_key))
                     .json(&body)
-                    .timeout(std::time::Duration::from_secs(30))
+                    .timeout(crate::shared::http_timeouts::HTTP_BODY_READ_TIMEOUT)
                     .send()
                     .map_err(|e| e.to_string())
             }) {
@@ -281,7 +284,7 @@ impl OllamaEmbeddingProvider {
 
 impl EmbeddingProvider for OllamaEmbeddingProvider {
     fn embed(&self, text: &str) -> Vec<f32> {
-        let url = format!("{}/api/embed", self.config.base_url.trim_end_matches('/'));
+        let url = crate::shared::url_join::join_url(&self.config.base_url, "api/embed");
         let body = serde_json::json!({
             "model": self.config.model,
             "input": text,
@@ -366,6 +369,9 @@ pub struct Qwen3EmbeddingConfig {
     /// If true (default), return a local hash embedding on failure.
     /// If false, return a zero vector to signal the failure.
     pub fallback_to_hash: bool,
+    /// DashScope-compatible base URL; defaults to `DASHSCOPE_API_BASE` env,
+    /// then the mainland endpoint. Allows international-region deployments.
+    pub api_base: String,
 }
 
 impl Default for Qwen3EmbeddingConfig {
@@ -375,6 +381,8 @@ impl Default for Qwen3EmbeddingConfig {
             model: "text-embedding-v3".to_string(),
             dimensions: 1024,
             fallback_to_hash: true,
+            api_base: std::env::var("DASHSCOPE_API_BASE")
+                .unwrap_or_else(|_| DEFAULT_DASHSCOPE_BASE.to_string()),
         }
     }
 }
@@ -402,7 +410,10 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
             return self.fallback_or_zero(text);
         }
 
-        let url = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding";
+        let url = crate::shared::url_join::join_url(
+            &self.config.api_base,
+            "api/v1/services/embeddings/text-embedding/text-embedding",
+        );
         let body = serde_json::json!({
             "model": self.config.model,
             "input": {
@@ -420,7 +431,7 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
                     .post(url)
                     .header("Authorization", format!("Bearer {}", self.config.api_key))
                     .json(&body)
-                    .timeout(std::time::Duration::from_secs(30))
+                    .timeout(crate::shared::http_timeouts::HTTP_BODY_READ_TIMEOUT)
                     .send()
                     .map_err(|e| e.to_string())
             }) {
@@ -640,8 +651,9 @@ pub fn embedding_provider_from_env() -> ConfigurableEmbeddingProvider {
                 .unwrap_or_default();
             let model = std::env::var("OPENAI_EMBEDDING_MODEL")
                 .unwrap_or_else(|_| "text-embedding-3-small".to_string());
-            let api_base = std::env::var("OPENAI_API_BASE")
-                .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+            let api_base = std::env::var("OPENAI_API_BASE").unwrap_or_else(|_| {
+                crate::shared::http_client::OPENAI_DEFAULT_BASE_URL.to_string()
+            });
             let dims = std::env::var("OPENAI_EMBEDDING_DIMENSIONS")
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
@@ -673,6 +685,8 @@ pub fn embedding_provider_from_env() -> ConfigurableEmbeddingProvider {
                 // matching with cosine=NaN). Zero vectors are rejected upstream
                 // in `vector.rs` (`embed_with_check`).
                 fallback_to_hash: true,
+                api_base: std::env::var("DASHSCOPE_API_BASE")
+                    .unwrap_or_else(|_| DEFAULT_DASHSCOPE_BASE.to_string()),
             };
             ConfigurableEmbeddingProvider::new(EmbeddingBackend::Qwen3, None, Some(config), None)
         }

@@ -121,10 +121,7 @@ impl Report {
             compiles: true,
             findings: Vec::new(),
             risk: RiskLevel::Low,
-            timestamp_ms: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
+            timestamp_ms: crate::shared::timestamps::now_ts_ms_u64(),
         }
     }
 
@@ -824,7 +821,7 @@ impl SelfEvolutionAgent {
                         .split(',')
                         .next()
                         .unwrap_or("0");
-                    base_line = target.parse::<usize>().ok();
+                    base_line = target.parse::<usize>().ok().filter(|ln| *ln > 0);
                 }
                 continue;
             }
@@ -834,12 +831,12 @@ impl SelfEvolutionAgent {
                 let content_line = rest.trim_end().to_string();
                 if let Some(bl) = base_line.as_mut() {
                     patched.push((*bl, content_line));
-                    *bl += 1;
+                    *bl = bl.saturating_add(1);
                 }
             } else if trimmed.starts_with(' ') || trimmed.starts_with('-') {
                 // Context lines advance the base line counter
                 if let Some(bl) = base_line.as_mut() {
-                    *bl += 1;
+                    *bl = bl.saturating_add(1);
                 }
             }
             // Remove lines, index lines, and blank lines are ignored by the counter progression
@@ -936,6 +933,11 @@ impl SelfEvolutionAgent {
                     if let Some(path_colon) = before_colon.rfind(':') {
                         let line_num_str = &before_colon[path_colon + 1..];
                         if let Ok(ln) = line_num_str.parse::<usize>() {
+                            // Reject line 0: apply_to_file indexes with `ln - 1`,
+                            // which would underflow (panic in debug).
+                            if ln == 0 {
+                                continue;
+                            }
                             // Check that the path-like part before the line number looks like a file
                             let path_part = &before_colon[..path_colon];
                             if path_part.contains('.')
@@ -1395,5 +1397,24 @@ mod tests {
         let (lines, fixes) = agent.resolve_errors(content, &errors);
         assert!(fixes > 0);
         assert!(lines.iter().any(|(_, l)| l.ends_with(';')));
+    }
+
+    #[test]
+    fn test_parse_unified_diff_rejects_zero_line() {
+        // Regression: `@@ -0,0 +0,1 @@` produced a 0-based line number that
+        // underflowed `ln - 1` in apply_to_file (panic in debug builds). The
+        // parser must drop zero target lines.
+        let (agent, _tmp_dir) = create_test_agent();
+        let instruction = "@@ -0,0 +0,1 @@\n+let x = 1;\n";
+        let patched = agent.parse_unified_diff_patch("", instruction);
+        assert!(patched.is_none() || patched.as_ref().unwrap().iter().all(|(ln, _)| *ln >= 1));
+    }
+
+    #[test]
+    fn test_parse_inline_path_patch_rejects_zero_line() {
+        let (agent, _tmp_dir) = create_test_agent();
+        let instruction = "src/lib.rs:0:+ let x = 1;\n";
+        let patched = agent.parse_inline_path_patch("", instruction);
+        assert!(patched.is_none() || patched.as_ref().unwrap().iter().all(|(ln, _)| *ln >= 1));
     }
 }

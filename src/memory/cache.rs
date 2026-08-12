@@ -613,7 +613,7 @@ impl ResponseCache {
                 "no PostgreSQL connection string configured (set config cache.connection_string, GO_ON_PG_CONNECTION_STRING, DATABASE_URL, PG_DSN or GO_ON_DATABASE_URL)"
             )
         })?;
-        let max_pool_size = 8;
+        let max_pool_size = crate::memory::pg_pool::DEFAULT_PG_POOL_SIZE;
         let write_url = url;
         let write_connect = move || connect_postgres(&write_url);
 

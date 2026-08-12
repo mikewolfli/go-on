@@ -22,6 +22,16 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::info;
 
+/// HTTP client User-Agent for marketplace API calls, versioned from the
+/// package version.
+pub(crate) const MARKET_USER_AGENT: &str =
+    concat!("go-on-skill-market/", env!("CARGO_PKG_VERSION"));
+
+/// HTTP timeout for the marketplace registry API fetch (15s).
+pub(crate) const MARKET_API_TIMEOUT_SECS: u64 = 15;
+/// HTTP timeout for remote GitHub skill-index fetch (30s).
+pub(crate) const MARKET_GITHUB_TIMEOUT_SECS: u64 = 30;
+
 // ---------------------------------------------------------------------------
 // SkillSource
 // ---------------------------------------------------------------------------
@@ -71,14 +81,14 @@ impl From<SkillSource> for crate::orchestration::skill_import::SkillImportSource
                 path,
                 branch,
             } => SkillImportSource::Github {
-                repo: format!("{}/{}", owner, repo),
+                repo: crate::shared::url_join::join_url(&owner, &repo),
                 reference: branch,
                 path: {
                     let trimmed = path.trim_end_matches('/');
                     if trimmed.is_empty() || trimmed == ".." {
                         None
                     } else {
-                        Some(format!("{}/SKILL.md", trimmed))
+                        Some(crate::shared::url_join::join_url(trimmed, "SKILL.md"))
                     }
                 },
                 sha256: None,
@@ -328,10 +338,8 @@ impl SkillMarketRegistry {
                 // Try the community GitHub skill index before falling back to
                 // the built-in samples. Supports both goon-skill-index.json and
                 // goon-skill-index.yaml (feature-gated).
-                let index_url = format!(
-                    "{}/goon-skill-index.json",
-                    self.registry_url.trim_end_matches('/')
-                );
+                let index_url =
+                    crate::shared::url_join::join_url(&self.registry_url, "goon-skill-index.json");
                 match self.fetch_github_index(&index_url).await {
                     Ok(indexed) if !indexed.is_empty() => {
                         info!(
@@ -367,12 +375,12 @@ impl SkillMarketRegistry {
 
     /// Fetch skills from the remote registry API.
     async fn fetch_remote_skills(&self) -> Result<Vec<SkillMarketItem>> {
-        let url = format!("{}/api/v1/skills", self.registry_url.trim_end_matches('/'));
+        let url = crate::shared::url_join::join_url(&self.registry_url, "api/v1/skills");
         static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
         let client = HTTP_CLIENT.get_or_init(|| {
             reqwest::Client::builder()
-                .timeout(Duration::from_secs(15))
-                .user_agent("go-on-skill-market/1.0")
+                .timeout(Duration::from_secs(MARKET_API_TIMEOUT_SECS))
+                .user_agent(MARKET_USER_AGENT)
                 .build()
                 .expect("failed to create HTTP client for remote fetch")
         });
@@ -660,8 +668,8 @@ impl SkillMarketRegistry {
         static GITHUB_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
         let client = GITHUB_CLIENT.get_or_init(|| {
             reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .user_agent("go-on-skill-market/1.0")
+                .timeout(Duration::from_secs(MARKET_GITHUB_TIMEOUT_SECS))
+                .user_agent(MARKET_USER_AGENT)
                 .build()
                 .expect("failed to create HTTP client for GitHub fetch")
         });
@@ -1408,6 +1416,11 @@ impl SkillMarketRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Skill installs resolve Registry sources against the process CWD
+    // (`skills/<name>/SKILL.md`), so they must not run concurrently with the
+    // startup_context tests that temporarily `set_current_dir` — the shared
+    // `serial_test` lock serializes them (same lock the chdir tests use).
+    use serial_test::serial;
 
     #[test]
     fn builtin_skills_are_unique_current_and_self_dependency_free() {
@@ -1566,6 +1579,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_install_and_uninstall_skill() {
         let registry = test_registry().await;
         registry.refresh().await.expect("refresh");
@@ -1587,6 +1601,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_install_duplicate_fails() {
         let registry = test_registry().await;
         registry.refresh().await.expect("refresh");
@@ -1652,6 +1667,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_enable_disable_skill() {
         let registry = test_registry().await;
         registry.refresh().await.expect("refresh");

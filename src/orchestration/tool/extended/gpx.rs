@@ -6,7 +6,11 @@
 #[cfg(feature = "gis-gpx")]
 use crate::governance::pua::tool_execution_report;
 #[cfg(feature = "gis-gpx")]
+use crate::orchestration::tool::extended::utils::extract_xml_tag;
+#[cfg(feature = "gis-gpx")]
 use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
+#[cfg(feature = "gis-gpx")]
+use crate::shared::text::find_ascii_case_insensitive;
 #[cfg(feature = "gis-gpx")]
 use anyhow::{Context, Result};
 #[cfg(feature = "gis-gpx")]
@@ -27,7 +31,6 @@ impl Tool for GpxReadTool {
         crate::orchestration::tool::ToolExposure::Deferred
     }
 
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
@@ -37,30 +40,35 @@ impl Tool for GpxReadTool {
             .with_context(|| format!("failed to read GPX: {}", validated.display()))?;
 
         let byte_size = content.len();
-        let lower = content.to_lowercase();
 
-        // Count waypoints, tracks, routes using tag counting
-        let waypoint_count =
-            (lower.matches("<wpt ").count() + lower.matches("<wpt>").count()) as u64;
-        let track_count = lower.matches("<trk>").count() as u64;
-        let route_count = lower.matches("<rte>").count() as u64;
-        let trackpoint_count =
-            (lower.matches("<trkpt ").count() + lower.matches("<trkpt>").count()) as u64;
+        // Count waypoints, tracks, routes using tag counting (byte-wise
+        // ASCII case-insensitive on the original — no full lowercased copy,
+        // which would double memory for large track files).
+        let waypoint_count = (count_ascii_case_insensitive(&content, "<wpt ")
+            + count_ascii_case_insensitive(&content, "<wpt>")) as u64;
+        let track_count = count_ascii_case_insensitive(&content, "<trk>") as u64;
+        let route_count = count_ascii_case_insensitive(&content, "<rte>") as u64;
+        let trackpoint_count = (count_ascii_case_insensitive(&content, "<trkpt ")
+            + count_ascii_case_insensitive(&content, "<trkpt>"))
+            as u64;
 
         // Extract metadata name
-        let name = extract_xml_text(&content, "name");
+        let name = extract_xml_tag(&content, "name");
 
-        // Extract elevations
-        let mut search_pos = 0usize;
+        // Extract elevations. Tag offsets come from byte-wise matching on the
+        // original (tags start with `<`, an ASCII byte, so every match and
+        // every `+tag.len()` resume point is a char boundary) — the numeric
+        // value between them parses identically to a lowercased copy.
         let mut elevations: Vec<f64> = Vec::new();
-        while let Some(ele_start) = lower[search_pos..].find("<ele>") {
-            let abs_start = search_pos + ele_start + 5;
-            if let Some(ele_end) = lower[abs_start..].find("</ele>") {
-                let num_str = content[abs_start..abs_start + ele_end].trim();
+        let mut rest = content.as_str();
+        while let Some(ele_start) = find_ascii_case_insensitive(rest, "<ele>") {
+            let after_open = &rest[ele_start + 5..];
+            if let Some(ele_end) = find_ascii_case_insensitive(after_open, "</ele>") {
+                let num_str = after_open[..ele_end].trim();
                 if let Ok(val) = num_str.parse::<f64>() {
                     elevations.push(val);
                 }
-                search_pos = abs_start + ele_end + 6;
+                rest = &after_open[ele_end + 6..];
             } else {
                 break;
             }
@@ -99,19 +107,69 @@ impl Tool for GpxReadTool {
     }
 }
 
-#[cfg(feature = "gis-gpx")]
-fn extract_xml_text(content: &str, tag: &str) -> Option<String> {
-    let open = format!("<{}>", tag);
-    let close = format!("</{}>", tag);
-    let lower = content.to_lowercase();
-    let open_lower = open.to_lowercase();
-    let close_lower = close.to_lowercase();
-
-    if let Some(start) = lower.find(&open_lower) {
-        let content_start = start + open.len();
-        if let Some(end) = lower[content_start..].find(&close_lower) {
-            return Some(content[content_start..content_start + end].to_string());
+/// Count non-overlapping ASCII case-insensitive occurrences of `needle` in
+/// `text` (byte-wise, no allocation). Only used here, under the `gis-gpx`
+/// feature, so it lives in this feature-gated module.
+fn count_ascii_case_insensitive(text: &str, needle: &str) -> usize {
+    let hay = text.as_bytes();
+    let needle_b = needle.as_bytes();
+    if needle_b.is_empty() || needle_b.len() > hay.len() {
+        return 0;
+    }
+    let mut count = 0;
+    let mut i = 0;
+    while i <= hay.len() - needle_b.len() {
+        if hay[i..i + needle_b.len()].eq_ignore_ascii_case(needle_b) {
+            count += 1;
+            i += needle_b.len();
+        } else {
+            i += 1;
         }
     }
-    None
+    count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shared::text::find_ascii_case_insensitive;
+
+    #[test]
+    fn extract_xml_tag_preserves_case_and_multibyte_content() {
+        // Byte-wise ASCII matching must preserve original case in the content
+        // and never panic on CJK between the tags.
+        let gpx = "<gpx><name>My Track</name><wpt lat=\"1\" lon=\"2\"><ele>123.5</ele></wpt></gpx>";
+        assert_eq!(extract_xml_tag(gpx, "name").as_deref(), Some("My Track"));
+        let cjk = "<name>轨迹K测试</name>";
+        assert_eq!(extract_xml_tag(cjk, "name").as_deref(), Some("轨迹K测试"));
+    }
+
+    #[test]
+    fn elevation_scan_uses_case_insensitive_tags() {
+        // The run loop scans `<ele>`/`</ele>` byte-wise; a close tag ending
+        // exactly at the end of the content (inclusive-range regression) must
+        // still be found.
+        let content = "<trkpt><ele>10</ele></trkpt>";
+        let mut rest = content;
+        let mut elevations: Vec<f64> = Vec::new();
+        while let Some(ele_start) = find_ascii_case_insensitive(rest, "<ele>") {
+            let after_open = &rest[ele_start + 5..];
+            if let Some(ele_end) = find_ascii_case_insensitive(after_open, "</ele>") {
+                let num_str = after_open[..ele_end].trim();
+                if let Ok(val) = num_str.parse::<f64>() {
+                    elevations.push(val);
+                }
+                rest = &after_open[ele_end + 6..];
+            } else {
+                break;
+            }
+        }
+        assert_eq!(elevations, vec![10.0]);
+    }
+
+    #[test]
+    fn counting_is_case_insensitive() {
+        assert_eq!(count_ascii_case_insensitive("<WPT><wpt><wpt>", "<wpt>"), 3);
+        assert_eq!(count_ascii_case_insensitive("<trk><trkpt>", "<trkpt>"), 1);
+    }
 }

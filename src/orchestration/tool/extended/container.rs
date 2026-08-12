@@ -2,7 +2,7 @@
 //!
 //! Execute Docker commands to manage containers, images, and logs.
 
-use std::process::Command;
+use std::process::{Command, Output};
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -10,6 +10,27 @@ use tracing::debug;
 
 use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
+
+/// Run a `docker` command with the given args and capture its output.
+/// Shared by all six Docker tools so command construction and the
+/// stdout/stderr extraction never drift between them.
+fn run_docker_command<I, S>(args: I) -> std::io::Result<Output>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut cmd = Command::new("docker");
+    cmd.args(args);
+    cmd.output()
+}
+
+/// `(stdout, stderr)` from a captured process output.
+fn output_text(output: &Output) -> (String, String) {
+    (
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+    )
+}
 
 // ── DockerPsTool ──────────────────────────────────────────────────────────
 
@@ -39,18 +60,15 @@ impl Tool for DockerPsTool {
 
         debug!(all = %all, format = %format, "tool: docker_ps");
 
-        let mut cmd = Command::new("docker");
-        cmd.arg("ps");
-
+        let mut args = vec!["ps"];
         if all {
-            cmd.arg("--all");
+            args.push("--all");
         }
-
         if format == "json" {
-            cmd.args(["--format", "{{json .}}"]);
+            args.extend(["--format", "{{json .}}"]);
         }
 
-        let output = match cmd.output() {
+        let output = match run_docker_command(&args) {
             Ok(o) => o,
             Err(e) => {
                 debug!(error = %e, "tool: docker_ps failed — Docker not available");
@@ -71,8 +89,7 @@ impl Tool for DockerPsTool {
             }
         };
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let (stdout, stderr) = output_text(&output);
 
         if !output.status.success() {
             debug!(stderr = %stderr, "tool: docker_ps failed");
@@ -180,25 +197,23 @@ impl Tool for DockerExecTool {
             "tool: docker_exec"
         );
 
-        let mut cmd = Command::new("docker");
-        cmd.args(["exec"]);
-
+        let mut args = vec!["exec"];
         if interactive {
-            cmd.arg("-i");
+            args.push("-i");
         }
-
         if let Some(dir) = workdir {
-            cmd.args(["-w", dir]);
+            args.push("-w");
+            args.push(dir);
         }
+        args.push(container);
+        args.push("sh");
+        args.push("-c");
+        args.push(command);
 
-        cmd.args([container, "sh", "-c", command]);
-
-        let output = cmd
-            .output()
+        let output = run_docker_command(&args)
             .context("failed to execute `docker exec` — is Docker running?")?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let (stdout, stderr) = output_text(&output);
         let success = output.status.success();
         let exit_code = output.status.code().unwrap_or(-1);
 
@@ -270,27 +285,22 @@ impl Tool for DockerLogsTool {
             "tool: docker_logs"
         );
 
-        let mut cmd = Command::new("docker");
-        cmd.args(["logs"]);
-
+        let mut args = vec!["logs"];
         if timestamps {
-            cmd.arg("-t");
+            args.push("-t");
         }
-
-        cmd.args(["--tail", tail]);
-
+        args.push("--tail");
+        args.push(tail);
         if let Some(s) = since {
-            cmd.args(["--since", s]);
+            args.push("--since");
+            args.push(s);
         }
+        args.push(container);
 
-        cmd.arg(container);
-
-        let output = cmd
-            .output()
+        let output = run_docker_command(&args)
             .context("failed to execute `docker logs` — is the container running?")?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let (stdout, stderr) = output_text(&output);
 
         // `docker logs` writes both stdout and stderr; combine them.
         let mut log_lines: Vec<&str> = stdout.lines().collect();
@@ -377,34 +387,29 @@ impl Tool for DockerBuildTool {
             "tool: docker_build"
         );
 
-        let mut cmd = Command::new("docker");
-        cmd.arg("build");
-
+        let mut args: Vec<String> = vec!["build".to_string()];
         if let Some(df) = dockerfile {
-            cmd.args(["-f", df]);
+            args.push("-f".to_string());
+            args.push(df.to_string());
         }
-
         if no_cache {
-            cmd.arg("--no-cache");
+            args.push("--no-cache".to_string());
         }
-
-        cmd.args(["-t", tag]);
-
-        if let Some(args) = build_args {
-            for (key, val) in args {
+        args.push("-t".to_string());
+        args.push(tag.to_string());
+        if let Some(extra_args) = build_args {
+            for (key, val) in extra_args {
                 let build_arg = format!("{}={}", key, val.as_str().unwrap_or(""));
-                cmd.args(["--build-arg", &build_arg]);
+                args.push("--build-arg".to_string());
+                args.push(build_arg);
             }
         }
+        args.push(path.to_string());
 
-        cmd.arg(path);
-
-        let output = cmd
-            .output()
+        let output = run_docker_command(&args)
             .context("failed to execute `docker build` — is Docker running?")?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let (stdout, stderr) = output_text(&output);
         let success = output.status.success();
 
         debug!(
@@ -480,7 +485,7 @@ impl Tool for DockerPushTool {
 
         let registry = input.payload.get("registry").and_then(|v| v.as_str());
         let full_image = match registry {
-            Some(reg) => format!("{}/{}", reg.trim_end_matches('/'), image),
+            Some(reg) => crate::shared::url_join::join_url(reg, image),
             None => image.to_string(),
         };
 
@@ -489,15 +494,10 @@ impl Tool for DockerPushTool {
             "tool: docker_push"
         );
 
-        let mut cmd = Command::new("docker");
-        cmd.args(["push", &full_image]);
-
-        let output = cmd
-            .output()
+        let output = run_docker_command(["push", &full_image])
             .context("failed to execute `docker push` — is Docker running?")?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let (stdout, stderr) = output_text(&output);
         let success = output.status.success();
 
         debug!(
@@ -603,27 +603,26 @@ impl Tool for DockerComposeTool {
             "tool: docker_compose"
         );
 
-        let mut cmd = Command::new("docker");
-        cmd.arg("compose");
-
+        let mut args = vec!["compose"];
         if let Some(f) = file {
-            cmd.args(["-f", f]);
+            args.push("-f");
+            args.push(f);
         }
-
-        cmd.arg(subcommand);
+        args.push(subcommand);
 
         match subcommand {
             "up" => {
                 if detach {
-                    cmd.arg("-d");
+                    args.push("-d");
                 }
                 if build {
-                    cmd.arg("--build");
+                    args.push("--build");
                 }
             }
             "logs" => {
                 if let Some(t) = tail {
-                    cmd.args(["--tail", t]);
+                    args.push("--tail");
+                    args.push(t);
                 }
             }
             "build" => {
@@ -633,15 +632,13 @@ impl Tool for DockerComposeTool {
         }
 
         if let Some(s) = service {
-            cmd.arg(s);
+            args.push(s);
         }
 
-        let output = cmd
-            .output()
+        let output = run_docker_command(&args)
             .context("failed to execute `docker compose` — is Docker running?")?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let (stdout, stderr) = output_text(&output);
         let success = output.status.success();
 
         debug!(

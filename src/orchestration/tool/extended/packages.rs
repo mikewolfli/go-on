@@ -130,7 +130,7 @@ fn search_crates_io(
     );
     let resp = client
         .get(&url)
-        .header("User-Agent", "go-on/1.0")
+        .header("User-Agent", crate::shared::http_client::USER_AGENT)
         .send()
         .context("Failed to search crates.io")?;
     let data: Value = resp.json().context("Failed to parse crates.io response")?;

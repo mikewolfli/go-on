@@ -27,6 +27,10 @@ pub struct TripleFusionConfig {
 
 impl Default for TripleFusionConfig {
     fn default() -> Self {
+        // Design constants (no config surface today — the bridge runs with
+        // fixed tuning): awareness must cross 0.3 before evolution triggers
+        // fire (keeps low-signal reflexion out); metacognitive data syncs
+        // into consciousness every 10s; auto-evolution from reflexion is on.
         Self {
             min_awareness_for_evolution: 0.3,
             metacognitive_sync_interval_ms: 10_000,

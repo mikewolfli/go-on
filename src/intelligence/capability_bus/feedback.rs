@@ -45,10 +45,7 @@ impl CapabilityBus {
         token_cost: u64,
         quality_score: f64,
     ) {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let now_ms = crate::shared::timestamps::now_ts_ms_u64();
 
         #[cfg(feature = "sub-bus-orchestration")]
         let flow_id = format!("{}::{}", task_type, task_id);
@@ -132,6 +129,10 @@ impl CapabilityBus {
         let memory_key = format!("{}::{}", task_type, task_id);
         #[cfg(feature = "sub-bus-distributed-memory")]
         {
+            // Shared-memory TTL for outcome records propagated to peer nodes:
+            // 5 minutes keeps transient feedback visible to peers without
+            // polluting long-term distributed memory.
+            const SHARED_MEM_TTL_MS: u64 = 300_000;
             let dist_id = self.distributed_memory_bus.store_local(
                 &memory_key,
                 &format!(
@@ -140,7 +141,7 @@ impl CapabilityBus {
                 ),
                 vec![task_type.to_string(), agent.to_string()],
                 quality_score,
-                300_000,
+                SHARED_MEM_TTL_MS,
             );
             let _ = self.distributed_memory_bus.share_with_peers(&dist_id);
         }

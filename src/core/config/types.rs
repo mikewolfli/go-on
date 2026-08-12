@@ -132,7 +132,7 @@ pub struct UrlPolicyConfig {
     #[serde(default = "default_max_response_bytes")]
     pub max_response_bytes: usize,
     /// Block requests to private/internal IP ranges (10.x, 192.168.x, 127.x, etc.).
-    #[serde(default = "default_true")]
+    #[serde(default = "super::defaults::default_true")]
     pub block_private_ips: bool,
 }
 
@@ -142,7 +142,7 @@ impl Default for UrlPolicyConfig {
             restrict_to_allowed: false,
             allowed_patterns: Vec::new(),
             blocked_patterns: Vec::new(),
-            max_response_bytes: 10 * 1024 * 1024,
+            max_response_bytes: default_max_response_bytes(),
             block_private_ips: true,
         }
     }
@@ -150,9 +150,6 @@ impl Default for UrlPolicyConfig {
 
 fn default_max_response_bytes() -> usize {
     10 * 1024 * 1024
-}
-fn default_true() -> bool {
-    true
 }
 
 /// Feature-flag configuration fields.

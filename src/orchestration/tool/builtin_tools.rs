@@ -88,6 +88,11 @@ pub fn sanitize_path(input: &ToolInput, path: &str) -> Result<PathBuf> {
     Ok(canonical)
 }
 
+/// Maximum size for model-supplied write payloads (write_file content,
+/// apply_patch patch) — disk-exhaustion guard, shared by the sandbox
+/// functions so the two write tools cannot drift.
+pub const MAX_WRITE_PAYLOAD_BYTES: usize = 50 * 1024 * 1024;
+
 /// LAYER 2 runtime write sandbox shared by the sync and async write paths.
 ///
 /// Enforces a maximum write size (disk-exhaustion guard) and blocks writes to
@@ -95,12 +100,11 @@ pub fn sanitize_path(input: &ToolInput, path: &str) -> Result<PathBuf> {
 /// through this gate so the model cannot bypass the sandbox via the async path.
 pub fn enforce_write_sandbox(path: &std::path::Path, content: &str) -> Result<()> {
     // Limit file size to prevent disk exhaustion (default 50MB).
-    const MAX_WRITE_BYTES: usize = 50 * 1024 * 1024;
-    if content.len() > MAX_WRITE_BYTES {
+    if content.len() > MAX_WRITE_PAYLOAD_BYTES {
         anyhow::bail!(
             "write_file BLOCKED: content {} bytes exceeds maximum {} bytes",
             content.len(),
-            MAX_WRITE_BYTES
+            MAX_WRITE_PAYLOAD_BYTES
         );
     }
 
@@ -168,6 +172,46 @@ pub fn sanitize_path_for_write(input: &ToolInput, path: &str) -> Result<PathBuf>
         })
     };
 
+    // Dangling-symlink guard: when the leaf itself is a symlink whose target
+    // does not exist yet, `canonicalize` above failed and the fallback
+    // rejoined the unresolved leaf name — writing would follow the link to
+    // an arbitrary target outside the base dir. Reject symlink leaves
+    // outright. (When canonicalize succeeds the path is already resolved, so
+    // this never fires on real files/dirs.)
+    if let Ok(meta) = std::fs::symlink_metadata(&canonical) {
+        if meta.file_type().is_symlink() {
+            anyhow::bail!(
+                "{}",
+                tf(
+                    "error.path_traversal_denied",
+                    &[
+                        ("path", path),
+                        ("base", "symbolic links are not writable targets")
+                    ]
+                )
+            );
+        }
+    }
+
+    // Fallback paths may still contain unresolved `..` components (when an
+    // intermediate directory doesn't exist yet, canonicalize fails and the
+    // raw string is rejoined). `Path::starts_with` compares components
+    // without normalizing `..`, so such a path could pass the base check
+    // below and then escape the base when the OS resolves the `..` on write.
+    // Reject outright — a canonicalize-success path never contains `..`.
+    if canonical
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.path_traversal_denied",
+                &[("path", path), ("base", ".. components are not allowed")]
+            )
+        );
+    }
+
     if let Some(ref base_dir) = input.allowed_base_dir {
         let base_canonical = std::fs::canonicalize(base_dir).unwrap_or_else(|_| base_dir.clone());
         if !canonical.starts_with(&base_canonical) {
@@ -217,7 +261,11 @@ impl Tool for ReadFileTool {
         let _lock =
             tool_lock_manager().try_acquire(&validated_path.to_string_lossy(), LockMode::Read);
 
-        let content = std::fs::read_to_string(&validated_path)?;
+        let content = crate::orchestration::tool::exec_common::read_file_capped(
+            &validated_path,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )?;
+        let content = String::from_utf8_lossy(&content).into_owned();
         let elapsed = start.elapsed().as_millis() as u64;
         span.record("latency_ms", elapsed);
         span.record("success", true);
@@ -244,7 +292,12 @@ impl Tool for ReadFileTool {
             let _lock =
                 tool_lock_manager().try_acquire(&validated_path.to_string_lossy(), LockMode::Read);
 
-            let content = tokio::fs::read_to_string(&validated_path).await?;
+            let content = crate::orchestration::tool::exec_common::read_file_capped_async(
+                &validated_path,
+                crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+            )
+            .await?;
+            let content = String::from_utf8_lossy(&content).into_owned();
 
             Ok(ToolOutput {
                 success: true,
@@ -509,6 +562,17 @@ impl Tool for ApplyPatchTool {
         let patch = input.payload["patch"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_patch")))?;
+        // ── LAYER 2: runtime sandbox — bound the patch size (same cap as
+        // write_file) so the model cannot pipe unbounded data to git apply.
+        // (Path safety is git apply's own concern: it rejects absolute and
+        // `..` paths by default.)
+        if patch.len() > MAX_WRITE_PAYLOAD_BYTES {
+            anyhow::bail!(
+                "apply_patch BLOCKED: patch {} bytes exceeds maximum {} bytes",
+                patch.len(),
+                MAX_WRITE_PAYLOAD_BYTES
+            );
+        }
         let check_only = input.payload["check"].as_bool().unwrap_or(false);
         let current_dir = input.payload["directory"].as_str().unwrap_or(".");
         let sanitized_dir = sanitize_path(input, current_dir)?;
@@ -581,6 +645,15 @@ impl Tool for ApplyPatchTool {
             let patch = input.payload["patch"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_patch")))?;
+            // ── LAYER 2: runtime sandbox — bound the patch size (same cap as
+            // the sync path / write_file).
+            if patch.len() > MAX_WRITE_PAYLOAD_BYTES {
+                anyhow::bail!(
+                    "apply_patch BLOCKED: patch {} bytes exceeds maximum {} bytes",
+                    patch.len(),
+                    MAX_WRITE_PAYLOAD_BYTES
+                );
+            }
             let check_only = input.payload["check"].as_bool().unwrap_or(false);
             let current_dir = input.payload["directory"].as_str().unwrap_or(".");
             let sanitized_dir = sanitize_path(&input, current_dir)?;
@@ -1020,18 +1093,6 @@ fn skill_execute_arc() -> std::sync::Arc<SkillExecuteTool> {
         .clone()
 }
 
-/// Shared tokio runtime for skill execution — lazily created once.
-static SKILL_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-
-fn skill_runtime() -> &'static tokio::runtime::Runtime {
-    SKILL_RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build shared skill runtime")
-    })
-}
-
 impl Tool for SkillExecuteTool {
     fn name(&self) -> &'static str {
         "skill_execute"
@@ -1159,8 +1220,13 @@ impl Tool for SkillExecuteTool {
     /// directly for optimal non-blocking execution.
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let input = input.clone();
-        let rt = skill_runtime();
-        rt.block_on(skill_execute_arc().run_async(input))
+        // Run on the shared dedicated blocking runtime so we never `block_on`
+        // on an async worker (see `exec_common::blocking_runtime()`). The
+        // guard serializes concurrent sync `run()` calls on the shared
+        // current-thread runtime.
+        crate::orchestration::tool::exec_common::with_blocking_runtime(|rt| {
+            rt.block_on(skill_execute_arc().run_async(input))
+        })
     }
 }
 
@@ -1284,5 +1350,78 @@ impl Tool for SkillReloadTool {
                 Some("skills_reloaded"),
             )),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write_input(base: Option<PathBuf>) -> ToolInput {
+        ToolInput {
+            task_id: "test".to_string(),
+            phase: "act".to_string(),
+            agent_role: "coder".to_string(),
+            objective: "test".to_string(),
+            constraints: None,
+            evidence: None,
+            payload: serde_json::json!({}),
+            allowed_base_dir: base,
+        }
+    }
+
+    #[test]
+    fn sanitize_path_for_write_rejects_unresolved_parent_dir_components() {
+        // Regression: the canonicalize fallback rejoins raw path components,
+        // and `Path::starts_with` does NOT normalize `..` — a path like
+        // `<base>/../../x/y.txt` (with a missing intermediate dir) would pass
+        // the base check and escape on write.
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir_all(&base).unwrap();
+
+        let evil = base.join("..").join("..").join("escaped").join("x.txt");
+        let err =
+            sanitize_path_for_write(&write_input(Some(base.clone())), &evil.to_string_lossy())
+                .unwrap_err();
+        assert!(
+            err.to_string().contains("denied") || err.to_string().contains(".."),
+            ".. traversal must be rejected, got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sanitize_path_for_write_rejects_dangling_symlink_leaf() {
+        // Regression: writing through a dangling symlink would land outside
+        // the base dir; the leaf must be rejected.
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir_all(&base).unwrap();
+        let link = base.join("link");
+        std::os::unix::fs::symlink("/tmp/definitely-not-a-target-xyz", &link).unwrap();
+
+        let err =
+            sanitize_path_for_write(&write_input(Some(base.clone())), &link.to_string_lossy())
+                .unwrap_err();
+        assert!(
+            err.to_string().contains("symbolic") || err.to_string().contains("denied"),
+            "dangling symlink leaf must be rejected, got: {err}"
+        );
+    }
+
+    #[test]
+    fn sanitize_path_for_write_allows_existing_paths_inside_base() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir_all(base.join("sub")).unwrap();
+        fs::write(base.join("sub").join("f.txt"), "x").unwrap();
+
+        let target = base.join("sub").join("f.txt");
+        let ok =
+            sanitize_path_for_write(&write_input(Some(base.clone())), &target.to_string_lossy())
+                .unwrap();
+        assert!(ok.starts_with(&base));
     }
 }

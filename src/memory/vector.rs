@@ -406,7 +406,7 @@ impl HnswIndex {
                 continue;
             }
             let level = self.node_levels.get(idx).copied().unwrap_or(0);
-            if best.map_or(true, |(bl, _)| level > bl) {
+            if best.is_none_or(|(bl, _)| level > bl) {
                 best = Some((level, idx));
             }
         }
@@ -1354,6 +1354,8 @@ fn embedding_blob(values: &[f32]) -> Vec<u8> {
 }
 
 fn blend_similarity_with_recency(similarity: f32, now: i64, updated_at: i64) -> f32 {
+    // Recency blending: similarity carries 70% weight, recency 30%. The
+    // decay factor 0.05 halves the recency term after ~20 days of age.
     const DECAY_FACTOR: f64 = 0.05;
     let age_secs = (now - updated_at).max(0) as f64;
     let age_days = age_secs / 86_400.0;
@@ -1998,7 +2000,7 @@ impl VectorStore {
                 "no PostgreSQL connection string configured (set config vector.connection_string, GO_ON_PG_CONNECTION_STRING, DATABASE_URL, PG_DSN or GO_ON_DATABASE_URL)"
             )
         })?;
-        let max_pool_size = 8;
+        let max_pool_size = crate::memory::pg_pool::DEFAULT_PG_POOL_SIZE;
         let write_url = url;
         let write_connect = move || connect_postgres(&write_url);
 

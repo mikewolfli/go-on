@@ -63,10 +63,13 @@ pub(crate) async fn tcp_write_timeout(
     socket: &mut (impl tokio::io::AsyncWrite + Unpin),
     data: &[u8],
 ) -> Result<()> {
-    tokio::time::timeout(std::time::Duration::from_secs(30), socket.write_all(data))
-        .await
-        .map_err(|_| anyhow::anyhow!("timeout writing to socket"))?
-        .map_err(|e| anyhow::anyhow!("socket write error: {e}"))
+    tokio::time::timeout(
+        crate::shared::http_timeouts::SOCKET_WRITE_TIMEOUT,
+        socket.write_all(data),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("timeout writing to socket"))?
+    .map_err(|e| anyhow::anyhow!("socket write error: {e}"))
 }
 
 // ---------------------------------------------------------------------------

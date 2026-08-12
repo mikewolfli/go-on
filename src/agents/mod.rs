@@ -41,12 +41,19 @@ pub(crate) struct ToolCallAcc {
     pub arguments: String,
 }
 
-thread_local! {
-    // Thread-local accumulator for multi-chunk tool calls (index-keyed).
-    // Each tokio worker thread gets its own instance, avoiding cross-stream pollution
-    // when multiple chat streams run concurrently on different threads.
-    static TOOL_CALL_ACC: std::cell::RefCell<HashMap<usize, ToolCallAcc>> =
-        std::cell::RefCell::new(HashMap::new());
+/// Per-stream accumulator for multi-chunk tool calls (index-keyed).
+///
+/// Owned by the SSE streaming loop — created fresh per `chat_once` stream —
+/// NOT thread-local: at each `stream.next().await` the loop can migrate
+/// between tokio worker threads, and a thread-local would split one stream's
+/// deltas across threads (the finish_reason drain on one thread would only
+/// see that thread's partial entries). It is also dropped on every stream end
+/// path (finish_reason drain, `[DONE]`, client disconnect, network error), so
+/// a retried or subsequent stream can never append to another stream's
+/// leftovers.
+#[derive(Default)]
+pub(crate) struct ToolCallAccumulator {
+    pub entries: HashMap<usize, ToolCallAcc>,
 }
 
 /// Strip trailing incomplete escape sequences from partial JSON tool arguments.
@@ -660,14 +667,21 @@ where
 ///   2. reasoning_content (DeepSeek)    → __thinking__ prefix
 ///   3. content (regular text)          → as-is
 ///   4. tool_calls (function calling)   → __tool_call__ prefix
-pub(crate) fn sse_event_to_sender(event: &str, sender: &crate::agent::StreamingSender) -> bool {
+///
+/// `tool_acc` carries the per-stream tool-call accumulation state (see
+/// [`ToolCallAccumulator`]) across events of the same stream.
+pub(crate) fn sse_event_to_sender(
+    event: &str,
+    sender: &crate::agent::StreamingSender,
+    tool_acc: &mut ToolCallAccumulator,
+) -> bool {
     if event.trim() == "[DONE]" {
         return true;
     }
     let Ok(json) = serde_json::from_str::<Value>(event) else {
         return false;
     };
-    for token in extract_all_tokens(&json) {
+    for token in extract_all_tokens(&json, tool_acc) {
         if sender.send(token).is_err() {
             return true;
         }
@@ -680,8 +694,12 @@ pub async fn stream_sse_to_sender(
     sender: crate::agent::StreamingSender,
     config: &StreamingConfig,
 ) -> anyhow::Result<()> {
+    // Per-stream tool-call accumulator: owned here so it is dropped on every
+    // stream end path (Stop/[DONE]/error/EOF), discarding partial tool calls
+    // instead of leaking them into the next stream.
+    let mut tool_acc = ToolCallAccumulator::default();
     let on_event = |data: &str| -> anyhow::Result<SseEventAction> {
-        if sse_event_to_sender(data, &sender) {
+        if sse_event_to_sender(data, &sender, &mut tool_acc) {
             Ok(SseEventAction::Stop)
         } else {
             Ok(SseEventAction::Continue)
@@ -798,8 +816,9 @@ where
 ///   4. tool_calls (function calling) → __tool_call__ prefix
 ///
 /// Returns them as a Vec so the caller can send each one through the stream.
-/// Empty vec means no content was found in this event.
-pub(crate) fn extract_all_tokens(value: &Value) -> Vec<String> {
+/// `tool_acc` accumulates streaming tool-call deltas across events of the same
+/// stream and is drained when `finish_reason` arrives.
+pub(crate) fn extract_all_tokens(value: &Value, tool_acc: &mut ToolCallAccumulator) -> Vec<String> {
     let mut tokens = Vec::with_capacity(4);
 
     let Some(choices) = value.get("choices").and_then(|v| v.as_array()) else {
@@ -862,58 +881,52 @@ pub(crate) fn extract_all_tokens(value: &Value) -> Vec<String> {
 
     // 4. tool_calls (function calling) — accumulate across chunks by index
     if let Some(tool_calls) = container.get("tool_calls").and_then(|v| v.as_array()) {
-        TOOL_CALL_ACC.with(|cell| {
-            let mut acc = cell.borrow_mut();
-            for tc in tool_calls {
-                let index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                let entry = acc.entry(index).or_default();
-                if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
-                    if !id.is_empty() {
-                        entry.id = id.to_string();
-                    }
+        for tc in tool_calls {
+            let index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let entry = tool_acc.entries.entry(index).or_default();
+            if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
+                if !id.is_empty() {
+                    entry.id = id.to_string();
                 }
-                if let Some(func) = tc.get("function") {
-                    if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
-                        if !name.is_empty() {
-                            entry.name = name.to_string();
-                        }
-                    }
-                    if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
-                        if !args.is_empty() {
-                            entry.arguments.push_str(args);
-                        }
-                    }
-                }
-                // NOTE: Tool call tokens are NOT emitted here during streaming.
-                // Emitting partial tool call tokens during streaming causes duplicates
-                // because each SSE chunk with tool_calls arrives with incremental
-                // arguments (delta). Emitting after each chunk would produce multiple
-                // partial/incomplete tokens, confusing downstream consumers.
-                //
-                // Instead, tool calls are only emitted once in step 5 (finish_reason)
-                // when finish_reason == "tool_calls", at which point all arguments
-                // have been fully accumulated. This matches the reliable behavior
-                // of Zed's tool call handling.
             }
-        });
+            if let Some(func) = tc.get("function") {
+                if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
+                    if !name.is_empty() {
+                        entry.name = name.to_string();
+                    }
+                }
+                if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
+                    if !args.is_empty() {
+                        entry.arguments.push_str(args);
+                    }
+                }
+            }
+            // NOTE: Tool call tokens are NOT emitted here during streaming.
+            // Emitting partial tool call tokens during streaming causes duplicates
+            // because each SSE chunk with tool_calls arrives with incremental
+            // arguments (delta). Emitting after each chunk would produce multiple
+            // partial/incomplete tokens, confusing downstream consumers.
+            //
+            // Instead, tool calls are only emitted once in step 5 (finish_reason)
+            // when finish_reason == "tool_calls", at which point all arguments
+            // have been fully accumulated. This matches the reliable behavior
+            // of Zed's tool call handling.
+        }
     }
 
     // 5. finish_reason — forward as __finish_reason__:<reason>
     //     If the reason signals stream end ("stop", "length", "tool_calls"), drain
-    //     any remaining accumulated tool calls and clear the thread-local accumulator
-    //     so a new stream on the same thread starts fresh.
+    //     any remaining accumulated tool calls and clear the accumulator so a new
+    //     stream starts fresh.
     if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
         if !reason.is_empty() && reason != "null" {
             tokens.push(format!("{}:{}", TOKEN_FINISH_REASON_PREFIX, reason));
-            TOOL_CALL_ACC.with(|cell| {
-                let mut acc = cell.borrow_mut();
-                for (_, entry) in acc.drain() {
-                    if !entry.name.is_empty() && !entry.id.is_empty() {
-                        let fixed = strip_trailing_incomplete_escape(&entry.arguments);
-                        tokens.push(build_tool_call_token(&entry.name, &fixed));
-                    }
+            for (_, entry) in tool_acc.entries.drain() {
+                if !entry.name.is_empty() && !entry.id.is_empty() {
+                    let fixed = strip_trailing_incomplete_escape(&entry.arguments);
+                    tokens.push(build_tool_call_token(&entry.name, &fixed));
                 }
-            });
+            }
         }
     }
 
@@ -946,6 +959,39 @@ pub(crate) fn extract_all_tokens(value: &Value) -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn strip_trailing_incomplete_escape_handles_multibyte_and_control_bytes() {
+        // Regression guard for the byte-wise backward walk: it must only ever
+        // stop on a char boundary (ASCII `"`/`\` positions, or one byte past
+        // a >0x1f byte that is the last byte of its UTF-8 char), so `s[..end]`
+        // never panics even with CJK content and a trailing backslash/control
+        // byte (a truncation point mid-escape in streamed tool arguments).
+        let cases: &[(&str, &str)] = &[
+            // Complete escapes are kept.
+            ("{\"x\":\"a\\n\"", "{\"x\":\"a\\n\""),
+            ("a\\\"", "a\\\""),
+            // Trailing incomplete escape: the backslash is dropped.
+            ("好\\", "好"),
+            ("{\"patch\":\"你好\\", "{\"patch\":\"你好"),
+            ("abc\\", "abc"),
+            // Control byte tail: the control byte is dropped, then the walk
+            // stops at the preceding char boundary (no panic on CJK).
+            ("好\u{1e}", "好"),
+            ("好\u{0}", "好"),
+            ("你\u{1e}", "你"),
+            // No trailing special byte: unchanged.
+            ("{\"x\":\"你", "{\"x\":\"你"),
+            ("\u{1e}好", "\u{1e}好"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                &strip_trailing_incomplete_escape(input),
+                expected,
+                "input: {input:?}"
+            );
+        }
+    }
 
     #[test]
     fn principles_to_system_text_normalizes_empty_and_none() {
@@ -1020,8 +1066,14 @@ mod tests {
         });
         let result_field = json!({ "result": "wenxin-token" });
 
-        assert_eq!(extract_all_tokens(&delta_array), vec!["alphabeta"]);
-        assert_eq!(extract_all_tokens(&result_field), vec!["wenxin-token"]);
+        assert_eq!(
+            extract_all_tokens(&delta_array, &mut ToolCallAccumulator::default()),
+            vec!["alphabeta"]
+        );
+        assert_eq!(
+            extract_all_tokens(&result_field, &mut ToolCallAccumulator::default()),
+            vec!["wenxin-token"]
+        );
     }
 
     #[test]
@@ -1047,7 +1099,9 @@ mod tests {
             }]
         });
         // Without finish_reason, tool calls should NOT be emitted
-        let tokens = extract_all_tokens(&stream_chunk);
+        // (a single accumulator shared across the chunks of one stream)
+        let mut tool_acc = ToolCallAccumulator::default();
+        let tokens = extract_all_tokens(&stream_chunk, &mut tool_acc);
         assert_eq!(
             tokens.len(),
             3,
@@ -1073,7 +1127,7 @@ mod tests {
                 }
             }]
         });
-        let tokens2 = extract_all_tokens(&stream_chunk2);
+        let tokens2 = extract_all_tokens(&stream_chunk2, &mut tool_acc);
         assert_eq!(
             tokens2.len(),
             0,
@@ -1087,7 +1141,7 @@ mod tests {
                 "finish_reason": "tool_calls"
             }]
         });
-        let tokens3 = extract_all_tokens(&finish_event);
+        let tokens3 = extract_all_tokens(&finish_event, &mut tool_acc);
         assert!(tokens3.len() >= 2, "should have finish_reason + tool_call");
         assert!(
             tokens3[0].starts_with("__finish_reason__"),
@@ -1120,7 +1174,7 @@ mod tests {
                 "finish_reason": "tool_calls"
             }]
         });
-        let tokens = extract_all_tokens(&event);
+        let tokens = extract_all_tokens(&event, &mut ToolCallAccumulator::default());
         // finish_reason token + exactly one tool_call token
         let tool_tokens: Vec<&str> = tokens
             .iter()

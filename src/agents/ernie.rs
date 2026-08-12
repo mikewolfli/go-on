@@ -19,6 +19,13 @@ use crate::agents::{option_f64, option_string};
 /// Strict-completeness instruction injected during review/strict phases.
 const STRICT_STAGE_NOTE: &str = "Enforce strict completeness checks: no empty functions, no unhandled errors, no missing boundary checks, and no placeholder implementations.";
 
+/// Wenxin (ERNIE bot) RPC base URL — Baidu-fixed endpoint (not user-
+/// configurable; `agent.rs` intentionally does not read `config.url` for this
+/// provider).
+const WENXIN_RPC_BASE: &str = "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop";
+/// Qianfan (ERNIE 4.0) chat completions base URL — Baidu-fixed endpoint.
+const QIANFAN_CHAT_BASE: &str = "https://qianfan.baidubce.com/v2/chat/completions";
+
 /// Which Baidu ERNIE API family this agent talks to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErnieApi {
@@ -168,14 +175,12 @@ impl Agent for BaiduErnieAgent {
             ErnieApi::Wenxin => {
                 let target_model = self.resolve_target_model(options);
                 let endpoint_path = Self::endpoint_for_model(&target_model);
-                let endpoint = format!(
-                    "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/{endpoint_path}?access_token={token}"
-                );
+                let endpoint = format!("{WENXIN_RPC_BASE}/{endpoint_path}?access_token={token}");
                 self.client.post(endpoint).json(&payload)
             }
             ErnieApi::Qianfan => self
                 .client
-                .post("https://qianfan.baidubce.com/v2/chat/completions")
+                .post(QIANFAN_CHAT_BASE)
                 .header("Authorization", format!("Bearer {token}"))
                 .json(&payload),
         };

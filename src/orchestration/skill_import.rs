@@ -83,12 +83,8 @@ pub struct SkillImportManifest {
     pub disable_model_invocation: bool,
     /// Whether this skill allows implicit invocation based on user intent.
     /// Default true. Set to false if the skill should only be invoked explicitly.
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::config::defaults::default_true")]
     pub allow_implicit_invocation: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn default_manifest_schema() -> Value {
@@ -267,12 +263,41 @@ impl SkillImportStore {
     pub fn save(&self) -> Result<()> {
         fs::create_dir_all(&self.root_dir)
             .with_context(|| format!("failed to create {}", self.root_dir.display()))?;
-        let payload = SkillImportIndex {
-            skills: self.list(),
-        };
+
+        // Concurrent-import safety: every caller builds a fresh store
+        // (load → mutate → save), so a plain full-index rewrite would drop
+        // records a concurrent import just persisted. Serialize the
+        // read-merge-write and merge on-disk records that this store's view
+        // does not already contain. (Semantic trade-off: the merge is
+        // additive, so a stale store's save can resurrect a concurrently
+        // removed record — accepted in favor of never losing imports.)
+        static INDEX_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = INDEX_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let mut merged = self.records.clone();
+        if let Ok(raw) = fs::read_to_string(&self.index_path) {
+            if let Ok(parsed) = serde_json::from_str::<SkillImportIndex>(&raw) {
+                for item in parsed.skills {
+                    merged.entry(item.name.clone()).or_insert(item);
+                }
+            }
+        }
+        // Deterministic serialization order: HashMap iteration order is
+        // random per process, which made every save rewrite the file in a
+        // different order.
+        let mut skills: Vec<ImportedSkillRecord> = merged.into_values().collect();
+        skills.sort_by(|a, b| a.name.cmp(&b.name));
+        let payload = SkillImportIndex { skills };
         let serialized = serde_json::to_string_pretty(&payload)
             .context("failed to serialize skill import index")?;
-        fs::write(&self.index_path, serialized)
+        // Crash-safe write: temp file + atomic rename, so an interrupted
+        // save cannot corrupt the index (a corrupt index hard-fails load()).
+        let tmp_path = self.index_path.with_extension("tmp");
+        fs::write(&tmp_path, serialized)
+            .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+        fs::rename(&tmp_path, &self.index_path)
             .with_context(|| format!("failed to write {}", self.index_path.display()))?;
         Ok(())
     }
@@ -342,15 +367,31 @@ impl SkillImportStore {
         // can be constructed for it (connection is not made at import time).
         // The constructed skill is saved for potential registration below when
         // there is no prompt_template (endpoint-only skills).
+        // `RemoteSkill::new` performs a (blocking) DNS SSRF check, so it runs
+        // on the blocking pool with a bounded timeout — a slow resolver must
+        // not stall this async worker.
         let remote_skill: Option<RemoteSkill> = if let Some(endpoint) = &manifest.endpoint {
+            let endpoint_owned = endpoint.clone();
+            let name_owned = manifest.name.clone();
+            let desc_owned = manifest.description.clone();
+            let schema = manifest.input_schema.clone();
             Some(
-                RemoteSkill::new(
-                    endpoint,
-                    &manifest.name,
-                    Some(&manifest.description),
-                    Some(manifest.input_schema.clone()),
+                tokio::time::timeout(
+                    crate::orchestration::tool::extended::http::SSRF_DNS_CHECK_TIMEOUT,
+                    tokio::task::spawn_blocking(move || {
+                        RemoteSkill::new(
+                            &endpoint_owned,
+                            &name_owned,
+                            Some(&desc_owned),
+                            Some(schema),
+                        )
+                    }),
                 )
-                .context("failed to validate RemoteSkill endpoint")?,
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("failed to validate RemoteSkill endpoint (DNS check timed out)")
+                })?
+                .context("failed to validate RemoteSkill endpoint")??,
             )
         } else {
             None
@@ -673,12 +714,7 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>> {
 
 fn validate_manifest(manifest: &SkillImportManifest) -> Result<()> {
     validate_skill_name(&manifest.name)?;
-    if manifest.version.trim().is_empty() {
-        anyhow::bail!(
-            "{}",
-            tf("error.missing_field", &[("field", "manifest version")])
-        );
-    }
+    validate_skill_version(&manifest.version)?;
     if !manifest.input_schema.is_object() {
         anyhow::bail!(
             "{}",
@@ -688,7 +724,19 @@ fn validate_manifest(manifest: &SkillImportManifest) -> Result<()> {
     Ok(())
 }
 
+/// `name` is used as a path component under the skills cache directory, so a
+/// bare traversal component must be rejected even though `.` is otherwise
+/// allowed in skill names (e.g. `my.skill`).
 fn validate_skill_name(name: &str) -> Result<()> {
+    if name == "." || name == ".." {
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.skill_name_invalid_chars",
+                &[("name", name), ("chars", "path traversal")]
+            )
+        );
+    }
     if name.is_empty() || name.len() > 64 {
         anyhow::bail!(
             "{}",
@@ -707,6 +755,39 @@ fn validate_skill_name(name: &str) -> Result<()> {
             tf(
                 "error.skill_name_invalid_chars",
                 &[("name", name), ("chars", "invalid characters")]
+            )
+        );
+    }
+    Ok(())
+}
+
+/// `version` is used as a path component (`root_dir/name/version/`), so a
+/// hostile manifest must not be able to redirect the write outside the skills
+/// cache: reject separators (`/`, `\`), traversal components (`..`/`.`),
+/// control characters, and unbounded length. Accepts simple dotted
+/// identifiers like `1.0.0`, `v2`, `1.0.0-alpha`, `1.0.0+build.5` (the `+`
+/// build-metadata separator is harmless as a path component).
+fn validate_skill_version(version: &str) -> Result<()> {
+    if version.trim().is_empty() {
+        anyhow::bail!(
+            "{}",
+            tf("error.missing_field", &[("field", "manifest version")])
+        );
+    }
+    let valid = version.len() <= 64
+        && version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' || c == '+')
+        && !version.split('.').any(|seg| seg.is_empty() || seg == ".");
+    if !valid {
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.skill_name_invalid_chars",
+                &[
+                    ("name", version),
+                    ("chars", "must be a simple dotted identifier")
+                ]
             )
         );
     }
@@ -788,7 +869,11 @@ pub(crate) fn parse_skill_md(content: &[u8]) -> Result<SkillImportManifest> {
                 }
                 i += 1;
             }
-            Some(&text[3 + end + 5..]) // skip past closing ---
+            // Skip the closing `---` (4 bytes per the find above) plus any
+            // following newline. The previous `+ 5` hard-coded the newline and
+            // could land mid-code-point if `---` was immediately followed by a
+            // multi-byte char.
+            Some(text[3 + end + 4..].trim_start_matches(['\n', '\r']))
         } else {
             None
         }
@@ -854,7 +939,11 @@ pub(crate) fn parse_skill_md(content: &[u8]) -> Result<SkillImportManifest> {
                 if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("---") {
                     description = trimmed.to_string();
                     if description.len() > 200 {
-                        description = description[..197].to_string() + "...";
+                        // Char-safe truncation: a naive `&s[..197]` byte slice
+                        // panics when the cut lands inside a multi-byte UTF-8
+                        // code point (CJK/emoji descriptions).
+                        description =
+                            crate::shared::truncate::truncate_chars(&description, 197, "") + "...";
                     }
                     break;
                 }
@@ -901,6 +990,23 @@ impl RemoteSkill {
         description: Option<&str>,
         input_schema: Option<Value>,
     ) -> Result<Self> {
+        // SSRF guard: the endpoint comes from an imported (potentially
+        // hostile) manifest and the server POSTs to it on the model's behalf
+        // when the skill is invoked — enforce http(s) and refuse
+        // private/loopback/link-local hosts, matching the `http_request`
+        // tool's default SSRF policy.
+        let parsed = url::Url::parse(endpoint).context("invalid remote skill endpoint URL")?;
+        if parsed.scheme() != "http" && parsed.scheme() != "https" {
+            anyhow::bail!("remote skill endpoint must use http:// or https://");
+        }
+        if let Some(host) = parsed.host_str() {
+            if crate::orchestration::tool::extended::http::is_private_host(host) {
+                anyhow::bail!(
+                    "remote skill endpoint must not point at a private or loopback address"
+                );
+            }
+        }
+
         let connect_timeout = Duration::from_secs(SKILL_IMPORT_CONNECT_TIMEOUT_SECS);
         let request_timeout = Duration::from_secs(SKILL_IMPORT_REQUEST_TIMEOUT_SECS);
         let client = Client::builder()
@@ -921,7 +1027,7 @@ impl RemoteSkill {
     }
 
     async fn call_remote(&self, input: &Value) -> Result<Value> {
-        let url = format!("{}/tools/call", self.endpoint);
+        let url = crate::shared::url_join::join_url(&self.endpoint, "tools/call");
         let payload = json!({
             "name": self.name,
             "arguments": input,
@@ -1156,5 +1262,49 @@ mod tests {
         store.save().unwrap();
         let reloaded = SkillImportStore::load(store.policy.clone(), registry).unwrap();
         assert_eq!(reloaded.list().len(), 1);
+    }
+
+    #[test]
+    fn validate_skill_name_rejects_path_traversal_components() {
+        // Regression: `name` is a path component under the skills cache dir.
+        assert!(validate_skill_name(".").is_err());
+        assert!(validate_skill_name("..").is_err());
+        // Normal names (including dotted ones) still pass.
+        assert!(validate_skill_name("local.echo").is_ok());
+        assert!(validate_skill_name("my-skill_2").is_ok());
+        // Separators / control chars / length still rejected.
+        assert!(validate_skill_name("a/b").is_err());
+        assert!(validate_skill_name("a\\b").is_err());
+        assert!(validate_skill_name(&"x".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn validate_skill_version_rejects_traversal_and_allows_semver_build() {
+        // Regression: `version` is a path component; traversal must fail.
+        assert!(validate_skill_version("../../etc").is_err());
+        assert!(validate_skill_version("..").is_err());
+        assert!(validate_skill_version("1.0.0/../x").is_err());
+        assert!(validate_skill_version("a\\b").is_err());
+        assert!(validate_skill_version("1.0.").is_err());
+        assert!(validate_skill_version("").is_err());
+        assert!(validate_skill_version(&"v".repeat(65)).is_err());
+        // Legitimate versions — including the semver `+` build metadata
+        // separator — still pass.
+        assert!(validate_skill_version("1.0.0").is_ok());
+        assert!(validate_skill_version("v2").is_ok());
+        assert!(validate_skill_version("1.0.0-alpha").is_ok());
+        assert!(validate_skill_version("1.0.0+build.5").is_ok());
+    }
+
+    #[test]
+    fn remote_skill_rejects_private_and_loopback_endpoints() {
+        // Regression: RemoteSkill endpoints come from imported manifests and
+        // the server POSTs to them on the model's behalf — SSRF guard.
+        assert!(RemoteSkill::new("http://127.0.0.1:9999", "s", None, None).is_err());
+        assert!(RemoteSkill::new("http://localhost:9999", "s", None, None).is_err());
+        assert!(RemoteSkill::new("ftp://example.com/x", "s", None, None).is_err());
+        assert!(RemoteSkill::new("not-a-url", "s", None, None).is_err());
+        // Public https endpoint passes validation (no connection made).
+        assert!(RemoteSkill::new("https://example.com/mcp", "s", None, None).is_ok());
     }
 }

@@ -1427,7 +1427,12 @@ async fn collect_git_diffs() -> Option<(String, String)> {
         Ok(out) => {
             let s = String::from_utf8_lossy(&out.stdout).to_string();
             if s.len() > 8000 {
-                format!("{}...\n[truncated]", &s[..8000])
+                // char-safe truncation: a naive `&s[..8000]` byte slice can
+                // panic when a multi-byte UTF-8 code point straddles 8000.
+                format!(
+                    "{}...\n[truncated]",
+                    crate::shared::truncate::truncate_chars(&s, 8000, "")
+                )
             } else {
                 s
             }
@@ -1683,7 +1688,7 @@ async fn execute_review_command(current_agent: &Arc<dyn Agent>) {
     let truncated_diff = if detailed.len() > 12000 {
         format!(
             "{}...\n[truncated: {} total bytes]",
-            &detailed[..12000],
+            crate::shared::truncate::truncate_chars(&detailed, 12000, ""),
             detailed.len()
         )
     } else {

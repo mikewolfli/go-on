@@ -80,7 +80,9 @@ pub fn dedup_skill_calls(
     let best = skill_names
         .iter()
         .filter_map(|name| {
-            let score = reg.score_of(name).unwrap_or(0.5);
+            let score = reg
+                .score_of(name)
+                .unwrap_or(crate::acp::helpers::agent_selector::DEFAULT_REPUTATION_SCORE);
             reg.get(name).map(|_| (name.to_string(), score))
         })
         .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -1748,20 +1750,27 @@ impl ToolRegistry {
     }
 
     pub fn names(&self) -> Vec<&'static str> {
-        self.tools.keys().copied().collect()
+        // Deterministic order: these feed LLM tool lists, MCP resources, and
+        // the CLI system prompt — a HashMap iteration order would shuffle the
+        // list on every process start.
+        let mut names: Vec<&str> = self.tools.keys().copied().collect();
+        names.sort_unstable();
+        names
     }
 
     /// Return all tool names including aliases.
     pub fn all_names(&self) -> Vec<&'static str> {
         let mut names: Vec<&str> = self.tools.keys().copied().collect();
         names.extend(self.aliases.keys().copied());
+        names.sort_unstable();
         names
     }
 
     /// Return names of tools with the given exposure level.
     /// Uses the Tool trait's `exposure()` method (which may differ from profile defaults).
     pub fn tools_by_exposure(&self, exposure: ToolExposure) -> Vec<&'static str> {
-        self.tools
+        let mut names: Vec<&str> = self
+            .tools
             .iter()
             .filter_map(|(name, tool)| {
                 if tool.exposure() == exposure {
@@ -1770,7 +1779,9 @@ impl ToolRegistry {
                     None
                 }
             })
-            .collect()
+            .collect();
+        names.sort_unstable();
+        names
     }
 
     /// Return names of tools directly visible to the AI model.

@@ -455,6 +455,18 @@ pub(crate) fn generate_adaptive_config_toml(
         .unwrap_or_else(|| "default".to_string())];
 
     let mut content = String::new();
+    // Default values are injected from `crate::config::defaults` (the single
+    // authoritative source) instead of re-typed literals, so the generated
+    // TOML can never drift from the serde defaults.
+    use crate::config::defaults::{
+        default_cache_max_entries, default_cache_path, default_cache_ttl_seconds,
+        default_runtime_health_interval_seconds, default_runtime_maintenance_interval_seconds,
+        default_runtime_shutdown_drain_seconds, default_summary_enabled, default_summary_max_chars,
+        default_summary_trigger_messages, default_vector_auto_mode, default_vector_dimensions,
+        default_vector_max_entries, default_vector_max_snippet_chars,
+        default_vector_min_query_chars, default_vector_min_similarity, default_vector_path,
+        default_vector_top_k,
+    };
     content.push_str(&format!(
         "default_phase = \"{}\"\nmodel_selection_mode = \"adaptive\"\n\n",
         recommendations
@@ -464,20 +476,37 @@ pub(crate) fn generate_adaptive_config_toml(
     ));
 
     if adaptive_config.minimal_config.enable_cache && recommendations.cache_enabled {
-        content.push_str(
-            "[cache]\nenabled = true\npath = \"sqlite3/acp_cache.sqlite3\"\ndefault_ttl_seconds = 3600\nmax_entries = 5000\n\n",
-        );
+        content.push_str(&format!(
+            "[cache]\nenabled = true\npath = \"{}\"\ndefault_ttl_seconds = {}\nmax_entries = {}\n\n",
+            default_cache_path(),
+            default_cache_ttl_seconds(),
+            default_cache_max_entries()
+        ));
     }
 
     if adaptive_config.minimal_config.enable_vector_memory && recommendations.vector_enabled {
-        content.push_str(
-            "[vector]\nenabled = true\nauto_mode = true\npath = \"sqlite3/acp_vector.sqlite3\"\ndimensions = 192\nmin_query_chars = 80\ntop_k = 2\nmin_similarity = 0.82\nmax_snippet_chars = 800\nmax_entries = 10000\nsummary_enabled = true\nsummary_trigger_messages = 8\nsummary_max_chars = 1200\n\n",
-        );
+        content.push_str(&format!(
+            "[vector]\nenabled = true\nauto_mode = {}\npath = \"{}\"\ndimensions = {}\nmin_query_chars = {}\ntop_k = {}\nmin_similarity = {}\nmax_snippet_chars = {}\nmax_entries = {}\nsummary_enabled = {}\nsummary_trigger_messages = {}\nsummary_max_chars = {}\n\n",
+            default_vector_auto_mode(),
+            default_vector_path(),
+            default_vector_dimensions(),
+            default_vector_min_query_chars(),
+            default_vector_top_k(),
+            default_vector_min_similarity(),
+            default_vector_max_snippet_chars(),
+            default_vector_max_entries(),
+            default_summary_enabled(),
+            default_summary_trigger_messages(),
+            default_summary_max_chars()
+        ));
     }
 
-    content.push_str(
-        "[runtime]\nmaintenance_interval_seconds = 60\nhealth_interval_seconds = 120\nshutdown_drain_seconds = 30\n\n",
-    );
+    content.push_str(&format!(
+        "[runtime]\nmaintenance_interval_seconds = {}\nhealth_interval_seconds = {}\nshutdown_drain_seconds = {}\n\n",
+        default_runtime_maintenance_interval_seconds(),
+        default_runtime_health_interval_seconds(),
+        default_runtime_shutdown_drain_seconds()
+    ));
 
     for provider in &providers {
         append_agent_block(&mut content, provider, secret_mode);

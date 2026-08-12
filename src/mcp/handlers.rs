@@ -51,12 +51,11 @@ fn invalid_params(msg: impl Into<String>) -> anyhow::Error {
 /// Human-readable text for an MCP tool result: prefers the structured
 /// payload's `message` string (set by the workflow tools), otherwise falls
 /// back to the serialized JSON payload.
-fn mcp_tool_result_text(structured: &Value) -> String {
-    structured
-        .get("message")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .unwrap_or_else(|| serde_json::to_string(structured).unwrap_or_default())
+///
+/// Shared by the native MCP arm and the ACP bridge (`acp.mcp.tools.call`)
+/// so both entry points return the same text shape for the same tool.
+pub(crate) fn mcp_tool_result_text(structured: &Value) -> String {
+    super::schema::mcp_tool_result_text(structured)
 }
 
 fn coded_error(code: i32, msg: impl Into<String>) -> anyhow::Error {
@@ -249,6 +248,36 @@ impl McpServer {
     }
 
     pub async fn handle_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
+        // Log-injection guard: `method` and string `id` are interpolated into
+        // logs without escaping, so C0/C1 control characters (especially
+        // \n / \r) from an unauthenticated client could forge log lines.
+        if request.method.chars().any(char::is_control) {
+            return Ok(JsonRpcResponse {
+                jsonrpc: JSONRPC_VERSION.to_string(),
+                result: None,
+                error: Some(JsonRpcError {
+                    code: super::error_codes::INVALID_REQUEST,
+                    message: "Method contains control characters".to_string(),
+                    data: None,
+                }),
+                id: request.id,
+            });
+        }
+        if let Some(Value::String(id_str)) = &request.id {
+            if id_str.chars().any(char::is_control) {
+                return Ok(JsonRpcResponse {
+                    jsonrpc: JSONRPC_VERSION.to_string(),
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: super::error_codes::INVALID_REQUEST,
+                        message: "Request id contains control characters".to_string(),
+                        data: None,
+                    }),
+                    id: None,
+                });
+            }
+        }
+
         if request.method != "notifications/cancelled" {
             if let Some(ref id) = request.id {
                 if self.is_cancelled_request(id) {

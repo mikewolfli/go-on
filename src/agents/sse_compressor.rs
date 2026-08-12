@@ -12,6 +12,16 @@
 use flate2::read::MultiGzDecoder;
 use std::io::Read;
 
+/// Cap for a single gzip decompression call (zip-bomb guard).
+///
+/// The compressed buffer feeding this is bounded (~threshold + one network
+/// chunk), but the *decompressed* output was previously unbounded: a tiny
+/// hostile gzip stream could expand to gigabytes and blow up memory before
+/// the SSE parser's line/event caps (1 MiB / 4 MiB in agents/mod.rs) ever
+/// saw the data. 16 MiB is a generous multiple of the parser caps for any
+/// legitimate LLM stream chunk.
+const MAX_DECOMPRESSED_BYTES: usize = 16 * 1024 * 1024;
+
 /// Configuration for SSE streaming behavior
 #[derive(Debug, Clone)]
 pub struct StreamingConfig {
@@ -103,12 +113,26 @@ impl SseDecompressor {
 
     /// Decompress the internal buffer using gzip.
     fn decompress_buffer(&self) -> Vec<u8> {
-        let mut decoder = MultiGzDecoder::new(&self.buffer[..]);
+        let decoder = MultiGzDecoder::new(&self.buffer[..]);
         let mut result = Vec::new();
         // Read errors from a &[u8] are infallible for MultiGzDecoder
         // when the data is valid gzip. If invalid, we return empty data
         // rather than panicking.
-        let _ = decoder.read_to_end(&mut result);
+        let read = decoder
+            .take(MAX_DECOMPRESSED_BYTES as u64 + 1)
+            .read_to_end(&mut result)
+            .unwrap_or(0);
+        if read > MAX_DECOMPRESSED_BYTES {
+            // Zip-bomb: truncate (rather than allocate unboundedly) and make
+            // the truncation visible instead of silently returning partial data.
+            tracing::warn!(
+                target: "sse_compressor",
+                bytes = read,
+                "SSE gzip decompression exceeded {} byte cap — stream truncated",
+                MAX_DECOMPRESSED_BYTES
+            );
+            result.truncate(MAX_DECOMPRESSED_BYTES);
+        }
         result
     }
 }

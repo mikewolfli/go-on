@@ -67,6 +67,13 @@ pub struct SemanticCacheConfig {
 
 impl Default for SemanticCacheConfig {
     fn default() -> Self {
+        // Design constants (not config-driven, matching the token-cache L2
+        // sibling): 1000 entries / 1h TTL / 0.95 cosine threshold / 1024-char
+        // hash / 5-min cleanup. 0.95 deliberately sits above the vector-store
+        // min_similarity (0.70–0.85) because this cache replays answers on
+        // near-duplicate questions and must not return stale matches for
+        // merely-similar ones. See the module doc for the responsibility
+        // boundary vs the persistent vector store.
         Self {
             max_entries: 1000,
             default_ttl_seconds: 3600, // 1 hour

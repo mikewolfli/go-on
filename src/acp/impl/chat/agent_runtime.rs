@@ -116,6 +116,8 @@ pub(crate) async fn run_agent_collecting(
         // Wrap recv() in a per-chunk timeout so a stuck agent cannot
         // hang the pipeline indefinitely even when no outer timeout is set.
         let overall_timeout = std::time::Duration::from_secs(600); // 10 min hard cap
+                                                                   // Per-chunk receive timeout (120s): a stuck provider must not hang the
+                                                                   // pipeline; the overall 600s cap bounds the whole collection.
         let recv_timeout = std::time::Duration::from_secs(120);
         loop {
             // $/cancel_request support: abort token collection as soon as the

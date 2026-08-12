@@ -100,10 +100,7 @@ impl UnifiedKnowledgeBus {
 
     /// Record an execution outcome, updating reputation, experience, and knowledge.
     pub fn record_outcome(&mut self, agent: &str, task_type: &str, success: bool, summary: String) {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let now_ms = crate::shared::timestamps::now_ts_ms_u64();
 
         // 1. Update reputation (EMA)
         self.update_reputation(agent, success, now_ms);

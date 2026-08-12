@@ -20,8 +20,9 @@ pub(crate) use schema::mcp_initialize_capabilities;
 // private module, so the mapping must be reachable at `crate::mcp::error_code_for`.
 pub(crate) use handlers::error_code_for;
 pub use schema::{
-    JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
-    McpListResourcesResult, McpListToolsResult, McpResource, McpTool, ServerInfo, JSONRPC_VERSION,
+    mcp_tool_result_text, JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult,
+    McpInitializeResult, McpListResourcesResult, McpListToolsResult, McpResource, McpTool,
+    ServerInfo, JSONRPC_VERSION,
 };
 
 /// JSON-RPC error codes shared by the MCP layer.

@@ -16,6 +16,11 @@ use crate::acp::server::AcpServer;
 use crate::agent::Agent;
 use serde::{Deserialize, Serialize};
 
+/// Default reputation score for agents with no recorded history — a neutral
+/// mid-point so unknown agents are neither favored nor penalized. Shared by
+/// the agent selector, vote executor, and council deliberation.
+pub(crate) const DEFAULT_REPUTATION_SCORE: f64 = 0.5;
+
 /// Result of a single agent selection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSelection {
@@ -148,12 +153,15 @@ impl AgentSelector {
                 } else {
                     0.5
                 };
-                let reputation_score = reputation_scores.get(name).copied().unwrap_or(0.5);
+                let reputation_score = reputation_scores
+                    .get(name)
+                    .copied()
+                    .unwrap_or(DEFAULT_REPUTATION_SCORE);
                 let mut hist_score = online_scores
                     .iter()
                     .find(|(n, _)| n == name)
                     .map(|(_, s)| *s)
-                    .unwrap_or(0.5);
+                    .unwrap_or(DEFAULT_REPUTATION_SCORE);
 
                 // Task-type-aware scoring: boost agents whose name/description
                 // aligns with the task type for more intelligent selection
@@ -298,7 +306,7 @@ pub(crate) fn collect_reputation_scores(
             poisoned.into_inner()
         });
         for (name, _) in agents {
-            let score = ukb.get_reputation(name).unwrap_or(0.5);
+            let score = ukb.get_reputation(name).unwrap_or(DEFAULT_REPUTATION_SCORE);
             scores.insert(name.clone(), score);
         }
         drop(ukb);

@@ -33,10 +33,15 @@ use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
+
+/// Cap for a single MCP response line / HTTP body (one JSON-RPC message),
+/// aligned with the ACP/HTTP arms' MAX_BODY_SIZE: a hostile or buggy MCP
+/// server must not be able to grow the client's memory unboundedly.
+const MAX_MCP_LINE_BYTES: usize = 10 * 1024 * 1024;
 
 /// Shared request-id counter for JSON-RPC requests.
 static NEXT_REQ_ID: AtomicU64 = AtomicU64::new(1);
@@ -174,8 +179,32 @@ impl McpTransport {
                 let mut stdout = stdio.stdout.lock().await;
                 loop {
                     let read = timeout(timeout_duration, async {
-                        let next = stdout.next_line().await?;
-                        Ok::<Option<String>, anyhow::Error>(next)
+                        // Bound a single response line (one JSON-RPC message):
+                        // `next_line()` would allocate unboundedly on a huge
+                        // unterminated line from a hostile/buggy server.
+                        use tokio::io::AsyncBufReadExt;
+                        let mut buf: Vec<u8> = Vec::with_capacity(256);
+                        // `Lines` derefs to the underlying BufReader, which
+                        // is a plain AsyncBufRead we can bound with `take`.
+                        let reader = stdout.get_mut();
+                        let n = (&mut *reader)
+                            .take(MAX_MCP_LINE_BYTES as u64 + 1)
+                            .read_until(b'\n', &mut buf)
+                            .await?;
+                        if n == 0 {
+                            return Ok::<Option<String>, anyhow::Error>(None);
+                        }
+                        if buf.len() > MAX_MCP_LINE_BYTES {
+                            anyhow::bail!(
+                                "MCP response line exceeds the {MAX_MCP_LINE_BYTES} byte limit"
+                            );
+                        }
+                        while matches!(buf.last(), Some(b'\n') | Some(b'\r')) {
+                            buf.pop();
+                        }
+                        Ok::<Option<String>, anyhow::Error>(Some(
+                            String::from_utf8_lossy(&buf).into_owned(),
+                        ))
                     })
                     .await
                     .context("MCP request timed out")??;
@@ -206,9 +235,23 @@ impl McpTransport {
                 if payload.get("id").is_none() {
                     return Ok(None);
                 }
-                let value: Value = resp
-                    .json()
-                    .await
+                // Bound the response body: `resp.json()` buffers the whole
+                // payload before parsing, so a hostile server could OOM the
+                // client with a huge body.
+                use futures_util::StreamExt;
+                let mut body: Vec<u8> = Vec::new();
+                let mut stream = resp.bytes_stream();
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk
+                        .with_context(|| format!("MCP HTTP response '{method}' read failed"))?;
+                    body.extend_from_slice(&chunk);
+                    if body.len() > MAX_MCP_LINE_BYTES {
+                        anyhow::bail!(
+                            "MCP HTTP response exceeds the {MAX_MCP_LINE_BYTES} byte limit"
+                        );
+                    }
+                }
+                let value: Value = serde_json::from_slice(&body)
                     .with_context(|| format!("MCP HTTP response '{method}' parse failed"))?;
                 Ok(Some(value))
             }

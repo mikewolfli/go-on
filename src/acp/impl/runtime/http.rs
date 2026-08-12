@@ -120,7 +120,7 @@ pub(crate) async fn read_http_header<R: tokio::io::AsyncRead + Unpin>(
     socket: &mut R,
 ) -> Result<Vec<u8>> {
     const INITIAL_HEADER_BUFFER_SIZE: usize = 4096;
-    const MAX_HEADER_BUFFER_SIZE: usize = 64 * 1024;
+    const MAX_HEADER_BUFFER_SIZE: usize = crate::shared::http_timeouts::MAX_HTTP_HEADER_SIZE;
 
     let mut buffer = vec![0u8; INITIAL_HEADER_BUFFER_SIZE];
     let mut total_bytes_read: usize = 0;
@@ -139,7 +139,7 @@ pub(crate) async fn read_http_header<R: tokio::io::AsyncRead + Unpin>(
         }
 
         let bytes_read = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
+            crate::shared::http_timeouts::HTTP_HEADER_READ_TIMEOUT,
             socket.read(&mut buffer[total_bytes_read..]),
         )
         .await
@@ -406,7 +406,8 @@ async fn handle_state_events_sse(socket: &mut HttpStream, cors_headers: &str) ->
     write_sse_headers(socket, cors_headers).await?;
 
     let mut rx = crate::protocol::state_sync::subscribe();
-    let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    let mut heartbeat_interval =
+        tokio::time::interval(crate::shared::http_timeouts::SSE_HEARTBEAT_INTERVAL);
 
     loop {
         tokio::select! {
@@ -574,7 +575,7 @@ async fn route_http_post(
     if body_bytes.len() < content_length {
         let mut remaining = vec![0u8; content_length - body_bytes.len()];
         tokio::time::timeout(
-            std::time::Duration::from_secs(30),
+            crate::shared::http_timeouts::HTTP_BODY_READ_TIMEOUT,
             socket.read_exact(&mut remaining),
         )
         .await
@@ -746,7 +747,6 @@ async fn route_http_post(
                     // during long-running tool execution), abort and return error.
                     // The timeout resets on each received event, so long-running tool
                     // chains that produce periodic progress events are fine.
-                    const SSE_FLUSH_INTERVAL: usize = 4;
                     const STREAM_INACTIVITY_TIMEOUT_SECS: u64 = 120;
                     let mut sse_event_count: usize = 0;
 
@@ -770,7 +770,8 @@ async fn route_http_post(
                                         );
                                         // Periodic flush: every SSE_FLUSH_INTERVAL events.
                                         // This batches syscalls while keeping latency low.
-                                        if sse_event_count.is_multiple_of(SSE_FLUSH_INTERVAL) {
+                                        if sse_event_count.is_multiple_of(super::sse::SSE_FLUSH_INTERVAL)
+                                        {
                                             let _ = flush_sse(socket).await;
                                         }
                                     }

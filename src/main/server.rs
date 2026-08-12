@@ -24,6 +24,11 @@ use crate::setup::{
 use super::cli::{validate_cli_protocol_mode, Cli};
 use super::report::{emit_config_warnings, print_completeness_report, print_runtime_status};
 
+/// Default ACP HTTP bind address when neither CLI `--acp-http-bind` nor
+/// `[runtime] acp_http_bind_addr` is configured. Matches the shipped
+/// `config/config.toml` value.
+pub(crate) const DEFAULT_ACP_HTTP_BIND: &str = "127.0.0.1:8090";
+
 /// Start the server with the given configuration and CLI options.
 ///
 /// `skill_registry` — an optional pre-populated skill registry from bootstrap,
@@ -240,7 +245,7 @@ pub(crate) async fn start_server(
         config_path,
         runtime_config,
         dispatch_mode,
-        &acp_http_bind.unwrap_or_else(|| "127.0.0.1:8090".to_string()),
+        &acp_http_bind.unwrap_or_else(|| DEFAULT_ACP_HTTP_BIND.to_string()),
         autotune_state,
         autotune_config,
         autotune_state_path,

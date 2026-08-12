@@ -422,6 +422,7 @@ Memories:
                 let confidence = p
                     .get("confidence")
                     .and_then(|c| c.as_f64())
+                    // Missing/unparseable confidence → neutral 0.5.
                     .unwrap_or(0.5)
                     .clamp(0.0, 1.0);
 

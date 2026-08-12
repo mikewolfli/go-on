@@ -21,6 +21,16 @@ use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
 /// `filesystem.rs` (CopyPathTool) and `game.rs` (GameModInstallTool, under
 /// `game-modding`).
 pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    // Reject a destination inside the source tree: the recursive walk would
+    // see the just-created destination and nest copies until the path length
+    // limit (ENAMETOOLONG), leaving a garbage tree behind.
+    if dst.starts_with(src) {
+        anyhow::bail!(
+            "destination '{}' is inside source '{}' — refusing recursive copy",
+            dst.display(),
+            src.display()
+        );
+    }
     fs::create_dir_all(dst).context("failed to create destination directory")?;
     for entry in fs::read_dir(src).context("failed to read source directory")? {
         let entry = entry?;
@@ -36,6 +46,27 @@ pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// ── Shared ASCII case-insensitive text helpers ──────────────────────────────
+
+/// Extract the content of the first `<tag>...</tag>` pair (ASCII
+/// case-insensitive tag matching, no allocation for the search itself).
+///
+/// Built on [`crate::shared::text::find_ascii_case_insensitive`]. Both slice
+/// bounds are char boundaries: the open/close tags start with `<` (an ASCII
+/// byte, which can never occur inside a multi-byte UTF-8 sequence), so
+/// `text[content_start..end_abs]` never panics even when the content between
+/// the tags is arbitrary UTF-8.
+pub(crate) fn extract_xml_tag(text: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = crate::shared::text::find_ascii_case_insensitive(text, &open)?;
+    let content_start = start + open.len();
+    let content = &text[content_start..];
+    let end_rel = crate::shared::text::find_ascii_case_insensitive(content, &close)?;
+    let end_abs = content_start + end_rel;
+    Some(text[content_start..end_abs].to_string())
 }
 
 // ── UUID Generator ──────────────────────────────────────────────────────────
@@ -128,7 +159,7 @@ impl Tool for RandomTokenTool {
             }
             _ => {
                 // hex: `length` hex characters from ceil(length/2) random bytes
-                let byte_len = (length + 1) / 2;
+                let byte_len = length.div_ceil(2);
                 let bytes: Vec<u8> = (0..byte_len).map(|_| rand::rng().random::<u8>()).collect();
                 hex::encode(bytes).chars().take(length).collect()
             }
@@ -193,14 +224,11 @@ impl Tool for EncodeDecodeTool {
             .ok_or_else(|| anyhow::anyhow!("encode_decode requires arguments.input"))?;
 
         let result = match operation {
-            "base64_encode" => {
-                use base64::Engine;
-                base64::engine::general_purpose::STANDARD.encode(input_str.as_bytes())
-            }
+            "base64_encode" => crate::multimodal::base64_encode(input_str.as_bytes()),
             "base64_decode" => {
-                use base64::Engine;
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(input_str)
+                // Shared implementation accepts standard AND URL-safe alphabets
+                // (the tool previously accepted standard-only).
+                let bytes = crate::multimodal::base64_decode(input_str)
                     .context("Failed to decode base64 input")?;
                 String::from_utf8(bytes).context("Base64 decoded data is not valid UTF-8")?
             }
@@ -496,5 +524,60 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("requires arguments.path"));
+    }
+
+    // ── Shared ASCII case-insensitive helpers ──
+
+    #[test]
+    fn extract_xml_tag_ascii_content() {
+        assert_eq!(
+            extract_xml_tag("<title>Hello</title>", "title").as_deref(),
+            Some("Hello")
+        );
+    }
+
+    #[test]
+    fn extract_xml_tag_case_insensitive() {
+        assert_eq!(
+            extract_xml_tag("<TITLE>Hi</TITLE>", "title").as_deref(),
+            Some("Hi")
+        );
+        assert_eq!(
+            extract_xml_tag("<title>Hi</TITLE>", "title").as_deref(),
+            Some("Hi")
+        );
+    }
+
+    #[test]
+    fn extract_xml_tag_at_very_end_of_content() {
+        // Regression: an exclusive `0..len.saturating_sub(tag_len)` range
+        // missed the last valid start position, so a close tag ending exactly
+        // at the string end returned None.
+        assert_eq!(
+            extract_xml_tag("<ele>123</ele>", "ele").as_deref(),
+            Some("123")
+        );
+        assert_eq!(
+            extract_xml_tag("<ele>123</ele>x", "ele").as_deref(),
+            Some("123")
+        );
+    }
+
+    #[test]
+    fn extract_xml_tag_multibyte_content() {
+        // Regression: `to_lowercase()` changes the byte length of some chars
+        // (K U+212A 3→1), so coordinates from a lowercased copy must never be
+        // used to slice the original — the byte-wise search avoids this and
+        // preserves the original case in the content.
+        let input = "<title>你K你好</title>";
+        let extracted = extract_xml_tag(input, "title").expect("no panic");
+        assert_eq!(extracted, "你K你好");
+    }
+
+    #[test]
+    fn extract_xml_tag_missing_returns_none() {
+        assert_eq!(extract_xml_tag("<a>x</a>", "title"), None);
+        assert_eq!(extract_xml_tag("<title>no close", "title"), None);
+        assert_eq!(extract_xml_tag("no open</title>", "title"), None);
     }
 }

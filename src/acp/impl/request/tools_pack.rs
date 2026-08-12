@@ -906,36 +906,19 @@ pub(crate) async fn execute_tool_call(
 
             let encoded_query = query.replace(" ", "+");
 
-            // Search GitHub repos with go-on-skill topic
-            let url = format!(
-                "https://api.github.com/search/repositories?q={encoded_query}+topic:go-on-skill&sort=stars&order=desc&per_page={max_results}"
-            );
-
-            let resp = client.get(&url).send().await;
-            let items = match resp {
-                Ok(r) if r.status().is_success() => {
-                    let body: serde_json::Value = r.json().await.unwrap_or_default();
-                    body.get("items")
-                        .and_then(|v| v.as_array())
-                        .cloned()
-                        .unwrap_or_default()
-                }
+            // Search GitHub repos with go-on-skill topic, falling back to the
+            // broader `go-on` topic when rate-limited or unavailable. The two
+            // searches share one implementation (only the topic differs).
+            let primary = github_search_skills(client, &encoded_query, "go-on-skill", max_results)
+                .await;
+            let items = match primary {
+                Some(items) if !items.is_empty() => items,
                 _ => {
-                    // GitHub API rate-limited or unavailable — search via `go-on` topic
-                    // as fallback
-                    let fallback_url = format!(
-                        "https://api.github.com/search/repositories?q={encoded_query}+topic:go-on&sort=stars&order=desc&per_page={max_results}"
-                    );
-                    match client.get(&fallback_url).send().await {
-                        Ok(r) if r.status().is_success() => {
-                            let body: serde_json::Value = r.json().await.unwrap_or_default();
-                            body.get("items")
-                                .and_then(|v| v.as_array())
-                                .cloned()
-                                .unwrap_or_default()
-                        }
-                        _ => Vec::new(),
-                    }
+                    // GitHub API rate-limited or unavailable — search via
+                    // `go-on` topic as fallback
+                    github_search_skills(client, &encoded_query, "go-on", max_results)
+                        .await
+                        .unwrap_or_default()
                 }
             };
 
@@ -1172,6 +1155,32 @@ pub(super) fn governance_action_for_tool(name: &str) -> GovernanceAction {
 
 pub(super) fn local_tool_descriptor(name: &'static str) -> Value {
     crate::shared::tool_descriptors::tool_descriptor_value(name)
+}
+
+/// GitHub repository search endpoint (search API).
+const GITHUB_SEARCH_REPOS_URL: &str = "https://api.github.com/search/repositories";
+
+/// GitHub repository search for skills, by topic. Shared by the primary
+/// (`go-on-skill`) and fallback (`go-on`) searches in the skill-find tool so
+/// the request/parse logic cannot drift between the two branches.
+/// Returns `None` when the API call fails (rate-limit / network), letting
+/// the caller decide whether to fall back.
+async fn github_search_skills(
+    client: &reqwest::Client,
+    encoded_query: &str,
+    topic: &str,
+    max_results: usize,
+) -> Option<Vec<serde_json::Value>> {
+    let url = format!(
+        "{GITHUB_SEARCH_REPOS_URL}?q={encoded_query}+topic:{topic}&sort=stars&order=desc&per_page={max_results}"
+    );
+    match client.get(&url).send().await {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await.unwrap_or_default();
+            body.get("items").and_then(|v| v.as_array()).cloned()
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

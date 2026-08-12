@@ -186,10 +186,7 @@ impl AlertManager {
                         ),
                         value,
                         threshold,
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64,
+                        timestamp: crate::shared::timestamps::now_ts(),
                     };
 
                     self.last_fire.insert(rule.name.to_string(), now);
@@ -228,10 +225,7 @@ impl AlertManager {
             message,
             value: 0.0,
             threshold: 0.0,
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64,
+            timestamp: crate::shared::timestamps::now_ts(),
         };
         self.last_fire.insert(rule_name.to_string(), now);
         self.total_alerts_fired += 1;
@@ -296,27 +290,31 @@ impl AlertManager {
             "alert": alert,
             "recent_alerts_count": recent_alerts_count
         });
-        // Capture the current tracing span so it propagates across the async boundary
+        // Capture the current tracing span so it propagates across the async
+        // boundary; the webhook send runs inside `span.in_scope` below.
         let span = tracing::Span::current();
         // Spawn a background task to send the webhook
         tokio::spawn(async move {
-            span.in_scope(|| {
-                // The span is entered for the duration of the async block
-            });
-            match crate::shared::http_client::http_client() {
-                Ok(client) => {
-                    let mut request = client.post(&url).json(&payload);
-                    // Apply the configured webhook timeout (previously the
-                    // timeout_ms field was write-only — requests could hang).
-                    if timeout_ms > 0 {
-                        request = request.timeout(std::time::Duration::from_millis(timeout_ms));
+            // Enter the span around the whole webhook send (the previous
+            // `in_scope(|| {})` empty closure was a no-op that dropped the
+            // span before the request was built).
+            let send = async {
+                match crate::shared::http_client::http_client() {
+                    Ok(client) => {
+                        let mut request = client.post(&url).json(&payload);
+                        // Apply the configured webhook timeout (previously the
+                        // timeout_ms field was write-only — requests could hang).
+                        if timeout_ms > 0 {
+                            request = request.timeout(std::time::Duration::from_millis(timeout_ms));
+                        }
+                        if let Err(e) = request.send().await {
+                            warn!("AlertManager webhook send failed: {e}");
+                        }
                     }
-                    if let Err(e) = request.send().await {
-                        warn!("AlertManager webhook send failed: {e}");
-                    }
+                    Err(e) => warn!("AlertManager http_client unavailable: {e}"),
                 }
-                Err(e) => warn!("AlertManager http_client unavailable: {e}"),
-            }
+            };
+            span.in_scope(|| send).await;
         });
     }
 

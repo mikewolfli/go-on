@@ -386,7 +386,7 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
     });
 
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
+        std::time::Duration::from_secs(crate::acp::r#impl::chat::CHAT_REQUEST_TIMEOUT_SECS),
         process_chat_request(
             server,
             &mut chat_params,

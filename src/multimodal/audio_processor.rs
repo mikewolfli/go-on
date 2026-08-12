@@ -23,6 +23,10 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+/// Per-request timeout for OpenAI Whisper transcription (120s — long audio
+/// takes a while; a stuck upstream must still not hang the pipeline).
+const AUDIO_TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(120);
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -242,6 +246,10 @@ pub struct AudioProcessorConfig {
     pub openai_api_key: Option<String>,
     /// OpenAI model name (e.g. `"whisper-1"`).
     pub openai_model: Option<String>,
+    /// OpenAI-compatible base URL (only used for `OpenAIWhisper`). Defaults to
+    /// `OPENAI_API_BASE` env, then `https://api.openai.com/v1` — same env the
+    /// embedding provider honors, so proxy/gateway deployments can route both.
+    pub openai_api_base: String,
     /// Language hint (ISO 639-1 code, e.g. `"en"`, `"fr"`). May be empty for
     /// auto-detection.
     pub language_hint: Option<String>,
@@ -261,6 +269,10 @@ impl Default for AudioProcessorConfig {
             max_speakers: None,
             openai_api_key: None,
             openai_model: Some("whisper-1".to_string()),
+            // Same default as the embedding provider's OpenAI base.
+            openai_api_base: std::env::var("OPENAI_API_BASE").unwrap_or_else(|_| {
+                crate::shared::http_client::OPENAI_DEFAULT_BASE_URL.to_string()
+            }),
             language_hint: None,
             prompt: None,
             temperature: 0.0,
@@ -461,10 +473,13 @@ fn call_openai_whisper_api(
     }
 
     let resp = client
-        .post("https://api.openai.com/v1/audio/transcriptions")
+        .post(crate::shared::url_join::join_url(
+            &config.openai_api_base,
+            "audio/transcriptions",
+        ))
         .header("Authorization", format!("Bearer {api_key}"))
         .multipart(form)
-        .timeout(Duration::from_secs(120))
+        .timeout(AUDIO_TRANSCRIBE_TIMEOUT)
         .send()
         .map_err(|e| AudioProcessorError::HttpRequest(e.to_string()))?;
 

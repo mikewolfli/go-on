@@ -242,7 +242,12 @@ impl ReliabilityOptimizer {
     }
 
     fn score(&self, agent: &str) -> f64 {
-        self.reliability_scores.get(agent).copied().unwrap_or(0.5)
+        self.reliability_scores
+            .get(agent)
+            .copied()
+            // Unknown agent = neutral reliability (same convention as the
+            // agent selector's DEFAULT_REPUTATION_SCORE).
+            .unwrap_or(crate::acp::helpers::agent_selector::DEFAULT_REPUTATION_SCORE)
     }
 
     fn suggest_most_reliable(&self) -> Option<String> {

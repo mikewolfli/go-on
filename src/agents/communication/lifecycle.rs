@@ -151,10 +151,7 @@ impl AgentLifecycle {
 impl Default for AgentLifecycle {
     fn default() -> Self {
         Self::Registered {
-            at_ms: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
+            at_ms: crate::shared::timestamps::now_ts_ms_u64(),
         }
     }
 }

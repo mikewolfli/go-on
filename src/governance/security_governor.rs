@@ -29,7 +29,6 @@ use indexmap::IndexMap;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
 // Policy actions
@@ -133,19 +132,44 @@ impl PolicyCondition {
 
 /// Simple regex-or-glob matcher (supports `*` glob wildcard and literal regex).
 fn regex_match(haystack: &str, pattern: &str) -> bool {
+    // Compiled-pattern cache: policy evaluation runs per request, and
+    // compiling the same user-configured pattern on every evaluation wasted
+    // CPU. Only `Matches` conditions use this path; patterns come from the
+    // (bounded) policy config.
+    static REGEX_CACHE: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, Option<regex::Regex>>>,
+    > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+    let compiled = {
+        let mut cache = REGEX_CACHE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if cache.len() > 128 {
+            cache.clear();
+        }
+        cache
+            .entry(pattern.to_string())
+            .or_insert_with(|| compile_matcher(pattern))
+            .clone()
+    };
+    match compiled {
+        Some(re) => re.is_match(haystack),
+        None => haystack == pattern,
+    }
+}
+
+/// Compile `pattern` as a glob (when it contains `*`) or literal regex;
+/// returns `None` when neither compiles (caller falls back to exact match).
+fn compile_matcher(pattern: &str) -> Option<regex::Regex> {
     // If the pattern contains only `*` as a wildcard, treat it as a simple glob.
     if pattern.contains('*') {
         let re_pattern = format!("^{}$", regex::escape(pattern).replace(r"\*", ".*"));
         if let Ok(re) = regex::Regex::new(&re_pattern) {
-            return re.is_match(haystack);
+            return Some(re);
         }
     }
     // Otherwise try literal regex.
-    if let Ok(re) = regex::Regex::new(pattern) {
-        return re.is_match(haystack);
-    }
-    // Fall back to exact match.
-    haystack == pattern
+    regex::Regex::new(pattern).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -325,10 +349,7 @@ impl AuditEntry {
         actor: String,
         detail: String,
     ) -> Self {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+        let timestamp = crate::shared::timestamps::now_ts();
 
         Self {
             timestamp,

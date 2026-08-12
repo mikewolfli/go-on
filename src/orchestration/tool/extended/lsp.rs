@@ -15,17 +15,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-/// Shared tokio runtime for LSP operations — created once.
-static LSP_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-fn lsp_runtime() -> &'static tokio::runtime::Runtime {
-    LSP_RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build shared LSP runtime")
-    })
-}
 use anyhow::{Context, Result};
 use regex::Regex;
 use serde_json::{json, Value};
@@ -117,6 +106,14 @@ impl LspClient {
         let mut buf = vec![0u8; 8192];
         let mut pos = 0;
         loop {
+            // Grow the buffer when full so responses larger than the initial
+            // 8 KiB (large hover/diagnostic payloads) keep reading instead of
+            // hitting a zero-length read and being misread as a closed
+            // connection.
+            if pos >= buf.len() {
+                let new_len = buf.len().saturating_mul(2).max(16 * 1024);
+                buf.resize(new_len, 0u8);
+            }
             let n = stream.read(&mut buf[pos..]).await?;
             if n == 0 {
                 anyhow::bail!("LSP connection closed");
@@ -131,7 +128,21 @@ impl LspClient {
                     .and_then(|s| s.trim().parse::<usize>().ok())
                     .ok_or_else(|| anyhow::anyhow!("missing Content-Length header"))?;
                 let body_start = end + 4;
-                let total_needed = body_start + content_length;
+                // Guard against absurd Content-Length values from a hostile or
+                // malformed LSP server: checked_add prevents overflow panic and
+                // the cap avoids giant allocations (OOM abort).
+                const MAX_LSP_RESPONSE_BODY: usize = 64 * 1024 * 1024;
+                if content_length > MAX_LSP_RESPONSE_BODY {
+                    anyhow::bail!("LSP response body too large ({content_length} bytes)");
+                }
+                let total_needed = body_start
+                    .checked_add(content_length)
+                    .ok_or_else(|| anyhow::anyhow!("LSP Content-Length overflow"))?;
+                // The body may exceed the initial buffer — resize up front so
+                // the body-read loop never runs out of room.
+                if total_needed > buf.len() {
+                    buf.resize(total_needed, 0u8);
+                }
                 while pos < total_needed {
                     let n = stream.read(&mut buf[pos..]).await?;
                     if n == 0 {
@@ -210,7 +221,9 @@ impl LspClient {
                 let file = uri.strip_prefix("file://").unwrap_or(uri);
                 Some(json!({
                     "file": file,
-                    "line": def_line + 1,
+                    // LSP lines are 0-based; saturate so a hostile server's
+                    // u64::MAX line cannot overflow in debug builds.
+                    "line": def_line.saturating_add(1),
                     "content": "",
                 }))
             })
@@ -264,7 +277,8 @@ impl LspClient {
                 let file = uri.strip_prefix("file://").unwrap_or(uri);
                 Some(json!({
                     "file": file,
-                    "line": ref_line + 1,
+                    // LSP lines are 0-based; saturate (see query_definitions).
+                    "line": ref_line.saturating_add(1),
                     "content": "",
                 }))
             })
@@ -436,9 +450,11 @@ fn run_lsp_definition(
 ) -> Result<Vec<Value>> {
     let addr = address.to_string();
     let fp = file_path.to_string();
-    lsp_runtime().block_on(async {
-        let client = cached_lsp_client(&addr).await?;
-        client.query_definition(&fp, line, column).await
+    crate::orchestration::tool::exec_common::with_blocking_runtime(|rt| {
+        rt.block_on(async {
+            let client = cached_lsp_client(&addr).await?;
+            client.query_definition(&fp, line, column).await
+        })
     })
 }
 
@@ -452,9 +468,11 @@ fn run_lsp_references(
 ) -> Result<Vec<Value>> {
     let addr = address.to_string();
     let fp = file_path.to_string();
-    lsp_runtime().block_on(async {
-        let client = cached_lsp_client(&addr).await?;
-        client.query_references(&fp, line, column).await
+    crate::orchestration::tool::exec_common::with_blocking_runtime(|rt| {
+        rt.block_on(async {
+            let client = cached_lsp_client(&addr).await?;
+            client.query_references(&fp, line, column).await
+        })
     })
 }
 
@@ -472,11 +490,13 @@ fn run_lsp_code_action(
     let fp = file_path.to_string();
     let act = action.to_string();
     let det = detail.to_string();
-    lsp_runtime().block_on(async {
-        let client = cached_lsp_client(&addr).await?;
-        client
-            .query_code_action(&fp, &act, &det, line, column)
-            .await
+    crate::orchestration::tool::exec_common::with_blocking_runtime(|rt| {
+        rt.block_on(async {
+            let client = cached_lsp_client(&addr).await?;
+            client
+                .query_code_action(&fp, &act, &det, line, column)
+                .await
+        })
     })
 }
 

@@ -142,10 +142,9 @@ impl Agent for GeminiAgent {
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "gemini.api_key_env")?;
-        let endpoint = format!(
-            "{}/models/{}:streamGenerateContent?alt=sse",
-            self.base_url.trim_end_matches('/'),
-            self.model,
+        let endpoint = crate::shared::url_join::join_url(
+            &self.base_url,
+            &format!("models/{}:streamGenerateContent?alt=sse", self.model),
         );
         let payload = self.build_payload(messages, principles, options);
 

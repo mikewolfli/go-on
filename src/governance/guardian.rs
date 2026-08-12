@@ -28,6 +28,10 @@ use crate::agent::{Agent, Message};
 use crate::orchestration::autonomy_runtime::TOKEN_THINKING_PREFIX;
 use crate::orchestration::tool::ToolInput;
 
+/// Default review timeout when none is specified (90s) — generous enough for
+/// an independent model pass while still bounding the tool path.
+const DEFAULT_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
+
 // ---------------------------------------------------------------------------
 // GuardianDecision — structured review outcome
 // ---------------------------------------------------------------------------
@@ -147,7 +151,7 @@ impl GuardianReviewer {
         Self {
             review_agent,
             circuit_breaker: Mutex::new(GuardianCircuitBreaker::default()),
-            timeout: timeout.unwrap_or(Duration::from_secs(90)),
+            timeout: timeout.unwrap_or(DEFAULT_REVIEW_TIMEOUT),
         }
     }
 
@@ -171,7 +175,7 @@ impl GuardianReviewer {
                 max_recent_denials,
                 window_size,
             )),
-            timeout: timeout.unwrap_or(Duration::from_secs(90)),
+            timeout: timeout.unwrap_or(DEFAULT_REVIEW_TIMEOUT),
         }
     }
 

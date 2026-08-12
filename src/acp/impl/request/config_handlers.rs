@@ -70,7 +70,7 @@ pub(super) async fn build_debug_panel_payload_impl(server: &AcpServer) -> Value 
             },
             "autonomy_behavior_validation": {
                 "ready": behavior_backed,
-                "behavior_backed": true,
+                "behavior_backed": behavior_backed,
                 "tool_followup_enabled": true,
                 "clarification_resume_enabled": true,
                 "execution_cache_bypass_enabled": true,

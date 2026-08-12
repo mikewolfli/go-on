@@ -19,6 +19,10 @@ use crate::orchestration::self_evolution::evolution_loop::PubsubTriggerSource;
 
 use super::prelude::{with_acp_lock, with_acp_lock_async, MaintenanceTracker};
 
+/// S6 startup deferral: background scans/tasks sleep this long before their
+/// first run so the server can start accepting requests first.
+pub(crate) const STARTUP_DEFER_DELAY: Duration = Duration::from_millis(500);
+
 /// Maintenance cycle result
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MaintenanceCycleResult {
@@ -138,7 +142,11 @@ pub async fn start_background_tasks(
     let _ = SHARED_BG_CTX.set(ctx);
 
     // ── Metacognitive persistence (GAP-B53-56) ──────────────────────────
-    // Save metacognitive state to disk every 60 seconds.
+    // Save metacognitive state to disk periodically. The interval is driven
+    // by `runtime.maintenance_interval_seconds` (default 60) — this is its
+    // real consumer; before, the field was only reported by the lifecycle
+    // API and changing the config had no scheduling effect.
+    let metacognitive_interval = server.runtime_config.maintenance_interval_seconds.max(1);
     if let Some(ref cb) = server.governance_deps.capability_bus {
         use crate::intelligence::metacognitive_persistence::MetacognitivePersistence;
         let storage_dir = crate::shared::goon_paths::goon_subdir("metacognitive");
@@ -169,7 +177,8 @@ pub async fn start_background_tasks(
             let shutdown = shutdown_notify.clone();
             spawn_background_task(
                 async move {
-                    let mut interval = tokio::time::interval(Duration::from_secs(60));
+                    let mut interval =
+                        tokio::time::interval(Duration::from_secs(metacognitive_interval));
                     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
                     loop {
                         tokio::select! {
@@ -203,6 +212,64 @@ pub async fn start_background_tasks(
         }
     }
 
+    // ── Periodic health self-check (driven by runtime.health_interval_seconds) ─
+    // The field was previously only echoed by the lifecycle API — this loop is
+    // its real consumer: it periodically re-verifies the same subsystem signals
+    // as the on-demand `health.check` RPC and logs on *transitions* (ok→failed
+    // and back), so a degraded server is reported instead of being silently
+    // "healthy" without producing per-interval log spam.
+    let health_interval = server.runtime_config.health_interval_seconds.max(1);
+    {
+        let harness_bus_configured = server.governance_deps.harness_bus.is_some();
+        let agent_registry = server.agent_registry();
+        let skill_registry = Arc::clone(&server.orchestration_deps.skill_registry);
+        let shutdown = shutdown_notify.clone();
+        spawn_background_task(
+            async move {
+                // S6: delay 500ms to let the server start accepting requests first
+                tokio::time::sleep(STARTUP_DEFER_DELAY).await;
+
+                let mut ticker = tokio::time::interval(Duration::from_secs(health_interval));
+                ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                let mut prev_ok = true;
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = ticker.tick() => {}
+                    }
+
+                    let registry_ok = agent_registry
+                        .as_ref()
+                        .map(|r| !r.names().is_empty())
+                        .unwrap_or(false);
+                    let skill_count = skill_registry
+                        .read()
+                        .map(|r| r.list(false).len())
+                        .unwrap_or(0);
+                    let ok = harness_bus_configured && registry_ok;
+                    if ok {
+                        if !prev_ok {
+                            tracing::info!(
+                                target: "acp",
+                                "periodic health check: subsystems recovered"
+                            );
+                        }
+                    } else {
+                        tracing::warn!(
+                            target: "acp",
+                            harness_bus = harness_bus_configured,
+                            agent_registry_ok = registry_ok,
+                            skill_count,
+                            "periodic health check: subsystem degradation detected"
+                        );
+                    }
+                    prev_ok = ok;
+                }
+            },
+            "periodic_health_check",
+        );
+    }
+
     // ── mTLS certificate monitor (GAP-B52) ──────────────────────────────
     // Certificate expiry monitoring is implemented and wired in
     // `security::wire_cert_monitor` (called from server_builder::wire_server):
@@ -222,7 +289,7 @@ pub async fn start_background_tasks(
         spawn_background_task(
             async move {
                 // S6: delay 500ms to let the server start accepting requests first
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(STARTUP_DEFER_DELAY).await;
 
                 let mut ticker = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
                 ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -260,7 +327,7 @@ pub async fn start_background_tasks(
         spawn_background_task(
             async move {
                 // S6: delay 500ms to let the server start accepting requests first
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(STARTUP_DEFER_DELAY).await;
 
                 let mut ticker = tokio::time::interval(Duration::from_secs(60 * 60));
                 ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -314,7 +381,7 @@ pub async fn start_background_tasks(
         spawn_background_task(
             async move {
                 // S6: delay 500ms to let the server start accepting requests first
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(STARTUP_DEFER_DELAY).await;
 
                 let mut interval = tokio::time::interval(Duration::from_millis(30_000));
                 interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -357,7 +424,7 @@ pub async fn start_background_tasks(
         spawn_background_task(
             async move {
                 // S6: delay 500ms to let the server start accepting requests first
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(STARTUP_DEFER_DELAY).await;
 
                 let llm_agent = evolution_registry.as_ref().and_then(|registry| {
                     registry
@@ -595,7 +662,7 @@ pub async fn start_background_tasks(
         let memory_store = Arc::clone(&server.persistence.memory_store);
         tokio::spawn(async move {
             // S6: defer initial promote by 500ms to let server accept requests first
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::time::sleep(STARTUP_DEFER_DELAY).await;
             match crate::memory::memory_bridge::bridge_promote(&memory_store).await {
                 Ok(report) => {
                     if report.promoted_count > 0 {

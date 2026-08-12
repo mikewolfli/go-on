@@ -67,7 +67,7 @@ fn select_vote_winner(
         let rep = reputation_scores
             .get(&candidate.agent)
             .copied()
-            .unwrap_or(0.5);
+            .unwrap_or(crate::acp::helpers::agent_selector::DEFAULT_REPUTATION_SCORE);
         let length = candidate.response.chars().count();
         if votes > winner_votes
             || (votes == winner_votes && rep > winner_rep)

@@ -36,7 +36,7 @@ impl DeepSeekAgent {
 
     fn completion_endpoint(&self) -> String {
         // Official DeepSeek Chat Completions path is /chat/completions.
-        format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
+        crate::shared::url_join::join_url(&self.base_url, "chat/completions")
     }
 
     fn normalize_user_id(value: &Value) -> Option<String> {

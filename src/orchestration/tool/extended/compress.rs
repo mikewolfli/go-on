@@ -55,8 +55,11 @@ impl Tool for CompressTool {
             "tool: gzip compressing file"
         );
 
-        let input_data = std::fs::read(&validated_path)
-            .with_context(|| format!("failed to read input file: {}", validated_path.display()))?;
+        let input_data = crate::orchestration::tool::exec_common::read_file_capped(
+            &validated_path,
+            MAX_DECOMPRESSED_TOOL_BYTES,
+        )
+        .with_context(|| format!("failed to read input file: {}", validated_path.display()))?;
 
         let input_len = input_data.len();
 
@@ -129,14 +132,28 @@ impl Tool for CompressTool {
 
 // ── DecompressTool ──────────────────────────────────────────────────────────
 
+/// Cap for gzip decompression output (zip-bomb guard).
+///
+/// The compressed input can be tiny while decompressing to gigabytes; an
+/// unbounded `read_to_end` would OOM the process before the tool ever writes
+/// the result to disk. 1 GiB comfortably covers legitimate archives.
+pub(crate) const MAX_DECOMPRESSED_TOOL_BYTES: usize = 1024 * 1024 * 1024;
+
 /// Shared gzip decompression helper used by both `decompress` and the archive
 /// extraction path so the two entry points cannot drift.
 pub(crate) fn decompress_gzip_bytes(input_data: &[u8]) -> Result<Vec<u8>> {
-    let mut decoder = flate2::read::GzDecoder::new(input_data);
+    let decoder = flate2::read::GzDecoder::new(input_data);
     let mut decompressed_data = Vec::new();
-    decoder
+    let read = decoder
+        .take(MAX_DECOMPRESSED_TOOL_BYTES as u64 + 1)
         .read_to_end(&mut decompressed_data)
         .context("failed to decompress gzip data")?;
+    if read > MAX_DECOMPRESSED_TOOL_BYTES {
+        anyhow::bail!(
+            "decompressed data exceeds the {} byte limit (possible decompression bomb)",
+            MAX_DECOMPRESSED_TOOL_BYTES
+        );
+    }
     Ok(decompressed_data)
 }
 
@@ -179,7 +196,11 @@ impl Tool for DecompressTool {
             "tool: gzip decompressing file"
         );
 
-        let input_data = std::fs::read(&validated_path).with_context(|| {
+        let input_data = crate::orchestration::tool::exec_common::read_file_capped(
+            &validated_path,
+            MAX_DECOMPRESSED_TOOL_BYTES,
+        )
+        .with_context(|| {
             format!(
                 "failed to read compressed file: {}",
                 validated_path.display()

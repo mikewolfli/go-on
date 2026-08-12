@@ -3,6 +3,20 @@ use serde_json::Value;
 /// JSON-RPC protocol version string.
 pub const JSONRPC_VERSION: &str = "2.0";
 
+/// Human-readable text for an MCP tool result: prefers the structured
+/// payload's `message` string (set by the workflow tools), otherwise falls
+/// back to the serialized JSON payload.
+///
+/// Shared by the native MCP arm and the ACP bridge (`acp.mcp.tools.call`)
+/// so both entry points return the same text shape for the same tool.
+pub fn mcp_tool_result_text(structured: &Value) -> String {
+    structured
+        .get("message")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| serde_json::to_string(structured).unwrap_or_default())
+}
+
 // NOTE: MCP response types (McpInitializeResult, McpListResourcesResult, etc.)
 // are defined at the bottom of this file — no separate module needed.
 

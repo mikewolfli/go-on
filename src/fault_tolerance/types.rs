@@ -219,6 +219,9 @@ pub struct ClusterHealthConfig {
     /// Ratio of degraded nodes at or above which the cluster is **Degraded**
     /// (unless already Critical). Default: 0.3
     pub unhealthy_threshold: f64,
+    /// Number of unresolved faults at or above which the cluster is
+    /// **Critical** regardless of node ratios. Default: 10
+    pub critical_fault_count: usize,
 }
 
 impl Default for ClusterHealthConfig {
@@ -227,6 +230,7 @@ impl Default for ClusterHealthConfig {
             healthy_threshold: 0.5,
             degraded_threshold: 0.2,
             unhealthy_threshold: 0.3,
+            critical_fault_count: 10,
         }
     }
 }

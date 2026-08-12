@@ -38,6 +38,12 @@ use crate::flow::FlowManager;
 use crate::i18n::runtime::{t, tf};
 use crate::orchestration::mode::ModeKind;
 
+/// Whole-chat-request timeout shared by the callers that bound an entire
+/// `process_chat_request` invocation (ACP session prompt and OpenAI-compat
+/// non-streaming): 300s covers provider calls, keychain fallback, agent
+/// selection, and the harness review gate.
+pub(crate) const CHAT_REQUEST_TIMEOUT_SECS: u64 = 300;
+
 use crate::orchestration::task_router::{TaskRouter, TaskType};
 
 use crate::memory_module::{MemoryClass, MemoryEntry};
@@ -45,6 +51,7 @@ use crate::reinforcement::{
     build_task_plan, build_workflow_generated_artifact, persist_workflow_generated, ArtifactLedger,
 };
 use crate::rpc_protocol::RequestTraceContext;
+use crate::shared::text::contains_ascii_case_insensitive;
 
 pub mod agent_runtime;
 pub mod agent_selection;
@@ -1686,7 +1693,8 @@ pub(crate) async fn auto_generate_workflow_from_conversation(
         return Ok(None);
     }
 
-    let last_msg = user_messages.last().unwrap_or(&"").to_lowercase();
+    let last_user_msg = user_messages.last().copied().unwrap_or("");
+    let last_msg = last_user_msg.to_lowercase();
     let response_lower = response_text.to_lowercase();
 
     // Check for workflow generation intent
@@ -1707,7 +1715,9 @@ pub(crate) async fn auto_generate_workflow_from_conversation(
 
     // Build a workflow from the conversation
     let task = user_messages.join(" | ");
-    let workflow_name = generate_workflow_name(&last_msg, &task);
+    // Name extraction uses the original (case-preserved) last user message;
+    // `last_msg` above stays lowercased for the intent checks only.
+    let workflow_name = generate_workflow_name(last_user_msg, &task);
 
     // Create a simple workflow plan using the existing task plan builder
     let plan = build_task_plan(&task);
@@ -1738,13 +1748,12 @@ pub(crate) async fn auto_generate_workflow_from_conversation(
 
 /// Generate a workflow name from conversation content
 fn generate_workflow_name(last_msg: &str, _full_task: &str) -> String {
-    // Try to extract a name from the message
-    let lower = last_msg.to_lowercase();
-    let words: Vec<&str> = lower.split_whitespace().collect();
+    // Try to extract a name from the message (preserving its original case)
+    let words: Vec<&str> = last_msg.split_whitespace().collect();
 
     // Look for patterns like "workflow for X" or "X workflow"
     for (i, w) in words.iter().enumerate() {
-        if *w == "for" && i + 1 < words.len() {
+        if w.eq_ignore_ascii_case("for") && i + 1 < words.len() {
             let name_candidate = words[i + 1];
             let sanitized: String = name_candidate
                 .chars()
@@ -1765,13 +1774,19 @@ fn generate_workflow_name(last_msg: &str, _full_task: &str) -> String {
 fn generate_skill_name_from_conversation(user_msg: &str, ai_response: &str) -> String {
     // Try to extract a name from the AI response (it might mention the skill name)
     for line in ai_response.lines() {
-        let lower = line.to_lowercase();
-        if lower.contains("skill")
-            && (lower.contains("called") || lower.contains("named") || lower.contains("`"))
+        if contains_ascii_case_insensitive(line, "skill")
+            && (contains_ascii_case_insensitive(line, "called")
+                || contains_ascii_case_insensitive(line, "named")
+                || line.contains('`'))
         {
-            if let Some(name_start) = lower.find('`') {
-                if let Some(name_end) = lower[name_start + 1..].find('`') {
-                    let name = &lower[name_start + 1..name_start + 1 + name_end];
+            // Backticks are ASCII, so `find` offsets are char boundaries —
+            // slice the ORIGINAL line to preserve the name's case. (The old
+            // code sliced a `to_lowercase()` copy, lowercasing the stored
+            // skill name and making the registry duplicate check miss
+            // existing names like `MySkill` when it looked up `myskill`.)
+            if let Some(name_start) = line.find('`') {
+                if let Some(name_end) = line[name_start + 1..].find('`') {
+                    let name = &line[name_start + 1..name_start + 1 + name_end];
                     if !name.is_empty() && name.len() <= 64 {
                         return name.to_string();
                     }

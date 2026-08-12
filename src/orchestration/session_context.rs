@@ -169,10 +169,9 @@ impl SessionContextManager {
         let has_decision = self.decisions.iter().any(|(_, i)| *i == index);
         let has_file_path = self.file_paths.iter().any(|fp| content.contains(fp));
         let has_error = self.error_messages.contains(&index);
-        let mut score = (has_code_block as u32) * 3;
-        if has_code_block {
-            score += 15;
-        }
+        // Code blocks get the highest single-weight bonus (18); the previous
+        // `* 3` + `+= 15` spelling was two steps for one weight and confusing.
+        let mut score = if has_code_block { 18 } else { 0 };
         if has_decision {
             score += 20;
         }

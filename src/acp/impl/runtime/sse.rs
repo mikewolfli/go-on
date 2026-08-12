@@ -9,6 +9,12 @@ use tokio::io::AsyncWriteExt;
 
 use super::tcp_write_timeout;
 
+/// Periodic SSE flush interval (in events) — flushes the socket buffer every
+/// N events to batch syscalls while keeping stream latency low. Single
+/// definition shared by the ACP HTTP arm (`runtime/http.rs`) and the
+/// OpenAI-compat arm (`runtime/openai_compat.rs`).
+pub(crate) const SSE_FLUSH_INTERVAL: usize = 4;
+
 /// Write SSE response headers (Content-Type: text/event-stream) to a socket.
 pub(crate) async fn write_sse_headers(
     socket: &mut (impl tokio::io::AsyncWrite + Unpin),
@@ -64,7 +70,7 @@ pub(crate) async fn write_sse_raw_event(
 /// Flush pending SSE data to the socket.
 /// Call this periodically during streaming (e.g. every 10 events or every 10ms).
 pub(crate) async fn flush_sse(socket: &mut (impl tokio::io::AsyncWrite + Unpin)) -> Result<()> {
-    tokio::time::timeout(std::time::Duration::from_secs(30), socket.flush())
+    tokio::time::timeout(crate::shared::http_timeouts::SSE_FLUSH_TIMEOUT, socket.flush())
         .await
         .map_err(|_| anyhow::anyhow!("timeout flushing socket"))?
         .map_err(|e| anyhow::anyhow!("socket flush error: {e}"))?;

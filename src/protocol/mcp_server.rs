@@ -35,6 +35,19 @@ use crate::tool::ToolRegistry;
 /// local copy, so the two arms cannot drift apart.
 pub const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
 
+/// JSON-RPC batch size cap (both stdio and HTTP transports): a body/line of
+/// MAX_BODY_SIZE can carry ~270k tiny requests, each spawning a concurrent
+/// task plus audit records — batch amplification guard.
+pub(crate) const MAX_BATCH_SIZE: usize = 100;
+
+/// Timeout for reading the remaining HTTP request body (30s).
+const HTTP_BODY_READ_TIMEOUT: Duration = crate::shared::http_timeouts::HTTP_BODY_READ_TIMEOUT;
+/// Timeout for writing the SSE response header (30s).
+const SSE_HEADER_WRITE_TIMEOUT: Duration = crate::shared::http_timeouts::SOCKET_WRITE_TIMEOUT;
+/// SSE heartbeat interval (30s) — clients use it to detect dead connections.
+pub(crate) const SSE_HEARTBEAT_INTERVAL: Duration =
+    crate::shared::http_timeouts::SSE_HEARTBEAT_INTERVAL;
+
 /// Unified predicate for notification responses (JSON-RPC 2.0 §notifications).
 ///
 /// A response whose `id` is `None` (never had an id) or carries the
@@ -176,6 +189,26 @@ impl McpStdioServer {
                         if line_str.starts_with('[') {
                             match serde_json::from_str::<Vec<JsonRpcRequest>>(&line_str) {
                                 Ok(requests) => {
+                                    // Batch amplification guard: a ≤10MB line
+                                    // can carry ~270k tiny requests, each
+                                    // spawning a concurrent task + audit.
+                                    if requests.len() > MAX_BATCH_SIZE {
+                                        warn!(
+                                            "MCP: batch request with {} items exceeds the {} item limit",
+                                            requests.len(),
+                                            MAX_BATCH_SIZE
+                                        );
+                                        let mut stdout = stdout.lock().await;
+                                        let err_line = serde_json::to_string(&json!({
+                                            "jsonrpc": "2.0",
+                                            "id": null,
+                                            "error": {"code": -32600, "message": format!("batch too large (max {} items)", MAX_BATCH_SIZE)}
+                                        }))?;
+                                        stdout.write_all(err_line.as_bytes()).await?;
+                                        stdout.write_all(b"\n").await?;
+                                        stdout.flush().await?;
+                                        continue;
+                                    }
                                     // Process each request in the batch concurrently
                                     // (matching the HTTP transport) while preserving
                                     // request order in the response stream.
@@ -585,6 +618,8 @@ impl McpHttpServer {
             .acp_server
             .as_ref()
             .map(|s| s.runtime_config.shutdown_drain_seconds)
+            // Fallback matches the runtime default (see
+            // `default_runtime_shutdown_drain_seconds`).
             .unwrap_or(30);
         if drain_seconds > 0 {
             info!("Draining connections for {} seconds...", drain_seconds);
@@ -837,6 +872,13 @@ async fn handle_http_connection(
         return Ok(());
     }
 
+    // POST path is deliberately NOT validated: the MCP Streamable HTTP
+    // transport lets clients POST to the endpoint the server advertises
+    // (SSE advertises `/mcp`), but many SDKs and the integration suite
+    // POST to `/`; rejecting non-`/mcp` paths would break them. The JSON-RPC
+    // body itself is the actual routing signal.
+    debug!("mcp http POST accepted (path={path})");
+
     // ── Entry auth (shared evaluator with the ACP HTTP arm) ───────────────
     if let Some(ref server) = acp_server {
         match crate::acp::r#impl::runtime::security::evaluate_entry_auth(server, header_part) {
@@ -987,7 +1029,7 @@ async fn handle_http_connection(
     let mut body_bytes = body_initial_part.as_bytes().to_vec();
     if body_bytes.len() < content_length {
         let mut remaining = vec![0u8; content_length - body_bytes.len()];
-        tokio::time::timeout(Duration::from_secs(30), socket.read_exact(&mut remaining))
+        tokio::time::timeout(HTTP_BODY_READ_TIMEOUT, socket.read_exact(&mut remaining))
             .await
             .map_err(|_| anyhow::anyhow!("{}", t("error.http_body_timeout")))??;
         body_bytes.extend_from_slice(&remaining);
@@ -1024,6 +1066,31 @@ async fn handle_http_connection(
                 return Ok(());
             }
         };
+
+        // Batch amplification guard (same limit as the stdio transport): a
+        // ≤10MB body can carry ~270k tiny requests, each spawning a
+        // concurrent task + audit.
+        if requests.len() > MAX_BATCH_SIZE {
+            warn!(
+                "MCP HTTP: batch request with {} items exceeds the {} item limit",
+                requests.len(),
+                MAX_BATCH_SIZE
+            );
+            let error_response = mcp_error_response(
+                -32600,
+                format!("batch too large (max {} items)", MAX_BATCH_SIZE),
+                "mcp.batch_too_large",
+                None,
+            );
+            write_http_json_response(
+                socket,
+                200,
+                serde_json::to_value(error_response)?,
+                &cors_headers,
+            )
+            .await?;
+            return Ok(());
+        }
 
         // Process each request in the batch concurrently. JSON-RPC 2.0 allows
         // batch responses in any order; join_all preserves input order, so the
@@ -1165,7 +1232,7 @@ async fn handle_mcp_sse_connection(
         cors_headers
     );
     tokio::time::timeout(
-        std::time::Duration::from_secs(30),
+        SSE_HEADER_WRITE_TIMEOUT,
         socket.write_all(header.as_bytes()),
     )
     .await
@@ -1189,7 +1256,7 @@ async fn handle_mcp_sse_connection(
     // change. This also keeps the broadcast channel a live producer path.
     let _ = broadcast_sse_notification(&sse_broadcaster, tools_list_changed_notification());
 
-    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
+    let mut heartbeat = tokio::time::interval(SSE_HEARTBEAT_INTERVAL);
 
     loop {
         tokio::select! {

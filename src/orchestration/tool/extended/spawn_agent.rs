@@ -64,18 +64,6 @@ static SPAWN_BUDGET: OnceLock<Arc<AtomicU64>> = OnceLock::new();
 /// Maximum concurrent sub-agent spawns. Default 128.
 const DEFAULT_MAX_CONCURRENCY: u64 = 128;
 
-/// Shared tokio runtime for spawn_agent operations.
-static SPAWN_AGENT_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-fn spawn_agent_runtime() -> &'static tokio::runtime::Runtime {
-    SPAWN_AGENT_RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build shared spawn_agent runtime")
-    })
-}
-
 /// Initialise the global `AgentRegistry` reference used by `SpawnAgentTool`.
 pub fn init_spawn_agent_registry(registry: Arc<AgentRegistry>) {
     SPAWN_AGENT_REGISTRY.set(registry).ok();
@@ -181,27 +169,31 @@ impl Tool for SpawnAgentTool {
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         // This tool is inherently async (agent chat is async). The sync `run()`
-        // always executes on the dedicated blocking runtime (see
-        // `spawn_agent_runtime()`), mirroring `web_search.rs`/`lsp.rs`. It must
-        // NOT use `Handle::try_current() → handle.block_on`: that would block a
-        // tokio worker thread when `run()` is called from inside an existing
-        // runtime. Async callers should always use run_async.
+        // always executes on the shared dedicated blocking runtime (see
+        // `exec_common::blocking_runtime()`), mirroring `web_search.rs`/`lsp.rs`.
+        // It must NOT use `Handle::try_current() → handle.block_on`: that would
+        // block a tokio worker thread when `run()` is called from inside an
+        // existing runtime. Async callers should always use run_async.
         // Validate parameters FIRST so bad-input tests get a proper error.
         let params = parse_spawn_params(input)?;
         let registry = agent_registry()?.clone();
 
         // Always use the dedicated blocking runtime. Never `Handle::try_current()`
         // + `handle.block_on()` here — when `run()` is invoked from within an
-        // existing tokio runtime that would block a worker thread.
-        spawn_agent_runtime().block_on(execute_spawn(
-            registry,
-            params.task,
-            params.agent_name,
-            params.model_override,
-            params.timeout_secs,
-            params.role,
-            params.token_budget,
-        ))
+        // existing tokio runtime that would block a worker thread. The guard
+        // serializes concurrent sync `run()` calls on the shared
+        // current-thread runtime.
+        crate::orchestration::tool::exec_common::with_blocking_runtime(|rt| {
+            rt.block_on(execute_spawn(
+                registry,
+                params.task,
+                params.agent_name,
+                params.model_override,
+                params.timeout_secs,
+                params.role,
+                params.token_budget,
+            ))
+        })
     }
 
     fn run_async(

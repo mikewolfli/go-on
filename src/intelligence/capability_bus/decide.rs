@@ -322,7 +322,7 @@ impl CapabilityBus {
                     .iter()
                     .find(|r| r.agent == *name)
                     .map(|r| r.score)
-                    .unwrap_or(0.5);
+                    .unwrap_or(crate::acp::helpers::agent_selector::DEFAULT_REPUTATION_SCORE);
                 let recency_score = recency_score(&sensing.recent_agents, name);
                 let task_fit_score = {
                     let keyword_fit = task_fit_score(task, name);
@@ -634,7 +634,9 @@ impl CapabilityBus {
             .iter()
             .find(|entry| Some(entry.agent.as_str()) == selected_agent.as_deref())
             .map(|entry| entry.total_score)
-            .unwrap_or(0.5);
+            // No score for the selected agent — neutral confidence (same
+            // convention as DEFAULT_REPUTATION_SCORE).
+            .unwrap_or(crate::acp::helpers::agent_selector::DEFAULT_REPUTATION_SCORE);
 
         // Phase 4: Get recommended execution mode from OrchestrationBus
         #[cfg(any(feature = "sub-bus-orchestration", feature = "sub-bus-tool"))]
