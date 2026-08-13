@@ -138,16 +138,12 @@ pub(crate) async fn apply_capability_bus_selection(
 
 /// Content of the last `user` message, falling back to the last message when
 /// no user message exists, and to an empty string when `messages` is empty.
-/// Mirrors the extraction style of `extract_task_description` (chat.rs); the
-/// task description is derived purely from `messages` with no caching.
+///
+/// Single source of truth: delegates to `extract_task_description` (chat.rs)
+/// — this module previously re-implemented the identical extraction inline,
+/// so the two could drift.
 fn latest_user_message_content(messages: &[Message]) -> String {
-    messages
-        .iter()
-        .rev()
-        .find(|message| message.role.eq_ignore_ascii_case("user"))
-        .map(|message| message.content.clone())
-        .or_else(|| messages.last().map(|message| message.content.clone()))
-        .unwrap_or_default()
+    crate::acp::r#impl::chat::extract_task_description(messages)
 }
 
 /// Map the authoritative `TaskRouter::analyze_task` classification onto the

@@ -19,7 +19,7 @@ use crate::acp::server::AcpServer;
 use crate::agent::Message;
 use crate::i18n::runtime::{t, tf};
 use crate::orchestration::session_compressor::{IncrementalState, SessionCompressor};
-use crate::orchestration::session_context::SessionContextManager;
+use crate::orchestration::session_context::{ContextWindowBudget, SessionContextManager};
 use crate::rpc_protocol::{chat_trace_context, child_trace_context, RequestTraceContext};
 
 use super::params::ChatParams;
@@ -218,9 +218,47 @@ pub(crate) async fn handle_chat(
             .clone()
             .unwrap_or_else(|| "default".to_string());
         let msg_count = chat_params.messages.len();
+
+        // Phase-level history budget: `max_history_messages` /
+        // `max_history_chars` in [phases.<name>.options] were declared but
+        // never read — the manager used a hard-coded default budget. Wire
+        // them here so the configured context window really bounds the
+        // retained history (falling back to the default budget when absent).
+        let phase_budget = server.flow_manager().and_then(|flow| {
+            let phase_name = chat_params
+                .phase
+                .as_deref()
+                .unwrap_or_else(|| flow.default_phase());
+            flow.config()
+                .phases
+                .get(phase_name)
+                .and_then(|p| p.options.clone())
+        });
+        let configured_max_messages = phase_budget
+            .as_ref()
+            .and_then(|opts| opts.max_history_messages);
+        let configured_max_chars = phase_budget
+            .as_ref()
+            .and_then(|opts| opts.max_history_chars);
+        // If the configured message budget is smaller than the legacy
+        // 50-message entry gate, lower the gate to the configured value so
+        // the budget actually bounds retention (a 30-message budget must
+        // trim a 31-message conversation). The default stays 50. Note: a
+        // `max_history_chars`-only config still uses the 50-message gate
+        // (the char budget trims the retained set once the gate is passed).
+        let entry_gate = configured_max_messages.map(|m| m.max(2)).unwrap_or(50);
         // If the conversation is long, extract key concepts and apply trim budget.
-        if msg_count > 50 {
-            let mut session_mgr = SessionContextManager::default();
+        if msg_count > entry_gate {
+            if configured_max_messages.is_some() || configured_max_chars.is_some() {
+                debug!(
+                    "SessionContextManager: phase history budget max_messages={:?} max_chars={:?}",
+                    configured_max_messages, configured_max_chars
+                );
+            }
+            let mut session_mgr = SessionContextManager::new(ContextWindowBudget {
+                max_messages: configured_max_messages.unwrap_or(1000),
+                ..Default::default()
+            });
             debug!(
                 "SessionContextManager: tracking conversation '{}' with {} messages",
                 conversation_id, msg_count
@@ -251,6 +289,29 @@ pub(crate) async fn handle_chat(
                 .collect();
 
             let retained_indices = session_mgr.select_retained_messages(&msg_tuples, effective);
+
+            // Apply the configured character budget (if any): drop the
+            // lowest-scored non-anchor messages until the retained history
+            // fits `max_history_chars`. Anchors (first/last) are preserved.
+            let retained_indices = match configured_max_chars {
+                Some(max_chars) if max_chars > 0 => {
+                    let capped = session_mgr.cap_retained_by_chars(
+                        &msg_tuples,
+                        &retained_indices,
+                        max_chars,
+                    );
+                    if capped.len() < retained_indices.len() {
+                        debug!(
+                            "SessionContextManager: char budget {} trimmed retained {}→{} messages",
+                            max_chars,
+                            retained_indices.len(),
+                            capped.len()
+                        );
+                    }
+                    capped
+                }
+                _ => retained_indices,
+            };
 
             // If messages heavily exceed budget (50%+ over), try semantic
             // compression as an alternative to simple trimming. The compressor

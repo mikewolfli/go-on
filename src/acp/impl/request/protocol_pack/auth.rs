@@ -31,15 +31,15 @@ pub async fn authenticate_payload(server: &AcpServer, params: Value) -> Result<V
 }
 
 /// Handle `logout` — terminates the current authenticated session.
-pub async fn logout_payload(_server: &AcpServer, _params: Value) -> Result<Value> {
+pub async fn logout_payload(server: &AcpServer, params: Value) -> Result<Value> {
     // P1: revoke the bearer token presented at login so `logout` actually
     // terminates the session. The param key matches the auth middleware's
     // `bearer_token` (auth_middleware.rs); previously logout only evicted
     // tenant rate-limiter state and left the token valid. When auth is
     // disabled no session manager exists, so this is a no-op.
-    if let Some(token) = _params.get("bearer_token").and_then(Value::as_str) {
+    if let Some(token) = params.get("bearer_token").and_then(Value::as_str) {
         if !token.is_empty() {
-            if let Some(sm) = _server.session.session_manager.as_ref() {
+            if let Some(sm) = server.session.session_manager.as_ref() {
                 let revoked = sm.revoke_session(token);
                 warn!(
                     revoked = revoked,
@@ -52,9 +52,9 @@ pub async fn logout_payload(_server: &AcpServer, _params: Value) -> Result<Value
     // B51-36: Evict tenant rate limiter state on logout if session info is present.
     #[cfg(feature = "multi-users-server")]
     {
-        if let Some(session_id) = _params.get("sessionId").and_then(Value::as_str) {
+        if let Some(session_id) = params.get("sessionId").and_then(Value::as_str) {
             if !session_id.is_empty() {
-                if let Some(ref limiter) = _server.rate_limiting.rate_limit_middleware {
+                if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
                     limiter.evict_tenant(session_id);
                 }
             }

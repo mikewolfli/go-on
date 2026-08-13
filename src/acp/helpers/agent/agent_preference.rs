@@ -5,10 +5,10 @@
 //! the configured primary agent, preferred agent from the request, manages
 //! the agent switch state global, and computes conversation/branch/plan IDs.
 
-use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
 use anyhow::Result;
+use indexmap::IndexMap;
 
 use crate::acp::r#impl::chat::ChatParams;
 use crate::acp::server::AcpServer;
@@ -20,19 +20,20 @@ use crate::i18n::runtime::tf;
 /// Prevents unbounded memory growth when many distinct phases are used.
 const AGENT_SWITCH_STATE_CAPACITY: usize = 10_000;
 
-/// Insert a key-value pair into the map, evicting the oldest entry if at capacity.
+/// Insert a key-value pair into the map, evicting the oldest entry (insertion
+/// order — `IndexMap` guarantees FIFO) if at capacity.
 /// This prevents unbounded memory growth when many distinct phase names appear.
 fn map_insert_with_capacity<K: std::hash::Hash + Eq + Clone, V>(
-    map: &mut std::collections::HashMap<K, V>,
+    map: &mut IndexMap<K, V>,
     key: K,
     value: V,
     max_capacity: usize,
 ) {
     if map.len() >= max_capacity && !map.contains_key(&key) {
-        // Evict the first (oldest) entry
-        if let Some(oldest_key) = map.keys().next().cloned() {
-            map.remove(&oldest_key);
-        }
+        // `IndexMap::shift_remove_index(0)` removes the oldest (first-inserted)
+        // entry — unlike `HashMap::keys().next()`, whose iteration order is
+        // arbitrary and would evict a random entry.
+        map.shift_remove_index(0);
     }
     map.insert(key, value);
 }
@@ -55,8 +56,8 @@ pub struct AgentPreferenceResult {
 
 #[derive(Default)]
 pub(crate) struct AgentSwitchState {
-    pub(crate) forced_agent_by_phase: HashMap<String, String>,
-    pub(crate) primary_agent_by_phase: HashMap<String, String>,
+    pub(crate) forced_agent_by_phase: IndexMap<String, String>,
+    pub(crate) primary_agent_by_phase: IndexMap<String, String>,
 }
 
 static AGENT_SWITCH_STATE: OnceLock<RwLock<AgentSwitchState>> = OnceLock::new();
@@ -245,4 +246,41 @@ pub fn resolve_agent_preferences(
         conversation_id,
         branch_id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_insert_with_capacity_evicts_oldest_in_fifo_order() {
+        // Insert up to capacity, then one more key: the FIRST-inserted entry
+        // must be evicted (IndexMap insertion order), not an arbitrary one.
+        let mut map: IndexMap<String, String> = IndexMap::new();
+        map_insert_with_capacity(&mut map, "a".to_string(), "1".to_string(), 3);
+        map_insert_with_capacity(&mut map, "b".to_string(), "2".to_string(), 3);
+        map_insert_with_capacity(&mut map, "c".to_string(), "3".to_string(), 3);
+        assert_eq!(map.len(), 3);
+
+        map_insert_with_capacity(&mut map, "d".to_string(), "4".to_string(), 3);
+        assert_eq!(map.len(), 3, "capacity must be enforced");
+        assert!(
+            !map.contains_key("a"),
+            "oldest inserted key 'a' must be evicted (FIFO)"
+        );
+        assert!(map.contains_key("b"));
+        assert!(map.contains_key("c"));
+        assert!(map.contains_key("d"));
+    }
+
+    #[test]
+    fn map_insert_with_capacity_update_does_not_evict() {
+        // Re-inserting an existing key is an update, not a growth: no
+        // eviction should happen even at capacity.
+        let mut map: IndexMap<String, String> = IndexMap::new();
+        map_insert_with_capacity(&mut map, "a".to_string(), "1".to_string(), 1);
+        map_insert_with_capacity(&mut map, "a".to_string(), "updated".to_string(), 1);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("a").map(String::as_str), Some("updated"));
+    }
 }

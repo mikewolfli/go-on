@@ -487,6 +487,10 @@ pub(crate) async fn send_session_update(session_id: &str, update: SessionUpdate)
 /// write-only (never read by production code — the real permission decision
 /// flows over the transport request/response channel via
 /// `AcpServer::request_client_permission`).
+///
+/// The `_server` prefix is intentional: the rate-limiter eviction below is
+/// compiled only under `multi-users-server`, so non-multi-user profiles never
+/// dereference the parameter (keeps both profiles warning-free).
 async fn cleanup_session_permission_state(_server: &AcpServer, session_id: &str) {
     {
         let mut pending = super::acp_pending_permission_requests().write().await;
@@ -691,7 +695,7 @@ pub async fn session_resume_payload(server: &AcpServer, params: Value) -> Result
 }
 
 /// Handle `session/close` — closes and cleans up a session.
-pub async fn session_close_payload(_server: &AcpServer, params: Value) -> Result<Value> {
+pub async fn session_close_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
@@ -704,7 +708,7 @@ pub async fn session_close_payload(_server: &AcpServer, params: Value) -> Result
         }
 
         // 2. Clean up any permission state associated with this session
-        cleanup_session_permission_state(_server, session_id).await;
+        cleanup_session_permission_state(server, session_id).await;
     }
     Ok(serde_json::to_value(
         &crate::schema::CloseSessionResponse { meta: None },
@@ -849,7 +853,7 @@ pub async fn session_set_config_option_payload(server: &AcpServer, params: Value
 
 // ── Session delete / config get/set ──────────────────────────────────────
 
-pub async fn session_delete_payload(_server: &AcpServer, params: Value) -> Result<Value> {
+pub async fn session_delete_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
@@ -871,7 +875,7 @@ pub async fn session_delete_payload(_server: &AcpServer, params: Value) -> Resul
             );
 
             // Clean up permission state associated with this session
-            cleanup_session_permission_state(_server, session_id).await;
+            cleanup_session_permission_state(server, session_id).await;
         } else {
             tracing::warn!(
                 target: "acp::protocol_pack",
@@ -887,8 +891,8 @@ pub async fn session_delete_payload(_server: &AcpServer, params: Value) -> Resul
     }))
 }
 
-pub async fn session_config_set_payload(_server: &AcpServer, params: Value) -> Result<Value> {
-    session_set_config_option_payload(_server, params).await
+pub async fn session_config_set_payload(server: &AcpServer, params: Value) -> Result<Value> {
+    session_set_config_option_payload(server, params).await
 }
 
 pub async fn session_config_get_payload(_server: &AcpServer, params: Value) -> Result<Value> {

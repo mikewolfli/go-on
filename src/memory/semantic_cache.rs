@@ -214,6 +214,15 @@ impl SemanticResponseCache {
         self.put_inner(request, response, self.config.default_ttl_seconds);
     }
 
+    /// Cache a response with an explicit per-entry TTL (seconds).
+    ///
+    /// Used when a phase-level `cache_ttl_seconds` override is configured.
+    /// `put` goes through the same `put_inner` path with the global default
+    /// TTL; this variant supplies an explicit TTL instead.
+    pub fn put_with_ttl(&self, request: &str, response: Value, ttl_seconds: u64) {
+        self.put_inner(request, response, ttl_seconds.max(1));
+    }
+
     /// Shared insert path with an explicit per-entry TTL.
     fn put_inner(&self, request: &str, response: Value, ttl_seconds: u64) {
         let hash = simple_request_hash(request, self.config.max_request_hash_len);

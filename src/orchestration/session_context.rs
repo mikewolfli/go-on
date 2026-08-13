@@ -234,6 +234,52 @@ impl SessionContextManager {
         result
     }
 
+    /// Cap the retained-message set to a total-character budget.
+    ///
+    /// The first and last messages are anchors and are always kept; other
+    /// retained messages are dropped lowest-score-first until the total char
+    /// count fits `max_chars`. Returns a copy of `retained` unchanged when the
+    /// budget is already satisfied, when nothing droppable remains (anchors
+    /// only), or when `max_chars == 0` (callers guard the zero case; the
+    /// degenerate budget is treated as "keep the existing set" rather than
+    /// dropping everything).
+    pub fn cap_retained_by_chars(
+        &self,
+        messages: &[(String, String)],
+        retained: &[usize],
+        max_chars: usize,
+    ) -> Vec<usize> {
+        if retained.len() <= 2 || max_chars == 0 {
+            // Nothing droppable (anchors only) or zero budget: honor the
+            // existing set (anchors are already guaranteed by the caller).
+            return retained.to_vec();
+        }
+        let total = messages.len();
+        let anchor_first = 0usize;
+        let anchor_last = total.saturating_sub(1);
+        let mut kept: Vec<usize> = retained.to_vec();
+        loop {
+            let total_chars: usize = kept.iter().map(|&i| messages[i].1.chars().count()).sum();
+            if total_chars <= max_chars {
+                break;
+            }
+            // Drop the lowest-scored non-anchor retained message.
+            let drop_pos = kept
+                .iter()
+                .enumerate()
+                .filter(|(_, i)| **i != anchor_first && **i != anchor_last)
+                .min_by_key(|(_, &i)| self.score_message(i, &messages[i].1))
+                .map(|(pos, _)| pos);
+            match drop_pos {
+                Some(pos) => {
+                    kept.remove(pos);
+                }
+                None => break,
+            }
+        }
+        kept
+    }
+
     /// Generate a continuity marker for trimmed messages.
     pub fn generate_continuity_marker(&self, trimmed_indices: &[usize]) -> ContinuityMarker {
         // Extract key concepts from decisions of trimmed messages
@@ -341,6 +387,26 @@ mod tests {
     }
 
     #[test]
+    fn test_context_window_budget_phase_config_mapping() {
+        // Mirrors the handle_chat wiring: a phase-level `max_history_messages`
+        // of 30 must bound retention below the default 1000 budget.
+        let configured = 30usize;
+        let budget = ContextWindowBudget {
+            max_messages: configured,
+            ..Default::default()
+        };
+        assert!(
+            budget.effective_retain() <= 30,
+            "configured 30-message budget must cap retention (got {})",
+            budget.effective_retain()
+        );
+        assert!(
+            budget.effective_retain() >= budget.min_retain,
+            "min_retain anchor floor must still apply"
+        );
+    }
+
+    #[test]
     fn test_record_message_extracts_files() {
         let mut mgr = SessionContextManager::default();
         mgr.record_message("Fix src/main.rs and tests/e2e.rs");
@@ -394,6 +460,72 @@ mod tests {
         assert!(
             score_with_file > score_plain,
             "messages with file paths should score higher"
+        );
+    }
+
+    #[test]
+    fn test_cap_retained_by_chars_fits_budget() {
+        let mgr = SessionContextManager::default();
+        let messages = vec![
+            ("user".to_string(), "a".repeat(40)),
+            ("assistant".to_string(), "b".repeat(40)),
+            ("user".to_string(), "c".repeat(40)),
+            ("assistant".to_string(), "d".repeat(40)),
+        ];
+        // All four messages fit a generous budget.
+        let all = (0..4).collect::<Vec<_>>();
+        let capped = mgr.cap_retained_by_chars(&messages, &all, 10_000);
+        assert_eq!(capped, all, "budget large enough keeps everything");
+    }
+
+    #[test]
+    fn test_cap_retained_by_chars_keeps_anchors() {
+        let mgr = SessionContextManager::default();
+        let messages = vec![
+            ("user".to_string(), "a".repeat(100)),
+            ("assistant".to_string(), "b".repeat(100)),
+            ("user".to_string(), "c".repeat(100)),
+            ("assistant".to_string(), "d".repeat(100)),
+        ];
+        // Budget fits only the two anchors (first + last message).
+        let all = (0..4).collect::<Vec<_>>();
+        let capped = mgr.cap_retained_by_chars(&messages, &all, 200);
+        assert!(capped.contains(&0), "first message is an anchor");
+        assert!(capped.contains(&3), "last message is an anchor");
+        assert!(capped.len() <= 2, "only anchors survive a tight budget");
+    }
+
+    #[test]
+    fn test_cap_retained_by_chars_drops_lowest_score_first() {
+        let mut mgr = SessionContextManager::default();
+        // Message 1 references a file path (high score); message 2 is plain
+        // text (low score). A tight budget must drop the low-score message.
+        mgr.record_message("Fix src/main.rs");
+        mgr.record_message("plain hello");
+        mgr.record_message("Fix src/main.rs");
+        mgr.record_message("plain hello");
+        let messages = vec![
+            ("user".to_string(), "Fix src/main.rs".to_string()),
+            ("assistant".to_string(), "plain hello".to_string()),
+            ("user".to_string(), "Fix src/main.rs".to_string()),
+            ("assistant".to_string(), "plain hello".to_string()),
+        ];
+        // Budget: anchor 0 (15 chars) + anchor 3 (11 chars) + one middle
+        // message fits (26+15=41 ≤ 45); the middle message chosen must be
+        // the high-scoring one (message 2 references a file path).
+        let all = (0..4).collect::<Vec<_>>();
+        let capped = mgr.cap_retained_by_chars(&messages, &all, 45);
+        assert!(
+            capped.contains(&0) && capped.contains(&3),
+            "anchors preserved"
+        );
+        assert!(
+            capped.contains(&2),
+            "high-scoring file-reference message survives over plain text"
+        );
+        assert!(
+            !capped.contains(&1),
+            "low-scoring plain message dropped first"
         );
     }
 }

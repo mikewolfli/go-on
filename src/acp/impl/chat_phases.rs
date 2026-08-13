@@ -324,8 +324,22 @@ pub(crate) async fn observe_phase(
     // deterministic and identical to act_phase's — see
     // `semantic_prefetch_should_skip`), the fetched URL content / multimodal
     // context would never be consumed, so both expensive sub-steps are pure
-    // waste. Skip them.
-    let skip_expensive = semantic_prefetch_should_skip(server, params);
+    // waste. Skip them. The probe itself is also disabled when the phase
+    // config turns the cache off (`cache_enabled=false`), so the observe
+    // path agrees with act_phase's lookup gate.
+    let observe_cache_enabled = flow
+        .config()
+        .phases
+        .get(
+            params
+                .phase
+                .as_deref()
+                .unwrap_or_else(|| flow.default_phase()),
+        )
+        .and_then(|p| p.options.as_ref())
+        .and_then(|opts| opts.cache_enabled)
+        .unwrap_or(true);
+    let skip_expensive = observe_cache_enabled && semantic_prefetch_should_skip(server, params);
     if skip_expensive {
         tracing::debug!(
             target = "chat_pipeline",
@@ -1149,6 +1163,35 @@ pub(crate) async fn act_phase(
     let cache_bypassed_for_execution =
         should_bypass_for_execution(&params.mode, &routing_out.agent_messages);
 
+    // Phase-level cache switch: `cache_enabled` in [phases.<name>.options] was
+    // declared (and shipped in every config template) but never read — the
+    // token/semantic lookups and the populate block below ran unconditionally.
+    // Wire it here: `Some(false)` disables both lookup and populate for the
+    // phase (equivalent to the execution-bypass path), matching the documented
+    // semantics of the option.
+    let phase_cache_enabled = resolve_out
+        .phase
+        .options
+        .as_ref()
+        .and_then(|opts| opts.cache_enabled)
+        .unwrap_or(true);
+    // Phase-level semantic-cache TTL override: `cache_ttl_seconds` was only
+    // validated (rejected 0) but never applied. Pass it through to the
+    // populate block so a configured per-phase TTL actually governs how long
+    // the cached answer is reusable.
+    let phase_cache_ttl_seconds = resolve_out
+        .phase
+        .options
+        .as_ref()
+        .and_then(|opts| opts.cache_ttl_seconds);
+    if !phase_cache_enabled {
+        tracing::debug!(
+            target = "token_cache",
+            phase = %resolve_out.phase_name,
+            "act_phase: phase cache_enabled=false — skipping token/semantic cache"
+        );
+    }
+
     // Token & semantic caches (run concurrently for lower latency)
     let input_text = messages_to_text(&routing_out.agent_messages);
     let estimated_tokens = estimate_messages_token_count(&routing_out.agent_messages);
@@ -1192,7 +1235,11 @@ pub(crate) async fn act_phase(
     let (token_outcome, semantic_outcome) = tokio::join!(
         // ── Token cache lookup ────────────────────────────────────────
         async {
-            if is_duplicate_user {
+            if !phase_cache_enabled {
+                // Phase-level switch off: behave like a miss (no lookup, no
+                // entry) so the agent runs fresh.
+                TokenOutcome::default()
+            } else if is_duplicate_user {
                 // Repeated user message → bypass cache so the agent produces
                 // a fresh response (same intent as CachedAgentWrapper).
                 tracing::debug!(
@@ -1258,7 +1305,7 @@ pub(crate) async fn act_phase(
         },
         // ── Semantic cache lookup ─────────────────────────────────────
         async {
-            if !cache_bypassed_for_execution && !is_duplicate_user {
+            if phase_cache_enabled && !cache_bypassed_for_execution && !is_duplicate_user {
                 if let Some(text) = try_semantic_cache(server, semantic_key) {
                     let agent = resolve_out
                         .resolved
@@ -1530,9 +1577,10 @@ pub(crate) async fn act_phase(
         // Post-success cleanup
         if let Some(ref primary) = routing_out.configured_primary_agent {
             if selected_agent == *primary {
-                let _ = agent_switch_state()
-                    .write()
-                    .map(|mut s| s.forced_agent_by_phase.remove(&resolve_out.phase_name));
+                let _ = agent_switch_state().write().map(|mut s| {
+                    s.forced_agent_by_phase
+                        .shift_remove(&resolve_out.phase_name)
+                });
             }
         }
         let _ = server
@@ -1553,16 +1601,28 @@ pub(crate) async fn act_phase(
     // paths (autonomy loop and fallback). Previously this block lived inside
     // the fallback-only branch, so autonomy-produced responses never filled
     // the caches they read on the next request.
-    if !cache_hit && !response_text.is_empty() && !cache_bypassed_for_execution {
+    if phase_cache_enabled
+        && !cache_hit
+        && !response_text.is_empty()
+        && !cache_bypassed_for_execution
+    {
         // Clone BEFORE acquiring write lock to minimize critical section.
         let cached_response = Value::String(response_text.clone());
-        server
-            .cache_deps
-            .cache
-            .semantic_cache
-            .write()
-            .unwrap_or_else(|p| p.into_inner())
-            .put(semantic_key, cached_response);
+        {
+            let guard = server
+                .cache_deps
+                .cache
+                .semantic_cache
+                .write()
+                .unwrap_or_else(|p| p.into_inner());
+            match phase_cache_ttl_seconds {
+                // Per-phase TTL override: use the explicit-TTL insert path so
+                // `cache_ttl_seconds` actually governs entry expiry instead of
+                // the global default.
+                Some(ttl) if ttl > 0 => guard.put_with_ttl(semantic_key, cached_response, ttl),
+                _ => guard.put(semantic_key, cached_response),
+            }
+        }
 
         // Token cache populate (multi-level: L1 exact + L2 semantic + L3
         // durable) so the primary execution path fills the cache it reads

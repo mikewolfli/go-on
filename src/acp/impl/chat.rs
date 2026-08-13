@@ -934,7 +934,7 @@ pub(crate) use fallback::{execute_fallback_agents, FallbackExecutionResult};
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_autonomy_round(
     _server: &AcpServer,
-    _params: &ChatParams,
+    params: &ChatParams,
     phase: &crate::orchestration::flow::ResolvedPhase,
     _phase_name: &str,
     resolved: &crate::orchestration::flow::ResolvedRouting,
@@ -994,16 +994,16 @@ pub(crate) async fn execute_autonomy_round(
         let autonomy_tool_registry =
             Some(crate::acp::r#impl::request::tools_pack::global_tool_registry().clone());
 
-        let effective_mode = if _params.mode.is_empty() {
+        let effective_mode = if params.mode.is_empty() {
             "edit"
         } else {
-            &_params.mode
+            &params.mode
         };
         let acp_params = crate::acp::helpers::autonomy_loop_adapter::AcpAutonomyLoopParams {
             agent,
             tool_registry: autonomy_tool_registry,
             messages: agent_messages.to_vec(),
-            acp_session_id: _params.conversation_id.clone(),
+            acp_session_id: params.conversation_id.clone(),
             principles: phase.principles.clone(),
             options: agent_opts,
             timeout_duration: request_timeout(phase.options.as_ref()),
