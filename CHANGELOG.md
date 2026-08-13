@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.5.3] - 2026-08-14
+
+### Version bump + Zed agent-server governance fixes (2026-08-14, commit a25cfe0b)
+
+- All product versions aligned to **1.5.3** (workspace, GUI, VS Code addon, rust/python/typescript SDKs, crates, cookbook, README badges).
+- **Sensitive-content / conversation-history escalation now respects `governance_policy_mode`**: the pre-chat gate hard-rejected any prompt containing substring keywords (`api_key`, `token=`, `password`, `credentials`, …) with -32040 even when the policy is configured `audit` (documented as log-only). Zed's ACP stdio transport has no approval UI, so legitimate coding prompts (config/env/secret tasks) failed hard. Sensitive-content and history escalation now enforce only when `governance_policy_mode` is `active` (or the default empty mode); `audit`/`advisory`/`disabled` log-and-continue. Injection (High/Critical) and mode-based (edit `rm -rf`, full_auto) escalation unchanged.
+- **ACP options flattening fixed**: `build_chat_params_from_acp` emitted `options: {extra: {cwd, model}}` while `PhaseOptions.extra` is `#[serde(flatten)]` — the literal `extra` key landed in `extra["extra"]` and cwd/additional_directories/model were silently dropped. The map is now emitted flat; regression test added.
+- **Pre-chat gate regression coverage**: benign safeguard prompts now covered with `conversation_id` (what Zed always sends), a full-governance replica, and the real `session/prompt` entry point; audit-mode vs active-mode sensitive-content behavior pinned by tests.
+
 ## [Unreleased] - 2026-08-11
 
 ### Round 47 — Super-Deep/Broad Scan XV: Protocol & Concurrency Honesty (2026-08-11, docs/log/log-20260811-5.md)

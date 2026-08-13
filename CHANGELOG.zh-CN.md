@@ -1,5 +1,14 @@
 # 更新日志
 
+## [1.5.3] - 2026-08-14
+
+### 版本升级 + Zed agent-server 治理修复（2026-08-14，commit a25cfe0b）
+
+- 全平台版本统一为 **1.5.3**（workspace、GUI、VS Code 插件、rust/python/typescript SDK、crates、cookbook、README 徽章）。
+- **敏感内容 / 会话历史升级现在遵循 `governance_policy_mode`**：预检门禁对包含子串关键字（`api_key`、`token=`、`password`、`credentials` 等）的提示词一律以 -32040 硬拒绝，即使策略配置为 `audit`（文档定义为仅记录）。Zed 的 ACP stdio 传输没有审批 UI，导致合法的编码请求（配置/环境变量/密钥任务）硬失败。敏感内容与历史升级现在仅在 `governance_policy_mode` 为 `active`（或默认空值）时强制；`audit`/`advisory`/`disabled` 仅记录并继续。注入检测（High/Critical）与模式级检查（edit `rm -rf`、full_auto）保持不变。
+- **ACP options 扁平化修复**：`build_chat_params_from_acp` 产出 `options: {extra: {cwd, model}}`，而 `PhaseOptions.extra` 为 `#[serde(flatten)]`——字面键 `extra` 落入 `extra["extra"]`，cwd/additional_directories/model 被静默丢弃。现在平铺输出；新增回归测试。
+- **预检门禁回归覆盖**：良性 safeguard 提示词现在覆盖 `conversation_id`（Zed 始终会发送）、完整治理依赖复刻、以及真实 `session/prompt` 入口；audit 模式与 active 模式的敏感内容行为均由测试锁定。
+
 ## [Unreleased] - 2026-08-11
 
 ### 第 47 轮 — 超级深度/广度扫描 XV：协议域与并发诚实化（2026-08-11，docs/log/log-20260811-5.md）

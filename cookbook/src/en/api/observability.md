@@ -140,7 +140,7 @@ Returns supported protocol versions and the server version:
   "supported_versions": [1, 2],
   "latest": 2,
   "server": "go-on",
-  "server_version": "1.5.2"
+  "server_version": "1.5.3"
 }
 ```
 

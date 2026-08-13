@@ -62,11 +62,17 @@ pub(crate) async fn emit_stream_chunk(
     };
 
     // Check if this is a reasoning token (prefixed with __thinking__)
+    // OR contains inline __thinking__ delimiters (DeepSeek reasoning echo:
+    // some responses interleave `word__thinking__word` reasoning spans inside
+    // the content delta). Route the latter to the reasoning channel too so the
+    // visible message stays clean.
     let (display_token, reasoning_token) =
         if let Some(rest) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
-            ("", rest)
+            ("", rest.to_string())
+        } else if token.contains(TOKEN_THINKING_PREFIX) {
+            ("", token.replace(TOKEN_THINKING_PREFIX, ""))
         } else {
-            (token, "")
+            (token, String::new())
         };
 
     // Use as_ref() to avoid cloning response_id
@@ -86,7 +92,7 @@ pub(crate) async fn emit_stream_chunk(
                 if reasoning_token.is_empty() {
                     None
                 } else {
-                    Some(reasoning_token)
+                    Some(reasoning_token.as_str())
                 },
             ),
         )
@@ -108,7 +114,7 @@ pub(crate) async fn emit_stream_chunk(
             if reasoning_token.is_empty() {
                 None
             } else {
-                Some(reasoning_token)
+                Some(reasoning_token.as_str())
             },
         );
         payload.insert("mode".to_string(), json!(meta.mode));

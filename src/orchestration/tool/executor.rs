@@ -602,6 +602,18 @@ async fn ensure_tool_permission(
     let Some(server) = crate::acp::server::current_acp_server() else {
         return true;
     };
+    // In non-enforce governance policy modes ("audit"/"advisory"/"disabled")
+    // governance is log-only: auto-allow tools without the 15s permission
+    // round-trip (Zed's ACP stdio never answers request_permission). The
+    // harness sandbox still enforces real access control per tool call.
+    let enforce_permission_gate = {
+        let cfg = &server.runtime_config;
+        let mode = cfg.governance_policy_mode.trim().to_ascii_lowercase();
+        cfg.governance_enabled && (mode.is_empty() || mode == "active")
+    };
+    if !enforce_permission_gate {
+        return true;
+    }
     let Some(session_id) = config.acp_session_id.as_ref() else {
         return true;
     };

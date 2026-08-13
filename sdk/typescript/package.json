@@ -1,6 +1,6 @@
 {
   "name": "go-on-sdk-typescript",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "TypeScript (fetch-based) SDK for go-on — ACP/MCP agent orchestration runtime",
   "main": "dist/client.js",
   "types": "dist/client.d.ts",

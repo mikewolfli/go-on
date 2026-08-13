@@ -1371,9 +1371,24 @@ pub(crate) async fn act_phase(
     }
 
     // ── Pre-execution review gate (SafeGuard mode) ────────────────────
+    // In non-enforce governance policy modes ("audit"/"advisory"/"disabled")
+    // governance is log-only: skip the LLM review round-trip (two model calls
+    // with reasoning traces) instead of blocking execution for trivial prompts.
+    // Tool-level safety is still enforced per call via the harness bus.
+    let enforce_review_gate = {
+        let cfg = &server.runtime_config;
+        let mode = cfg.governance_policy_mode.trim().to_ascii_lowercase();
+        cfg.governance_enabled && (mode.is_empty() || mode == "active")
+    };
     let mut review_blocked = false;
-    let review_passed = match ModeKind::from(params.mode.as_str()) {
-        ModeKind::SafeGuard => {
+    let review_passed = match (ModeKind::from(params.mode.as_str()), enforce_review_gate) {
+        (ModeKind::SafeGuard, false) => {
+            tracing::info!(
+                "safeguard review gate skipped (governance_policy_mode is not 'active')"
+            );
+            true
+        }
+        (ModeKind::SafeGuard, true) => {
             let outcome = run_review_gate(
                 server,
                 &params.messages,

@@ -430,9 +430,28 @@ pub async fn run_autonomy_loop(
         // orchestration/mode.rs). Previously the ACP path bypassed the mode
         // policy entirely: Ask mode executed tools, Plan mode could run write
         // tools, and the per-agent cap was not enforced.
+        //
+        // In non-enforce governance policy modes ("audit"/"advisory"/"disabled")
+        // governance is log-only: SafeGuard's read-only tool policy would block
+        // every write/shell tool (write_file, shell_exec, …), crippling the
+        // agent for real coding tasks in Zed. The harness sandbox still enforces
+        // per-tool access control, so we relax the mode policy to all-tools.
         let mode_kind = crate::orchestration::mode::ModeKind::from(config.operation_mode.as_str());
-        let (tool_calls, blocked) =
-            crate::orchestration::mode::filter_tool_calls_by_policy(&tool_calls, &mode_kind);
+        let enforce_mode_tool_policy = {
+            let enforce = crate::acp::server::current_acp_server()
+                .map(|s| {
+                    let cfg = &s.runtime_config;
+                    let m = cfg.governance_policy_mode.trim().to_ascii_lowercase();
+                    cfg.governance_enabled && (m.is_empty() || m == "active")
+                })
+                .unwrap_or(true);
+            enforce
+        };
+        let (tool_calls, blocked) = if enforce_mode_tool_policy {
+            crate::orchestration::mode::filter_tool_calls_by_policy(&tool_calls, &mode_kind)
+        } else {
+            (tool_calls, Vec::new())
+        };
         if !blocked.is_empty() {
             tracing::warn!(
                 "autonomy_loop: mode {:?} blocked {} tool call(s): {:?}",
