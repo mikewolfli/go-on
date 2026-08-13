@@ -8,7 +8,6 @@ use crate::governance::pua::tool_execution_report;
 use crate::i18n::runtime::{t, tf};
 use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 use anyhow::{Context, Result};
-use std::process::Command;
 use tracing::debug;
 
 // ── DiffTool ─────────────────────────────────────────────────────────────
@@ -72,8 +71,13 @@ impl Tool for DiffTool {
             "tool: computing diff"
         );
 
-        // Try system `diff` first
-        let diff_output = try_system_diff(&path_a, &path_b, context_lines);
+        // Try system `diff` first (sandboxed; a workspace that does not cover
+        // both files falls back to the built-in diff below).
+        let workspace = input
+            .allowed_base_dir
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        let diff_output = try_system_diff(&workspace, &path_a, &path_b, context_lines);
 
         let (diff_text, used_system_diff) = match diff_output {
             Ok(text) => (text, true),
@@ -126,21 +130,28 @@ impl Tool for DiffTool {
     }
 }
 
-/// Attempt to run the system `diff` command.
+/// Attempt to run the system `diff` command inside the OS sandbox.
 fn try_system_diff(
+    workspace: &std::path::Path,
     path_a: &std::path::Path,
     path_b: &std::path::Path,
     context: usize,
 ) -> Result<String> {
     let context_arg = format!("-U{}", context);
-    let mut cmd = Command::new("diff");
-    cmd.arg(&context_arg).arg(path_a).arg(path_b);
+    let args = vec![
+        context_arg.clone(),
+        path_a.to_string_lossy().into_owned(),
+        path_b.to_string_lossy().into_owned(),
+    ];
     // Capped execution: system `diff` on huge files must not buffer the full
     // output into memory (the built-in LCS path has a line guard; the system
-    // path had none).
-    let capped = crate::orchestration::tool::exec_common::run_command_capped(
-        &mut cmd,
+    // path had none). `diff` is a command executor, so it runs sandboxed.
+    let capped = crate::orchestration::tool::exec_common::run_sandboxed_capped(
+        workspace,
+        "diff",
+        &args,
         crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+        |_| {},
     )
     .context("failed to execute system diff")?;
 

@@ -6,7 +6,6 @@ use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
 use anyhow::{Context, Result};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::process::Command;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
@@ -138,63 +137,35 @@ impl Tool for PingTool {
         let start = Instant::now();
 
         #[cfg(target_os = "windows")]
-        let output = Command::new("ping")
-            .arg("-n")
-            .arg(count.to_string())
-            .arg("-w")
-            .arg((timeout_ms / count).to_string())
-            .arg(host)
-            .output();
-
+        let args = vec![
+            "-n".to_string(),
+            count.to_string(),
+            "-w".to_string(),
+            (timeout_ms / count).to_string(),
+            host.to_string(),
+        ];
         #[cfg(not(target_os = "windows"))]
-        let output = Command::new("ping")
-            .arg("-c")
-            .arg(count.to_string())
-            .arg("-W")
-            .arg(((timeout_ms / count.max(1)) / 1000).max(1).to_string())
-            .arg(host)
-            .output();
+        let args = vec![
+            "-c".to_string(),
+            count.to_string(),
+            "-W".to_string(),
+            ((timeout_ms / count.max(1)) / 1000).max(1).to_string(),
+            host.to_string(),
+        ];
 
-        let elapsed = start.elapsed();
-
-        match output {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                let success = output.status.success();
-                let exit_code = output.status.code();
-
-                if success {
-                    info!(host = %host, exit_code = ?exit_code, "tool: ping succeeded");
-                } else {
-                    warn!(host = %host, exit_code = ?exit_code, stderr = %stderr.trim(), "tool: ping failed");
-                }
-
-                Ok(ToolOutput {
-                    success,
-                    result: Some(serde_json::json!({
-                        "host": host,
-                        "stdout": stdout,
-                        "stderr": stderr,
-                        "exit_code": exit_code,
-                        "elapsed_ms": elapsed.as_millis(),
-                        "count": count,
-                    })),
-                    error: (!success).then(|| stderr.trim().to_string()),
-                    verification: Some("ping_completed".to_string()),
-                    audit_log: Some(format!(
-                        "Ping '{}' (count={}) -> exit={:?} in {}ms",
-                        host,
-                        count,
-                        exit_code,
-                        elapsed.as_millis()
-                    )),
-                    pua_report: Some(tool_execution_report("ping", Some("ping_completed"))),
-                })
-            }
+        // ping is a command executor, so it runs inside the OS sandbox too
+        // (ICMP works there; verified by the sandbox probe environment).
+        let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let output = match crate::orchestration::tool::exec_common::run_sandboxed_output(
+            &workspace,
+            "ping",
+            &args,
+            |_| {},
+        ) {
+            Ok((out, _applied)) => out,
             Err(e) => {
                 warn!(host = %host, error = %e, "tool: ping spawn failed");
-                Ok(ToolOutput {
+                return Ok(ToolOutput {
                     success: false,
                     result: Some(serde_json::json!({
                         "host": host,
@@ -204,8 +175,45 @@ impl Tool for PingTool {
                     verification: Some("ping_completed".to_string()),
                     audit_log: Some(format!("Ping '{}' spawn failed: {}", host, e)),
                     pua_report: Some(tool_execution_report("ping", Some("ping_completed"))),
-                })
+                });
             }
+        };
+
+        let elapsed = start.elapsed();
+
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let success = output.status.success();
+            let exit_code = output.status.code();
+
+            if success {
+                info!(host = %host, exit_code = ?exit_code, "tool: ping succeeded");
+            } else {
+                warn!(host = %host, exit_code = ?exit_code, stderr = %stderr.trim(), "tool: ping failed");
+            }
+
+            Ok(ToolOutput {
+                success,
+                result: Some(serde_json::json!({
+                    "host": host,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "exit_code": exit_code,
+                    "elapsed_ms": elapsed.as_millis(),
+                    "count": count,
+                })),
+                error: (!success).then(|| stderr.trim().to_string()),
+                verification: Some("ping_completed".to_string()),
+                audit_log: Some(format!(
+                    "Ping '{}' (count={}) -> exit={:?} in {}ms",
+                    host,
+                    count,
+                    exit_code,
+                    elapsed.as_millis()
+                )),
+                pua_report: Some(tool_execution_report("ping", Some("ping_completed"))),
+            })
         }
     }
 }

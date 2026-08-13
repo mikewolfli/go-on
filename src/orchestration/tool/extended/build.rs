@@ -4,7 +4,6 @@
 //! Detects build system from project files.
 
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -22,11 +21,18 @@ fn run_capped_tool<S: AsRef<std::ffi::OsStr>>(
     cwd: &Path,
     what: &str,
 ) -> Result<crate::orchestration::tool::exec_common::CappedCommandOutput> {
-    let mut cmd = Command::new(tool);
-    cmd.args(args).current_dir(cwd);
-    let capped = crate::orchestration::tool::exec_common::run_command_capped(
-        &mut cmd,
+    let args: Vec<String> = args
+        .iter()
+        .map(|a| a.as_ref().to_string_lossy().into_owned())
+        .collect();
+    // Build/lint/install commands execute arbitrary project code, so they run
+    // inside the OS sandbox (workspace writable, host filesystem hidden).
+    let capped = crate::orchestration::tool::exec_common::run_sandboxed_capped(
+        cwd,
+        tool,
+        &args,
         crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+        |_| {},
     )
     .with_context(|| format!("failed to execute '{}'", tool))?;
     if capped.stdout_truncated || capped.stderr_truncated {

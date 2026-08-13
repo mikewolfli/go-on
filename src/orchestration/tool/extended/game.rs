@@ -13,6 +13,13 @@
 //! # Feature gates
 //! Each section is gated by a separate Cargo feature:
 //! - `game-online`:   Online game server queries (A2S protocol), price tracking
+//!
+//! # Sandbox note
+//! The input-automation tools (`xdotool`) deliberately do NOT run inside the
+//! OS command sandbox: they must reach the user's X11 display sockets
+//! (`/tmp/.X11-unix`, `/run/user/<uid>`), which the sandbox intentionally
+//! hides. They are host-interactive utilities gated behind explicit features
+//! and user invocation — governance approvals are their control surface.
 //! - `game-process`:  Game process launch, monitoring, window management
 //! - `game-screen`:   Screen capture, replay recording (via system tools)
 //! - `game-input`:    Keyboard/mouse input simulation via xdotool/enigo

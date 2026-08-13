@@ -6,7 +6,6 @@
 use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 use anyhow::{Context, Result};
-use std::process::Command;
 use tracing::debug;
 
 /// Tool that runs `cargo check` and returns structured diagnostics.
@@ -34,11 +33,15 @@ impl Tool for DiagnosticsTool {
 
         debug!(directory = %directory, "tool: diagnostics");
 
-        // Run `cargo check` and capture stderr (where diagnostics appear).
-        let output = Command::new("cargo")
-            .args(["check", "--message-format=short"])
-            .current_dir(&current_dir)
-            .output()
+        // Run `cargo check` (a command executor, so it goes through the OS
+        // sandbox) and capture stderr (where diagnostics appear).
+        let (output, _sandbox_applied) =
+            crate::orchestration::tool::exec_common::run_sandboxed_output(
+                &current_dir,
+                "cargo",
+                &["check".to_string(), "--message-format=short".to_string()],
+                |_| {},
+            )
             .context("failed to execute `cargo check` — is cargo installed?")?;
 
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();

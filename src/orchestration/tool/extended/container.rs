@@ -1,6 +1,15 @@
 //! Container (Docker) management tools.
 //!
 //! Execute Docker commands to manage containers, images, and logs.
+//!
+//! SECURITY: these tools deliberately do NOT go through the OS command
+//! sandbox. The docker CLI is a client for a privileged daemon socket
+//! (`/var/run/docker.sock`): granting the sandbox access to that socket IS
+//! host-level access (docker build/exec run arbitrary code with the daemon's
+//! privileges), so wrapping the CLI in bwrap adds no containment while
+//! breaking socket visibility. The control surface for docker is the
+//! governance layer (policy gates, approval, HighRiskExecute classification),
+//! not filesystem isolation.
 
 use std::process::{Command, Output};
 

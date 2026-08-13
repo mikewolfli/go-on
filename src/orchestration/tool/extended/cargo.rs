@@ -4,7 +4,6 @@ use crate::governance::pua::tool_execution_report;
 
 use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 use anyhow::{Context, Result};
-use std::process::Command;
 use tracing::debug;
 
 // ── CargoCheckTool ─────────────────────────────────────────────────────────
@@ -26,14 +25,15 @@ impl Tool for CargoCheckTool {
 
         // Capped execution: `cargo check` diagnostics on a big workspace can
         // be hundreds of MB — `Command::output()` would buffer it all (OOM)
-        // and push it unclipped into the LLM context.
-        let mut cmd = Command::new("cargo");
-        cmd.arg("check")
-            .arg("--message-format=json")
-            .current_dir(&current_dir);
-        let capped = crate::orchestration::tool::exec_common::run_command_capped(
-            &mut cmd,
+        // and push it unclipped into the LLM context. The command also runs
+        // inside the OS sandbox (cargo executes arbitrary build scripts).
+        let args = vec!["check".to_string(), "--message-format=json".to_string()];
+        let capped = crate::orchestration::tool::exec_common::run_sandboxed_capped(
+            &current_dir,
+            "cargo",
+            &args,
             crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+            |_| {},
         )
         .context("failed to run cargo check")?;
 

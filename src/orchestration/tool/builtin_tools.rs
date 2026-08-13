@@ -17,7 +17,6 @@ use glob::Pattern;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, warn};
@@ -600,24 +599,23 @@ impl Tool for ApplyPatchTool {
         let check_only = input.payload["check"].as_bool().unwrap_or(false);
         let current_dir = input.payload["directory"].as_str().unwrap_or(".");
         let sanitized_dir = sanitize_path(input, current_dir)?;
-        let mut command = Command::new("git");
-        command.arg("apply");
+        // Pipe patch via stdin to avoid Windows \\?\\ long-path prefix issues
+        // that arise when using tempfile (git apply can't open \\?\\ prefixed paths).
+        let mut git_args = vec!["apply".to_string()];
         if check_only {
-            command.arg("--check");
+            git_args.push("--check".to_string());
         }
-        // Pipe patch via stdin to avoid Windows \\?\ long-path prefix issues
-        // that arise when using tempfile (git apply can't open \\?\ prefixed paths).
-        command.arg("-");
+        git_args.push("-".to_string());
         debug!(directory = %current_dir, check_only = %check_only, "tool: running git apply");
-        command.current_dir(&sanitized_dir);
-        command.stdin(std::process::Stdio::piped());
-        command.stdout(std::process::Stdio::piped());
-        command.stderr(std::process::Stdio::piped());
-        let mut child = command.spawn()?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(patch.as_bytes())?;
-        }
-        let output = child.wait_with_output()?;
+        // git apply executes inside the OS sandbox (a crafted patch can run
+        // arbitrary code via `diff --exclude=...` filter drivers / hooks).
+        let (output, _applied) =
+            crate::orchestration::tool::exec_common::run_sandboxed_stdin_output(
+                &sanitized_dir,
+                "git",
+                &git_args,
+                patch,
+            )?;
         let success = output.status.success();
         if !success {
             warn!(
@@ -681,25 +679,22 @@ impl Tool for ApplyPatchTool {
             let check_only = input.payload["check"].as_bool().unwrap_or(false);
             let current_dir = input.payload["directory"].as_str().unwrap_or(".");
             let sanitized_dir = sanitize_path(&input, current_dir)?;
-            let mut command = tokio::process::Command::new("git");
-            command.arg("apply");
+            let mut git_args = vec!["apply".to_string()];
             if check_only {
-                command.arg("--check");
+                git_args.push("--check".to_string());
             }
-            // Pipe patch via stdin to avoid Windows \\\\? long-path prefix issues
-            command.arg("-");
+            // Pipe patch via stdin to avoid Windows \\? long-path prefix issues
+            git_args.push("-".to_string());
             tracing::debug!(directory = %current_dir, check_only = %check_only, "tool: running git apply (async)");
-            command.current_dir(&sanitized_dir);
-            command.stdin(std::process::Stdio::piped());
-            command.stdout(std::process::Stdio::piped());
-            command.stderr(std::process::Stdio::piped());
-            let mut child = command
-                .spawn()
-                .map_err(|e| anyhow::anyhow!("failed to spawn git apply: {}", e))?;
-            if let Some(mut stdin) = child.stdin.take() {
-                tokio::io::AsyncWriteExt::write_all(&mut stdin, patch.as_bytes()).await?;
-            }
-            let output = child.wait_with_output().await?;
+            // Sandboxed (crafted patches can execute code via filter drivers).
+            let (output, _applied) =
+                crate::orchestration::tool::exec_common::run_sandboxed_stdin_output_async(
+                    &sanitized_dir,
+                    "git",
+                    &git_args,
+                    patch,
+                )
+                .await?;
             let success = output.status.success();
             if !success {
                 tracing::warn!(
@@ -809,11 +804,13 @@ impl Tool for RunTestsTool {
         }
         let current_dir = sanitize_path(input, input.payload["directory"].as_str().unwrap_or("."))?;
         debug!(command = %command_name, args = ?args, directory = %current_dir.display(), "tool: running shell command");
-        let mut cmd = Command::new(command_name);
-        cmd.args(&args).current_dir(&current_dir);
-        let capped = crate::orchestration::tool::exec_common::run_command_capped(
-            &mut cmd,
+        // Test commands execute arbitrary project code — sandboxed.
+        let capped = crate::orchestration::tool::exec_common::run_sandboxed_capped(
+            &current_dir,
+            command_name,
+            &args,
             crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+            |_| {},
         )?;
         let success = capped.status == Some(0);
         if capped.stdout_truncated || capped.stderr_truncated {
@@ -896,11 +893,13 @@ impl Tool for RunTestsTool {
             }
             let current_dir =
                 sanitize_path(&input, input.payload["directory"].as_str().unwrap_or("."))?;
-            let mut cmd = tokio::process::Command::new(command_name);
-            cmd.args(&args).current_dir(&current_dir);
-            let capped = crate::orchestration::tool::exec_common::run_command_capped_async(
-                &mut cmd,
+            // Test commands execute arbitrary project code — sandboxed.
+            let capped = crate::orchestration::tool::exec_common::run_sandboxed_capped_async(
+                &current_dir,
+                command_name,
+                &args,
                 crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+                |_| {},
             )
             .await?;
             let success = capped.status == Some(0);
@@ -977,17 +976,21 @@ impl Tool for InspectGitDiffTool {
             })
             .unwrap_or_default();
 
-        let mut command = Command::new("git");
-        command.arg("diff").current_dir(&sanitized_dir);
+        let mut git_args = vec!["diff".to_string()];
         if staged {
-            command.arg("--cached");
+            git_args.push("--cached".to_string());
         }
         if !files.is_empty() {
-            command.arg("--").args(&files);
+            git_args.push("--".to_string());
+            git_args.extend(files.iter().cloned());
         }
-        let capped = crate::orchestration::tool::exec_common::run_command_capped(
-            &mut command,
+        // git diff is a command executor — sandboxed.
+        let capped = crate::orchestration::tool::exec_common::run_sandboxed_capped(
+            &sanitized_dir,
+            "git",
+            &git_args,
             crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+            |_| {},
         )?;
         let success = capped.status == Some(0);
         if capped.stdout_truncated || capped.stderr_truncated {
@@ -1037,17 +1040,21 @@ impl Tool for InspectGitDiffTool {
                 })
                 .unwrap_or_default();
 
-            let mut command = tokio::process::Command::new("git");
-            command.arg("diff").current_dir(&sanitized_dir);
+            let mut git_args = vec!["diff".to_string()];
             if staged {
-                command.arg("--cached");
+                git_args.push("--cached".to_string());
             }
             if !files.is_empty() {
-                command.arg("--").args(&files);
+                git_args.push("--".to_string());
+                git_args.extend(files.iter().cloned());
             }
-            let capped = crate::orchestration::tool::exec_common::run_command_capped_async(
-                &mut command,
+            // git diff is a command executor — sandboxed.
+            let capped = crate::orchestration::tool::exec_common::run_sandboxed_capped_async(
+                &sanitized_dir,
+                "git",
+                &git_args,
                 crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+                |_| {},
             )
             .await?;
             let success = capped.status == Some(0);

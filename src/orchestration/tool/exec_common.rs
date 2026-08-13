@@ -516,6 +516,325 @@ pub async fn read_file_capped_async(path: &std::path::Path, cap: usize) -> anyho
     Ok(data)
 }
 
+// ---------------------------------------------------------------------------
+// Sandbox-aware command runners (LAYER 3: bubblewrap isolation)
+// ---------------------------------------------------------------------------
+//
+// The command-executing tools (git, cargo, run_tests, build, diagnostics,
+// diff, ping, clippy --fix, ...) all funnel through these runners so the OS
+// sandbox covers every model-issued command, not just shell_exec. Each runner:
+// 1. wraps `program args` in bwrap when the effective sandbox mode requires it
+//    and the probe passed (see security::sandbox),
+// 2. scrubs credential env vars whenever a sandbox mode is requested
+//    (independent of whether bwrap is available),
+// 3. degrades to direct execution on a spawn-level failure OR a bwrap setup
+//    failure (spawned fine but exited 1 with `bwrap:` stderr — e.g.
+//    unprivileged user namespaces denied). A plain non-zero exit is never
+//    degraded — that is the sandbox doing its job.
+//
+// `configure` reconfigures the base command (env vars, stdio, stdin) and is
+// re-invoked when degrading, so it must be side-effect-free beyond `Command`
+// and capture by reference (Fn, not FnOnce).
+
+/// Build the base command for `program args`, applying env scrubbing when
+/// `scrub` is set. The wrapper is applied by passing the wrapped program/args.
+fn build_sandboxed_base_cmd(
+    workspace: &std::path::Path,
+    program: &str,
+    args: &[String],
+    scrub: bool,
+    configure: &impl Fn(&mut std::process::Command),
+) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args);
+    cmd.current_dir(workspace);
+    if scrub {
+        cmd.env_clear();
+        let passthrough = crate::security::sandbox::sandbox_config()
+            .map(|c| c.passthrough_env)
+            .unwrap_or_default();
+        for (key, val) in crate::security::sandbox::sanitized_env(&passthrough) {
+            cmd.env(key, val);
+        }
+    }
+    configure(&mut cmd);
+    cmd
+}
+
+/// Sandbox-aware [`run_command_capped`] for sync tool code.
+pub fn run_sandboxed_capped(
+    workspace: &std::path::Path,
+    program: &str,
+    args: &[String],
+    cap: usize,
+    configure: impl Fn(&mut std::process::Command),
+) -> anyhow::Result<CappedCommandOutput> {
+    let prep = crate::security::sandbox::prepare_command(
+        crate::security::sandbox::effective_mode(),
+        workspace,
+        program,
+        args,
+    );
+    let attempt =
+        |program: &str, args: &[String], scrub: bool| -> anyhow::Result<CappedCommandOutput> {
+            let mut cmd = build_sandboxed_base_cmd(workspace, program, args, scrub, &configure);
+            run_command_capped(&mut cmd, cap)
+        };
+    match attempt(&prep.program, &prep.args, prep.scrub_env) {
+        Ok(capped)
+            if prep.applied
+                && crate::security::sandbox::is_bwrap_setup_failure(
+                    capped.status,
+                    &capped.stderr_lossy(),
+                ) =>
+        {
+            crate::security::sandbox::record_sandbox_degraded();
+            tracing::warn!(
+                mode = prep.mode.as_str(),
+                "sandboxed command failed at setup (bwrap error) — retrying without sandbox"
+            );
+            attempt(program, args, prep.scrub_env)
+        }
+        Err(_) if prep.applied => {
+            crate::security::sandbox::record_sandbox_degraded();
+            tracing::warn!(
+                mode = prep.mode.as_str(),
+                "sandboxed command spawn failed — falling back to direct execution"
+            );
+            attempt(program, args, prep.scrub_env)
+        }
+        other => other,
+    }
+}
+
+/// Sandbox-aware [`run_command_capped_async`] for tokio tool code.
+pub async fn run_sandboxed_capped_async(
+    workspace: &std::path::Path,
+    program: &str,
+    args: &[String],
+    cap: usize,
+    configure: impl Fn(&mut tokio::process::Command),
+) -> anyhow::Result<CappedCommandOutput> {
+    let prep = crate::security::sandbox::prepare_command(
+        crate::security::sandbox::effective_mode(),
+        workspace,
+        program,
+        args,
+    );
+    let attempt = |program: &str, args: &[String], scrub: bool| {
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(args);
+        cmd.current_dir(workspace);
+        if scrub {
+            cmd.env_clear();
+            let passthrough = crate::security::sandbox::sandbox_config()
+                .map(|c| c.passthrough_env)
+                .unwrap_or_default();
+            for (key, val) in crate::security::sandbox::sanitized_env(&passthrough) {
+                cmd.env(key, val);
+            }
+        }
+        configure(&mut cmd);
+        async move { run_command_capped_async(&mut cmd, cap).await }
+    };
+    match attempt(&prep.program, &prep.args, prep.scrub_env).await {
+        Ok(capped)
+            if prep.applied
+                && crate::security::sandbox::is_bwrap_setup_failure(
+                    capped.status,
+                    &capped.stderr_lossy(),
+                ) =>
+        {
+            crate::security::sandbox::record_sandbox_degraded();
+            tracing::warn!(
+                mode = prep.mode.as_str(),
+                "sandboxed command failed at setup (bwrap error) — retrying without sandbox"
+            );
+            attempt(program, args, prep.scrub_env).await
+        }
+        Err(_) if prep.applied => {
+            crate::security::sandbox::record_sandbox_degraded();
+            tracing::warn!(
+                mode = prep.mode.as_str(),
+                "sandboxed command spawn failed — falling back to direct execution"
+            );
+            attempt(program, args, prep.scrub_env).await
+        }
+        other => other,
+    }
+}
+
+/// Sandbox-aware single-shot `.output()` run for tools that need the full
+/// [`std::process::Output`] (git, ping, diff, diagnostics, clippy --fix).
+/// Returns the output plus whether the sandbox was applied.
+pub fn run_sandboxed_output(
+    workspace: &std::path::Path,
+    program: &str,
+    args: &[String],
+    configure: impl Fn(&mut std::process::Command),
+) -> anyhow::Result<(std::process::Output, bool)> {
+    let prep = crate::security::sandbox::prepare_command(
+        crate::security::sandbox::effective_mode(),
+        workspace,
+        program,
+        args,
+    );
+    let attempt =
+        |program: &str, args: &[String], scrub: bool| -> anyhow::Result<std::process::Output> {
+            let mut cmd = build_sandboxed_base_cmd(workspace, program, args, scrub, &configure);
+            cmd.output().context("failed to spawn command")
+        };
+    let first = match attempt(&prep.program, &prep.args, prep.scrub_env) {
+        Ok(out) => out,
+        Err(_) if prep.applied => {
+            crate::security::sandbox::record_sandbox_degraded();
+            tracing::warn!(
+                mode = prep.mode.as_str(),
+                "sandboxed command spawn failed — falling back to direct execution"
+            );
+            return Ok((attempt(program, args, prep.scrub_env)?, false));
+        }
+        Err(e) => return Err(e),
+    };
+    if prep.applied
+        && crate::security::sandbox::is_bwrap_setup_failure(
+            first.status.code(),
+            &String::from_utf8_lossy(&first.stderr),
+        )
+    {
+        crate::security::sandbox::record_sandbox_degraded();
+        tracing::warn!(
+            mode = prep.mode.as_str(),
+            "sandboxed command failed at setup (bwrap error) — retrying without sandbox"
+        );
+        return Ok((attempt(program, args, prep.scrub_env)?, false));
+    }
+    Ok((first, prep.applied))
+}
+
+/// Sandbox-aware spawn-and-feed-stdin run (apply_patch pipes the patch to
+/// `git apply` via stdin). Same degrade semantics as the other runners.
+pub fn run_sandboxed_stdin_output(
+    workspace: &std::path::Path,
+    program: &str,
+    args: &[String],
+    stdin_input: &str,
+) -> anyhow::Result<(std::process::Output, bool)> {
+    use std::io::Write;
+    let prep = crate::security::sandbox::prepare_command(
+        crate::security::sandbox::effective_mode(),
+        workspace,
+        program,
+        args,
+    );
+    let attempt =
+        |program: &str, args: &[String], scrub: bool| -> anyhow::Result<std::process::Output> {
+            let configure = |cmd: &mut std::process::Command| {
+                cmd.stdin(std::process::Stdio::piped());
+                cmd.stdout(std::process::Stdio::piped());
+                cmd.stderr(std::process::Stdio::piped());
+            };
+            let mut cmd = build_sandboxed_base_cmd(workspace, program, args, scrub, &configure);
+            let mut child = cmd.spawn()?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(stdin_input.as_bytes())?;
+            }
+            child.wait_with_output().map_err(Into::into)
+        };
+    let first = match attempt(&prep.program, &prep.args, prep.scrub_env) {
+        Ok(out) => out,
+        Err(_) if prep.applied => {
+            crate::security::sandbox::record_sandbox_degraded();
+            tracing::warn!(
+                mode = prep.mode.as_str(),
+                "sandboxed command spawn failed — falling back to direct execution"
+            );
+            return Ok((attempt(program, args, prep.scrub_env)?, false));
+        }
+        Err(e) => return Err(e),
+    };
+    if prep.applied
+        && crate::security::sandbox::is_bwrap_setup_failure(
+            first.status.code(),
+            &String::from_utf8_lossy(&first.stderr),
+        )
+    {
+        crate::security::sandbox::record_sandbox_degraded();
+        tracing::warn!(
+            mode = prep.mode.as_str(),
+            "sandboxed command failed at setup (bwrap error) — retrying without sandbox"
+        );
+        return Ok((attempt(program, args, prep.scrub_env)?, false));
+    }
+    Ok((first, prep.applied))
+}
+
+/// Tokio variant of [`run_sandboxed_stdin_output`].
+pub async fn run_sandboxed_stdin_output_async(
+    workspace: &std::path::Path,
+    program: &str,
+    args: &[String],
+    stdin_input: &str,
+) -> anyhow::Result<(std::process::Output, bool)> {
+    use tokio::io::AsyncWriteExt;
+    let prep = crate::security::sandbox::prepare_command(
+        crate::security::sandbox::effective_mode(),
+        workspace,
+        program,
+        args,
+    );
+    let attempt = |program: &str, args: &[String], scrub: bool| {
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(args);
+        cmd.current_dir(workspace);
+        if scrub {
+            cmd.env_clear();
+            let passthrough = crate::security::sandbox::sandbox_config()
+                .map(|c| c.passthrough_env)
+                .unwrap_or_default();
+            for (key, val) in crate::security::sandbox::sanitized_env(&passthrough) {
+                cmd.env(key, val);
+            }
+        }
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+        async move {
+            let mut child = cmd.spawn()?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(stdin_input.as_bytes()).await?;
+            }
+            child.wait_with_output().await
+        }
+    };
+    let first = match attempt(&prep.program, &prep.args, prep.scrub_env).await {
+        Ok(out) => out,
+        Err(_) if prep.applied => {
+            crate::security::sandbox::record_sandbox_degraded();
+            tracing::warn!(
+                mode = prep.mode.as_str(),
+                "sandboxed command spawn failed — falling back to direct execution"
+            );
+            return Ok((attempt(program, args, prep.scrub_env).await?, false));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if prep.applied
+        && crate::security::sandbox::is_bwrap_setup_failure(
+            first.status.code(),
+            &String::from_utf8_lossy(&first.stderr),
+        )
+    {
+        crate::security::sandbox::record_sandbox_degraded();
+        tracing::warn!(
+            mode = prep.mode.as_str(),
+            "sandboxed command failed at setup (bwrap error) — retrying without sandbox"
+        );
+        return Ok((attempt(program, args, prep.scrub_env).await?, false));
+    }
+    Ok((first, prep.applied))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

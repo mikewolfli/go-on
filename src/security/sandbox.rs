@@ -1,31 +1,37 @@
 //! OS-level command sandboxing (bubblewrap) — LAYER 3 isolation.
 //!
-//! go-on's tool loop previously ran every model-issued command (`shell_exec`,
-//! and later git/cargo/docker through the same runner) directly inside the
-//! server process with full user privileges. The only protection was the
+//! go-on's tool loop previously ran every model-issued command directly inside
+//! the server process with full user privileges. The only protection was the
 //! text-level blacklist in `exec_common::is_blocked_command`, which can be
 //! bypassed by command-text tricks, and which cannot express filesystem or
 //! network containment at all.
 //!
-//! This module closes that gap the same way Codex CLI does: when `bwrap`
-//! (bubblewrap) is present on Linux, command execution is wrapped in a new
-//! user + pid namespace with a read-only host filesystem. Modes:
+//! This module closes that gap: when `bwrap` (bubblewrap) is present on Linux,
+//! command execution is wrapped in a new user + pid namespace whose root is an
+//! EMPTY tmpfs — only the workspace, `$HOME` (workspace-write), the platform
+//! runtime dirs and a fresh `/dev` are mounted, so the host filesystem is
+//! neither readable nor writable by default. Modes:
 //!
-//! - `workspace-write` (default when bwrap is available): the whole host fs is
-//!   read-only, but the command's working directory (+ configured extra
-//!   writable roots + `$HOME`) are writable, `/tmp` is a tmpfs, and credential
-//!   directories under `$HOME` (`.ssh`, `.aws`, `.gnupg`, ...) are masked by
-//!   replacing them with empty tmpfs mounts. Network stays enabled. This
-//!   preserves normal dev workflows (`cargo`/`npm` caches live under `$HOME`).
-//! - `read-only`: workspace is read-only too, `/tmp` tmpfs, network disabled.
-//! - `isolated`: runtime stays read-only, but host user/state dirs (`/home`,
-//!   `/root`, `/var`, `/run`) are replaced by empty tmpfs mounts so no user
-//!   data is visible; only the workspace is re-exposed (read-only) and
-//!   network is disabled.
+//! - `workspace-write` (default when bwrap is available): workspace + `$HOME`
+//!   writable, runtime read-only, `/tmp` tmpfs, credential dirs under `$HOME`
+//!   masked by empty tmpfs mounts, network enabled. Preserves normal dev
+//!   workflows (`cargo`/`npm` caches live under `$HOME`).
+//! - `read-only`: workspace and `$HOME` visible read-only, network disabled.
+//! - `isolated`: workspace read-only and no `$HOME` at all — no user data is
+//!   reachable; network disabled.
 //! - `none`: legacy direct execution (policy gates still apply).
 //!
-//! Overhead is one `bwrap` spawn per command (~1-3ms); containment is enforced
-//! by the kernel namespace/mount machinery, not by pattern matching.
+//! The empty-root mount order is deliberate: when the host root is bound
+//! (`--ro-bind / /`), bwrap's propagation-fixup pass remounts the inherited
+//! `/dev` with `MS_NODEV`, making device nodes unusable in unprivileged
+//! sandboxes. An empty root hides the host mounts from that pass, so a fresh
+//! `--dev /dev` works — and containment is stricter (host paths are absent
+//! rather than read-only).
+//!
+//! Overhead is one `bwrap` spawn per command (~2-4ms); containment is enforced
+//! by the kernel namespace/mount machinery, not by pattern matching. When
+//! bwrap is missing or its namespaces/devices are unavailable (verified by a
+//! real probe), execution degrades to direct with a warning.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -239,8 +245,14 @@ pub fn credential_env_names() -> &'static [&'static str] {
 
 /// Substrings (matched case-insensitively) that mark a variable as
 /// credential-bearing and therefore blocked from sandboxed commands.
-const CREDENTIAL_SUBSTRINGS: &[&str] =
-    &["API_KEY", "API_TOKEN", "SECRET", "PASSWORD", "PRIVATE_KEY"];
+const CREDENTIAL_SUBSTRINGS: &[&str] = &[
+    "API_KEY",
+    "API_TOKEN",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PRIVATE_KEY",
+];
 
 /// Whether a single environment variable name is credential-bearing and
 /// therefore blocked from sandboxed commands (unless listed in `passthrough`).
@@ -273,35 +285,45 @@ pub fn sanitized_env(passthrough: &[String]) -> Vec<(String, String)> {
     kept
 }
 
-/// Whether `bwrap` can actually create the namespaces we need (cached).
-/// Stricter than [`bwrap_available`]: it verifies `--unshare-user` works at
-/// runtime, which containers and hardened kernels may deny even when the
-/// binary exists — in that case sandboxing degrades to direct execution.
+/// Whether `bwrap` can actually produce a working sandbox (cached). Stricter
+/// than [`bwrap_available`]: it runs a real probe sandbox mirroring the
+/// production argv shape and verifies BOTH that the namespaces can be created
+/// AND that device nodes (`/dev/null`) are writable inside. The device check
+/// matters because on some unprivileged-bwrap setups the propagation-fixup
+/// pass remounts an inherited `/dev` with `MS_NODEV`, which would silently
+/// break every redirected command in the sandbox. When this probe fails,
+/// sandboxing degrades to direct execution with a warning.
 pub fn bwrap_probe_works() -> bool {
     static WORKS: OnceLock<bool> = OnceLock::new();
     *WORKS.get_or_init(|| {
         if !bwrap_available() {
             return false;
         }
+        // Mirror the real sandbox: empty tmpfs root, fresh /dev, platform
+        // read-only binds, then verify a device write works.
+        let mut argv: Vec<String> = vec![
+            "--unshare-user".into(),
+            "--unshare-pid".into(),
+            "--die-with-parent".into(),
+            "--new-session".into(),
+            "--tmpfs".into(),
+            "/".into(),
+            "--proc".into(),
+            "/proc".into(),
+            "--dev".into(),
+            "/dev".into(),
+            "--tmpfs".into(),
+            "/tmp".into(),
+        ];
+        for dir in PLATFORM_RO_BINDS {
+            if Path::new(dir).exists() {
+                argv.extend(["--ro-bind".into(), (*dir).into(), (*dir).into()]);
+            }
+        }
+        argv.extend(["--chdir".into(), "/".into()]);
+        argv.extend(["sh".into(), "-c".into(), "echo probe > /dev/null".into()]);
         Command::new("bwrap")
-            .args([
-                "--unshare-user",
-                "--unshare-pid",
-                "--die-with-parent",
-                "--new-session",
-                "--proc",
-                "/proc",
-                "--dev",
-                "/dev",
-                "--ro-bind",
-                "/",
-                "/",
-                "--tmpfs",
-                "/tmp",
-                "--chdir",
-                "/tmp",
-            ])
-            .arg("true")
+            .args(&argv)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -310,7 +332,32 @@ pub fn bwrap_probe_works() -> bool {
     })
 }
 
+/// Host directories re-mounted read-only into the sandbox so the runtime
+/// (shells, compilers, package managers, DNS) keeps working. Only these are
+/// visible beyond the workspace/`$HOME` — everything else on the host is
+/// hidden, which is stricter than a blanket `--ro-bind / /`.
+const PLATFORM_RO_BINDS: &[&str] = &[
+    "/usr",
+    "/lib",
+    "/lib64",
+    "/bin",
+    "/sbin",
+    "/etc",
+    "/opt",
+    "/snap",
+    "/nix/store",
+];
+
 /// Build the bwrap argv prefix for a given mode. Pure function — unit-testable.
+///
+/// Mount strategy (security-critical): start from an EMPTY tmpfs root, then
+/// mount only what is needed. This is required for two reasons:
+/// 1. Containment: nothing from the host is visible unless explicitly mounted
+///    (stricter than `--ro-bind / /`, which exposes /home, /var, /root, ...).
+/// 2. Correctness: when the host root is bound, bwrap's propagation-fixup pass
+///    remounts the inherited `/dev` with `MS_NODEV`, making device nodes
+///    (null, urandom, ...) unusable in unprivileged sandboxes. An empty root
+///    hides the host mounts from that pass, so a fresh `--dev /dev` works.
 fn build_bwrap_argv(
     mode: SandboxMode,
     workspace: &Path,
@@ -323,19 +370,34 @@ fn build_bwrap_argv(
         "--unshare-pid".into(),
         "--die-with-parent".into(),
         "--new-session".into(),
+        // Empty root FIRST — see doc comment above.
+        "--tmpfs".into(),
+        "/".into(),
         "--proc".into(),
         "/proc".into(),
         "--dev".into(),
         "/dev".into(),
+        "--tmpfs".into(),
+        "/tmp".into(),
     ];
+    // Runtime read-only binds (skip anything that does not exist on the host).
+    for dir in PLATFORM_RO_BINDS {
+        if Path::new(dir).exists() {
+            argv.extend(["--ro-bind".into(), (*dir).into(), (*dir).into()]);
+        }
+    }
+    // systemd-resolved keeps /etc/resolv.conf as a symlink into /run; mount
+    // that too so DNS works inside the sandbox.
+    if Path::new("/run/systemd/resolve").exists() {
+        argv.extend([
+            "--ro-bind".into(),
+            "/run/systemd/resolve".into(),
+            "/run/systemd/resolve".into(),
+        ]);
+    }
     match mode {
         SandboxMode::None => {}
         SandboxMode::WorkspaceWrite => {
-            // Host fs read-only first.
-            argv.extend(["--ro-bind".into(), "/".into(), "/".into()]);
-            // Fresh tmpfs for /tmp before any binds that may live under it
-            // (bwrap creates missing destination dirs for later binds).
-            argv.extend(["--tmpfs".into(), "/tmp".into()]);
             // Re-enable writes per writable root.
             let mut writable: Vec<PathBuf> = vec![workspace.to_path_buf()];
             writable.extend(extra_writable.iter().cloned());
@@ -363,6 +425,16 @@ fn build_bwrap_argv(
                     home.to_string_lossy().into_owned(),
                 ]);
                 for dir in masked_dirs {
+                    let p = std::path::Path::new(dir);
+                    // Defense in depth (the wrapper also warns): an absolute or
+                    // `..`-containing entry would make home.join(dir) escape
+                    // $HOME and tmpfs-overlay an unrelated host path. Skip.
+                    if p.is_absolute()
+                        || p.components()
+                            .any(|c| matches!(c, std::path::Component::ParentDir))
+                    {
+                        continue;
+                    }
                     let masked = home.join(dir);
                     if masked.exists() {
                         argv.extend(["--tmpfs".into(), masked.to_string_lossy().into_owned()]);
@@ -371,42 +443,24 @@ fn build_bwrap_argv(
             }
         }
         SandboxMode::ReadOnly => {
-            argv.extend(["--ro-bind".into(), "/".into(), "/".into()]);
-            argv.extend(["--tmpfs".into(), "/tmp".into()]);
-            // Re-expose the workspace (read-only) on top of the tmpfs in case it
-            // lives under a masked dir (e.g. /tmp): --chdir needs it present.
+            // Workspace and $HOME visible read-only; no writable binds.
             argv.extend([
                 "--ro-bind".into(),
                 workspace.to_string_lossy().into_owned(),
                 workspace.to_string_lossy().into_owned(),
             ]);
+            if let Some(home) = home {
+                argv.extend([
+                    "--ro-bind".into(),
+                    home.to_string_lossy().into_owned(),
+                    home.to_string_lossy().into_owned(),
+                ]);
+            }
             argv.extend(["--unshare-net".into()]);
         }
         SandboxMode::Isolated => {
-            // Runtime stays available (read-only), but every host user/state
-            // directory is replaced by an empty tmpfs so no user data is
-            // visible; only the workspace is re-exposed, read-only. Network is
-            // disabled. This is the "can run code, cannot see or touch
-            // anything but the workspace" level.
-            argv.extend(["--ro-bind".into(), "/".into(), "/".into()]);
-            argv.extend(["--tmpfs".into(), "/tmp".into()]);
-            for host_dir in ["/home", "/root", "/var", "/run"] {
-                argv.extend(["--tmpfs".into(), host_dir.into()]);
-            }
-            // Mask a $HOME that lives outside the hardcoded host dirs too
-            // (e.g. HOME=/data/home/user): it must not be readable under
-            // "cannot see anything but the workspace". The workspace bind
-            // below is mounted after, so a workspace inside $HOME is still
-            // re-exposed.
-            if let Some(home) = home {
-                let home = home.to_string_lossy();
-                let already_masked = ["/home", "/root", "/var", "/run"]
-                    .iter()
-                    .any(|m| home.starts_with(m));
-                if !already_masked {
-                    argv.extend(["--tmpfs".into(), home.into_owned()]);
-                }
-            }
+            // Runtime + workspace (read-only) only. No $HOME at all, so no
+            // user data is reachable; network disabled.
             argv.extend([
                 "--ro-bind".into(),
                 workspace.to_string_lossy().into_owned(),
@@ -440,6 +494,9 @@ pub fn wrap_command(
     args: &[String],
 ) -> WrappedCommand {
     let unavailable = mode != SandboxMode::None && !bwrap_probe_works();
+    // Read the config once: it is cloned under a lock, so every access costs
+    // a lock + clone of the whole struct.
+    let config = sandbox_config();
 
     // Guard: a writable root of `/` would emit `--bind / /` after
     // `--ro-bind / /`, silently making the whole filesystem writable — i.e. no
@@ -447,7 +504,7 @@ pub fn wrap_command(
     // the configured extra root, `$HOME`, and the server's working directory.
     let root_writable = mode != SandboxMode::None
         && (workspace == Path::new("/")
-            || sandbox_config()
+            || config
                 .as_ref()
                 .and_then(|c| c.workspace.as_ref())
                 .is_some_and(|w| w == Path::new("/"))
@@ -487,7 +544,6 @@ pub fn wrap_command(
         };
     }
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let config = sandbox_config();
     let extra_writable: Vec<PathBuf> = config
         .as_ref()
         .and_then(|c| c.workspace.clone())
@@ -498,6 +554,28 @@ pub fn wrap_command(
         .map(|c| c.masked_dirs.clone())
         .filter(|m| !m.is_empty())
         .unwrap_or_else(default_masked_dirs);
+    // Misconfigured mask entries (absolute paths / `..` segments) are skipped
+    // by the argv builder; surface the misconfiguration once instead of
+    // silently ignoring it.
+    let bad_masks: Vec<&String> = masked
+        .iter()
+        .filter(|m| {
+            let p = Path::new(m);
+            p.is_absolute()
+                || p.components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+        })
+        .collect();
+    if !bad_masks.is_empty() {
+        static MASK_WARNED: OnceLock<()> = OnceLock::new();
+        if MASK_WARNED.get().is_none() {
+            let _ = MASK_WARNED.set(());
+            tracing::warn!(
+                entries = ?bad_masks,
+                "command_sandbox.masked_dirs contains absolute/.. paths — those entries are ignored (must be $HOME-relative names)"
+            );
+        }
+    }
     let mut argv = build_bwrap_argv(mode, workspace, home.as_deref(), &extra_writable, &masked);
     // The wrapped program goes first, then its args — bwrap execs the first
     // non-option argument, so omitting `program` here made bwrap exec the
@@ -505,12 +583,73 @@ pub fn wrap_command(
     argv.push(program.to_string());
     argv.extend(args.iter().cloned());
     record_sandbox_applied();
+    // Surface the actually-applied mode on first use — with no explicit config
+    // the effective mode defaults to workspace-write, and this log makes that
+    // implicit default observable instead of silent.
+    static APPLIED_INFO: OnceLock<()> = OnceLock::new();
+    if APPLIED_INFO.get().is_none() {
+        let _ = APPLIED_INFO.set(());
+        tracing::info!(
+            mode = mode.as_str(),
+            workspace = %workspace.display(),
+            "command sandbox active for model-issued commands"
+        );
+    }
     WrappedCommand {
         program: "bwrap".to_string(),
         args: argv,
         applied: true,
         mode,
     }
+}
+
+/// Result of preparing a command for sandboxed execution — the program/args a
+/// caller should spawn plus how to configure it.
+pub struct PreparedCommand {
+    /// Program to spawn (either the original or `bwrap`).
+    pub program: String,
+    /// Full argv (bwrap prefix included when `applied`).
+    pub args: Vec<String>,
+    /// Whether OS isolation is active for this invocation.
+    pub applied: bool,
+    /// The mode that produced this wrapper.
+    pub mode: SandboxMode,
+    /// Whether credential env vars should be scrubbed from the spawned command
+    /// (true whenever a sandbox mode is requested, even when bwrap is
+    /// unavailable and execution degrades to direct: env leakage is
+    /// independent of filesystem containment).
+    pub scrub_env: bool,
+}
+
+/// Prepare `program args` for sandboxed execution: applies the bwrap wrapper
+/// when the effective mode requires it and bwrap works, and decides env
+/// scrubbing. Callers build `Command::new(prepared.program)` with
+/// `prepared.args` and apply `scrub_env`.
+pub fn prepare_command(
+    mode: SandboxMode,
+    workspace: &Path,
+    program: &str,
+    args: &[String],
+) -> PreparedCommand {
+    let wrapped = wrap_command(mode, workspace, program, args);
+    PreparedCommand {
+        program: wrapped.program,
+        args: wrapped.args,
+        applied: wrapped.applied,
+        mode: wrapped.mode,
+        scrub_env: wrapped.mode != SandboxMode::None,
+    }
+}
+
+/// bwrap "spawned fine but could not set up the namespace" signature: exit
+/// status 1 with a `bwrap:` stderr prefix. In that case the inner command
+/// never ran, so it is safe (and necessary) to retry without the sandbox.
+pub fn is_bwrap_setup_failure(status: Option<i32>, stderr: &str) -> bool {
+    status == Some(1)
+        && stderr
+            .lines()
+            .next()
+            .is_some_and(|l| l.starts_with("bwrap:"))
 }
 
 #[cfg(test)]
@@ -541,7 +680,11 @@ mod tests {
             &[".ssh".to_string()],
         );
         let joined = argv.join(" ");
-        assert!(joined.contains("--ro-bind / /"));
+        // Empty tmpfs root (hides host mounts from the NODEV fixup pass), a
+        // fresh /dev, and at least one platform runtime bind must be present.
+        assert!(joined.contains("--tmpfs /"));
+        assert!(joined.contains("--dev /dev"));
+        assert!(joined.contains("--ro-bind /usr /usr"));
         assert!(joined.contains(&format!("--bind {} {}", ws.display(), ws.display())));
         assert!(joined.contains(&format!("--bind {} {}", home.display(), home.display())));
         assert!(joined.contains(&format!("--tmpfs {}", secret.display())));
@@ -561,7 +704,9 @@ mod tests {
         let argv = build_bwrap_argv(SandboxMode::ReadOnly, &ws, None, &[], &[]);
         let joined = argv.join(" ");
         assert!(joined.contains("--unshare-net"));
-        assert!(joined.contains("--ro-bind / /"));
+        assert!(joined.contains("--tmpfs /"));
+        // Workspace is re-exposed read-only.
+        assert!(joined.contains(&format!("--ro-bind {} {}", ws.display(), ws.display())));
         assert!(
             !joined.contains("--bind"),
             "read-only has no writable binds"
@@ -575,12 +720,17 @@ mod tests {
         std::fs::create_dir_all(&ws).unwrap();
         let argv = build_bwrap_argv(SandboxMode::Isolated, &ws, None, &[], &[]);
         let joined = argv.join(" ");
-        assert!(joined.contains("--ro-bind / /"));
-        for host_dir in ["/home", "/root", "/var", "/run"] {
-            assert!(joined.contains(&format!("--tmpfs {}", host_dir)));
-        }
+        // Empty root hides the whole host; only runtime + workspace are mounted.
+        assert!(joined.contains("--tmpfs /"));
+        assert!(joined.contains("--dev /dev"));
         assert!(joined.contains(&format!("--ro-bind {} {}", ws.display(), ws.display())));
         assert!(joined.contains("--unshare-net"));
+        // No $HOME exposure at all in isolated mode.
+        assert!(!joined.contains("--bind"), "isolated has no writable binds");
+        assert!(
+            !joined.contains("/home"),
+            "isolated must not mount /home (workspace may live elsewhere)"
+        );
     }
 
     #[test]
@@ -695,10 +845,10 @@ mod tests {
 
     #[test]
     fn argv_mount_order_is_safe() {
-        // Mount order is security-critical: the read-only host bind must come
-        // BEFORE any writable bind (or the writable bind is the effective
-        // rule), and the /tmp tmpfs must come before binds that may live under
-        // /tmp. Assert relative positions, not just membership.
+        // Mount order is security-critical: the empty tmpfs root must come
+        // FIRST so bwrap's propagation-fixup pass cannot remount an inherited
+        // /dev with MS_NODEV (breaking device nodes); the fresh /dev and the
+        // workspace bind must come after it, and writable binds after --dev.
         let dir = tempfile::TempDir::new().unwrap();
         let ws = dir.path().join("ws");
         std::fs::create_dir_all(&ws).unwrap();
@@ -709,19 +859,82 @@ mod tests {
             &[],
             &[".ssh".to_string()],
         );
-        let ro_idx = argv.iter().position(|a| a == "--ro-bind").unwrap();
+        let tmpfs_root_idx = argv
+            .windows(2)
+            .position(|w| w == ["--tmpfs", "/"])
+            .expect("empty tmpfs root present");
+        let dev_idx = argv.iter().position(|a| a == "--dev").unwrap();
         let first_bind_idx = argv.iter().position(|a| a == "--bind").unwrap();
         assert!(
-            ro_idx < first_bind_idx,
-            "--ro-bind / / must precede writable binds"
+            tmpfs_root_idx < dev_idx,
+            "empty tmpfs root must precede --dev"
         );
-        let tmpfs_tmp_idx = argv.windows(2).position(|w| w == ["--tmpfs", "/tmp"]);
-        if let Some(tmpfs_idx) = tmpfs_tmp_idx {
-            assert!(
-                tmpfs_idx < first_bind_idx,
-                "--tmpfs /tmp must precede workspace binds"
-            );
+        assert!(
+            dev_idx < first_bind_idx,
+            "--dev must precede writable binds"
+        );
+        assert!(
+            dev_idx < first_bind_idx,
+            "--dev must precede writable binds"
+        );
+    }
+
+    #[test]
+    fn mask_entries_that_escape_home_are_ignored() {
+        // An absolute or `..`-containing masked_dirs entry would make
+        // `home.join(dir)` escape $HOME and tmpfs-overlay an unrelated host
+        // path (e.g. `/etc`). The argv builder must skip them. Note: the root
+        // `--tmpfs /` IS present by design — it is the empty-root mount that
+        // hides the host filesystem, not a mask entry.
+        let dir = tempfile::TempDir::new().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::create_dir_all(dir.path().join("etc")).unwrap();
+        let argv = build_bwrap_argv(
+            SandboxMode::WorkspaceWrite,
+            &home,
+            Some(&home),
+            &[],
+            &[
+                "/etc".to_string(),
+                "/".to_string(),
+                "../outside".to_string(),
+                ".ssh".to_string(),
+            ],
+        );
+        let joined = argv.join(" ");
+        assert!(
+            !argv.windows(2).any(|w| w == ["--tmpfs", "/etc"]),
+            "absolute mask entries must be ignored, got: {joined}"
+        );
+        assert!(
+            !joined.contains("outside"),
+            "parent-dir mask entries must be ignored, got: {joined}"
+        );
+        // Valid relative entries are still masked.
+        assert!(joined.contains(&format!("--tmpfs {}", home.join(".ssh").display())));
+    }
+
+    #[test]
+    fn token_variants_are_recognized_as_credentials() {
+        // Regression: bare `TOKEN` (e.g. SLACK_TOKEN, MYAPP_TOKEN) leaked to
+        // sandboxed commands because the substring list only had API_TOKEN.
+        for (k, blocked) in [
+            ("SLACK_TOKEN", true),
+            ("MYAPP_TOKEN", true),
+            ("SENTRY_AUTH_TOKEN", true),
+            ("PATH", false),
+            ("CARGO_HOME", false),
+            ("LANG", false),
+        ] {
+            assert_eq!(is_credential_env(k, &[]), blocked, "{k}");
         }
+        // Passthrough still beats the new substring rule.
+        assert!(!is_credential_env(
+            "SLACK_TOKEN",
+            &["slack_token".to_string()]
+        ));
     }
 
     /// Live containment check — skipped with a visible reason when bwrap or

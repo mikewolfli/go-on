@@ -4,7 +4,6 @@ use crate::governance::pua::tool_execution_report;
 use crate::i18n::runtime::{t, tf};
 use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 use anyhow::Result;
-use std::process::Command;
 use tracing::debug;
 
 const ALLOWED_GIT_SUBCOMMANDS: &[&str] = &["status", "log", "diff", "show", "stash"];
@@ -80,29 +79,25 @@ impl Tool for GitTool {
 
         let current_dir = sanitize_path(input, directory)?;
 
-        let mut command = Command::new("git");
-        command.arg(subcommand).current_dir(&current_dir);
-
-        // Add --no-pager for read-only commands to prevent hanging
-        match subcommand {
-            "log" | "diff" | "show" => {
-                command.arg("--no-pager");
-            }
-            _ => {}
+        // --no-pager for read-only commands to prevent hanging.
+        let mut git_args = vec![subcommand.to_string()];
+        if matches!(subcommand, "log" | "diff" | "show") {
+            git_args.push("--no-pager".to_string());
         }
-
-        if !args.is_empty() {
-            command.args(&args);
-        }
+        git_args.extend(args.iter().cloned());
 
         debug!(subcommand = %subcommand, args = ?args, directory = %directory, "tool: running git command");
 
         // Capped execution: `Command::output()` would buffer the full output
         // of `git diff`/`git log` on a huge repo (OOM) and push it unclipped
-        // into the LLM context. Truncation is reported explicitly.
-        let capped = crate::orchestration::tool::exec_common::run_command_capped(
-            &mut command,
+        // into the LLM context. Truncation is reported explicitly. The
+        // command also runs inside the OS sandbox (git is a command executor).
+        let capped = crate::orchestration::tool::exec_common::run_sandboxed_capped(
+            &current_dir,
+            "git",
+            &git_args,
             crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+            |_| {},
         )?;
         let success = capped.status == Some(0);
         let stdout = capped.stdout_lossy();

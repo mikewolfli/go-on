@@ -993,10 +993,20 @@ impl Tool for ApplyCodeActionTool {
                     ));
                 }
                 let dir = file_path.parent().unwrap_or_else(|| Path::new("."));
-                let output = std::process::Command::new("cargo")
-                    .args(["clippy", "--fix", "--allow-dirty", "--allow-staged"])
-                    .current_dir(dir)
-                    .output()
+                // clippy --fix mutates the workspace, so it runs inside the OS
+                // sandbox (workspace writable, host filesystem hidden).
+                let (output, _applied) =
+                    crate::orchestration::tool::exec_common::run_sandboxed_output(
+                        dir,
+                        "cargo",
+                        &[
+                            "clippy".to_string(),
+                            "--fix".to_string(),
+                            "--allow-dirty".to_string(),
+                            "--allow-staged".to_string(),
+                        ],
+                        |_| {},
+                    )
                     .context("failed to run cargo clippy --fix")?;
                 Ok(ToolOutput {
                     success: output.status.success(),
