@@ -79,6 +79,7 @@ pub(super) async fn build_debug_panel_payload_impl(server: &AcpServer) -> Value 
                     "active_when_harness_bus_absent": server.governance_deps.harness_bus.is_none(),
                     "snapshot": crate::acp::helpers::tool_governance_defaults::default_governance_policy_snapshot(),
                 },
+                "command_sandbox": crate::security::sandbox::sandbox_counters(),
                 "repair_cycle_effective_ratio": repair_cycle_effective_ratio,
                 "repair_replan_required_ratio": repair_replan_required_ratio,
                 "repair_replan_required_total": repair_replan_required_total,

@@ -3,7 +3,7 @@
 //! Provides simple utility operations that don't fit into other tool categories.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use rand::RngExt;
@@ -331,11 +331,18 @@ impl Tool for HashFileTool {
         let path = input.payload["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("hash_file requires arguments.path"))?;
-        let path = PathBuf::from(path);
+        // Path sandbox (same as the other file tools): the tool is exposed
+        // Direct to the model, so `..`/absolute escapes must be rejected.
+        let validated = crate::orchestration::tool::sanitize_path(input, path)?;
         let algorithm = input.payload["algorithm"].as_str().unwrap_or("sha256");
 
-        let data =
-            fs::read(&path).with_context(|| format!("Failed to read file '{}'", path.display()))?;
+        // Input-side OOM guard: a model-picked multi-GB file must not be
+        // loaded whole into memory just to hash it.
+        let data = crate::orchestration::tool::exec_common::read_file_capped(
+            &validated,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("Failed to read file '{}'", validated.display()))?;
 
         let hash = match algorithm {
             "sha512" => {
@@ -360,7 +367,7 @@ impl Tool for HashFileTool {
         Ok(ToolOutput {
             success: true,
             result: Some(json!({
-                "path": path.to_string_lossy(),
+                "path": path,
                 "algorithm": algorithm,
                 "hash": hash,
                 "file_size": file_size,
@@ -524,6 +531,27 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("requires arguments.path"));
+    }
+
+    #[test]
+    fn hash_file_hashes_existing_file_with_sandbox_validation() {
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        let file = tmp.path().join("data.bin");
+        std::fs::write(&file, b"hello hash").expect("write file");
+
+        let tool = HashFileTool;
+        let input = tool_input(json!({"path": file.to_str().unwrap()}));
+        let output = tool.run(&input).expect("hash_file should succeed");
+        assert!(output.success);
+        let result = output.result.expect("result");
+        let hash = result["hash"].as_str().expect("hash field");
+        assert_eq!(hash.len(), 64, "sha256 hex digest length");
+        assert_eq!(result["file_size"].as_u64().unwrap(), 10);
+
+        // Path validation is now enforced: a nonexistent path must be
+        // rejected by sanitize_path (previously fs::read with no sandbox).
+        let bad = tool_input(json!({"path": "/definitely/not/here-xyz"}));
+        assert!(tool.run(&bad).is_err(), "nonexistent path must be rejected");
     }
 
     // ── Shared ASCII case-insensitive helpers ──

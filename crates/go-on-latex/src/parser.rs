@@ -106,13 +106,25 @@ impl Lexer {
 struct Parser {
     lexer: Lexer,
     current: Token,
+    depth: usize,
 }
+
+/// Nesting-depth guard: `\frac` recurses through `parse_command →
+/// parse_optional_group → parse_atom` WITHOUT requiring braces, so a
+/// pathological input like a long chain of `\frac` would otherwise overflow
+/// the thread stack (Rust aborts the process on stack overflow). `{...}`
+/// nesting is counted the same way.
+const MAX_PARSE_DEPTH: usize = 256;
 
 impl Parser {
     fn new(input: &str) -> Self {
         let mut lexer = Lexer::new(input);
         let current = lexer.next_token();
-        Self { lexer, current }
+        Self {
+            lexer,
+            current,
+            depth: 0,
+        }
     }
 
     fn advance(&mut self) {
@@ -169,6 +181,21 @@ impl Parser {
 
     /// Parse an atomic element: a group `{...}`, a command, or a single character.
     fn parse_atom(&mut self) -> MathNode {
+        if self.depth >= MAX_PARSE_DEPTH {
+            // Depth guard: skip the rest of the input instead of recursing
+            // further (fail-safe degradation to empty text nodes).
+            while self.current != Token::Eof {
+                self.advance();
+            }
+            return MathNode::Text(String::new());
+        }
+        self.depth += 1;
+        let node = self.parse_atom_body();
+        self.depth -= 1;
+        node
+    }
+
+    fn parse_atom_body(&mut self) -> MathNode {
         match &self.current {
             Token::BeginGroup => {
                 self.advance();
@@ -405,5 +432,23 @@ mod tests {
     fn test_sum() {
         let nodes = parse("\\sum_{i=0}^{n}");
         assert!(matches!(nodes[0], MathNode::Sum(..)));
+    }
+
+    #[test]
+    fn test_pathological_nesting_does_not_overflow_stack() {
+        // Regression: `\frac` recurses without requiring braces, so a long
+        // chain would previously overflow the thread stack (process abort).
+        // The depth guard must degrade gracefully instead.
+        let input = "\\frac".repeat(100_000);
+        let nodes = parse(&input);
+        // Parsing must terminate; the result may be degraded but non-empty.
+        assert!(!nodes.is_empty());
+    }
+
+    #[test]
+    fn test_normal_nesting_still_works() {
+        // The depth guard must not affect legitimate expressions.
+        let nodes = parse("\\frac{1}{\\frac{2}{3}}");
+        assert!(matches!(nodes[0], MathNode::Fraction(..)));
     }
 }

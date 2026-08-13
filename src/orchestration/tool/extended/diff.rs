@@ -133,18 +133,28 @@ fn try_system_diff(
     context: usize,
 ) -> Result<String> {
     let context_arg = format!("-U{}", context);
-    let output = Command::new("diff")
-        .arg(&context_arg)
-        .arg(path_a)
-        .arg(path_b)
-        .output()
-        .context("failed to execute system diff")?;
+    let mut cmd = Command::new("diff");
+    cmd.arg(&context_arg).arg(path_a).arg(path_b);
+    // Capped execution: system `diff` on huge files must not buffer the full
+    // output into memory (the built-in LCS path has a line guard; the system
+    // path had none).
+    let capped = crate::orchestration::tool::exec_common::run_command_capped(
+        &mut cmd,
+        crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+    )
+    .context("failed to execute system diff")?;
 
     // `diff` exits with 0 when files are identical, 1 when different.
     // Both are successful for our purposes — we only fail on signal/IO errors.
-    if output.status.success() || output.status.code() == Some(1) {
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if capped.status == Some(0) || capped.status == Some(1) {
+        if capped.stdout_truncated || capped.stderr_truncated {
+            tracing::warn!(
+                "system diff: output truncated at {} bytes",
+                crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES
+            );
+        }
+        let stdout = capped.stdout_lossy();
+        let stderr = capped.stderr_lossy();
         let combined = if stderr.is_empty() {
             stdout
         } else {
@@ -152,7 +162,7 @@ fn try_system_diff(
         };
         Ok(combined)
     } else {
-        anyhow::bail!("system diff exited with code {:?}", output.status.code());
+        anyhow::bail!("system diff exited with code {:?}", capped.status);
     }
 }
 

@@ -254,8 +254,11 @@ impl Tool for TomlReadTool {
 
         debug!(path = %validated_path.display(), "tool: reading TOML file");
 
-        let content = std::fs::read_to_string(&validated_path)
-            .with_context(|| format!("failed to read TOML file: {}", validated_path.display()))?;
+        let content = crate::orchestration::tool::exec_common::read_text_capped(
+            &validated_path,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("failed to read TOML file: {}", validated_path.display()))?;
 
         let value: toml::Value = content
             .parse()
@@ -357,8 +360,11 @@ impl Tool for YamlReadTool {
 
         debug!(path = %validated_path.display(), "tool: reading YAML file");
 
-        let content = std::fs::read_to_string(&validated_path)
-            .with_context(|| format!("failed to read YAML file: {}", validated_path.display()))?;
+        let content = crate::orchestration::tool::exec_common::read_text_capped(
+            &validated_path,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("failed to read YAML file: {}", validated_path.display()))?;
 
         let value: serde_yaml::Value = serde_yaml::from_str(&content)
             .with_context(|| format!("failed to parse YAML in {}", validated_path.display()))?;

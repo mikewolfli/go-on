@@ -1304,10 +1304,11 @@ async fn execute_compact_command(messages: &mut Vec<Message>, current_agent: &Ar
             .await
     });
 
-    let mut summary_text = String::new();
-    while let Some(token) = summary_rx.recv().await {
-        summary_text.push_str(&token);
-    }
+    // Bounded collection: the summary is inserted back into the session and
+    // re-sent to the model on subsequent requests, so an unbounded stream
+    // would inflate every later request's context.
+    let summary_text =
+        crate::acp::helpers::conversation::drain_channel_capped(&mut summary_rx).await;
 
     if let Err(e) = summarize_task.await {
         eprintln!(
@@ -3117,7 +3118,25 @@ async fn chat_simple(
     tokio::spawn(async move { agent_ref.chat(prompt, principles_opt, None, sender).await });
 
     let mut response = String::new();
+    let mut chunks = 0usize;
+    let mut total_chars = 0usize;
     while let Some(token) = rx.recv().await {
+        let next_chars = token.chars().count();
+        if crate::acp::helpers::conversation::stream_would_exceed_limits(
+            chunks,
+            total_chars,
+            next_chars,
+        ) {
+            eprintln!(
+                "{}[truncated at {} chars]{}",
+                ansi!("33"),
+                total_chars,
+                ansi!("0")
+            );
+            break;
+        }
+        chunks += 1;
+        total_chars += next_chars;
         match classify_token(&token) {
             // Skip reasoning markers and tool calls for simple chat
             TokenKind::ReasoningStart | TokenKind::ReasoningEnd => continue,

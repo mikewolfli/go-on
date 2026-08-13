@@ -12,8 +12,6 @@ use anyhow::{Context, Result};
 #[cfg(feature = "cam-gcode")]
 use std::collections::BTreeSet;
 #[cfg(feature = "cam-gcode")]
-use std::fs;
-#[cfg(feature = "cam-gcode")]
 use tracing::info;
 
 #[cfg(feature = "cam-gcode")]
@@ -29,14 +27,16 @@ impl Tool for GcodeReadTool {
         crate::orchestration::tool::ToolExposure::Deferred
     }
 
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
         let validated = sanitize_path(input, path)?;
-        let content = fs::read_to_string(&validated)
-            .with_context(|| format!("failed to read G-code: {}", validated.display()))?;
+        let content = crate::orchestration::tool::exec_common::read_text_capped(
+            &validated,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("failed to read G-code: {}", validated.display()))?;
 
         let byte_size = content.len();
         let mut line_count = 0u64;

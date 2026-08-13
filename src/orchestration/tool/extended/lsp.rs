@@ -1164,7 +1164,10 @@ fn collect_definition_matches(
             continue;
         }
 
-        if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(content) = crate::orchestration::tool::exec_common::read_text_capped(
+            &path,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        ) {
             for (line_num, line) in content.lines().enumerate() {
                 if results.len() >= max_results {
                     break;
@@ -1272,7 +1275,10 @@ fn collect_reference_matches(
 
         *files_scanned += 1;
 
-        if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(content) = crate::orchestration::tool::exec_common::read_text_capped(
+            &path,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        ) {
             for (line_num, line) in content.lines().enumerate() {
                 if results.len() as u64 >= max_results {
                     break;

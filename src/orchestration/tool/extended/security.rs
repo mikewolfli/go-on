@@ -31,13 +31,23 @@ struct OsvCache {
     entries: HashMap<String, OsvCacheEntry>,
 }
 
+/// Bounded cache size (oldest entry evicted beyond this) so the cache file
+/// cannot grow without limit.
+const MAX_OSV_CACHE_ENTRIES: usize = 5_000;
+
 impl OsvCache {
     fn load_or_create(ttl_hours: u64) -> Self {
         let path = osv_cache_path();
-        let entries = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        // Cap the read: the cache is self-written, but a corrupt/huge file on
+        // disk must not OOM the tool (same input-side guard as the lock-file
+        // extractors below).
+        let entries = crate::orchestration::tool::exec_common::read_text_capped(
+            &path,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
         Self {
             path,
             ttl_secs: ttl_hours * 3600,
@@ -71,12 +81,32 @@ impl OsvCache {
                 cached_at: now,
             },
         );
-        // Persist to disk
+        // Bounded cache: evict the oldest entry when over capacity so a
+        // long-running scanner (many ecosystems/packages) cannot grow the
+        // cache file without bound (each `set` rewrites the whole file).
+        if self.entries.len() > MAX_OSV_CACHE_ENTRIES {
+            if let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, e)| e.cached_at)
+                .map(|(k, _)| k.clone())
+            {
+                self.entries.remove(&oldest);
+            }
+        }
+        // Persist to disk; a write failure is logged (not silent) so a cache
+        // that silently stops persisting is observable.
         if let Ok(data) = serde_json::to_string(&self.entries) {
             if let Some(parent) = self.path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let _ = std::fs::write(&self.path, data);
+            if let Err(e) = std::fs::write(&self.path, data) {
+                tracing::warn!(
+                    "osv cache: failed to persist {} entries to {}: {e}",
+                    self.entries.len(),
+                    self.path.display()
+                );
+            }
         }
     }
 }
@@ -295,7 +325,11 @@ fn extract_packages(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
 }
 
 fn extract_cargo_lock(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
-    let content = std::fs::read_to_string(path).context("failed to read Cargo.lock")?;
+    let content = crate::orchestration::tool::exec_common::read_text_capped(
+        path,
+        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+    )
+    .context("failed to read Cargo.lock")?;
     let parsed: Value = toml::from_str(&content).context("failed to parse Cargo.lock as TOML")?;
 
     let packages = parsed["package"]
@@ -319,7 +353,11 @@ fn extract_cargo_lock(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
 }
 
 fn extract_npm_lock(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
-    let content = std::fs::read_to_string(path).context("failed to read package-lock.json")?;
+    let content = crate::orchestration::tool::exec_common::read_text_capped(
+        path,
+        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+    )
+    .context("failed to read package-lock.json")?;
     let parsed: Value =
         serde_json::from_str(&content).context("failed to parse package-lock.json")?;
 
@@ -343,7 +381,11 @@ fn extract_npm_lock(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
 }
 
 fn extract_yarn_lock(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
-    let content = std::fs::read_to_string(path).context("failed to read yarn.lock")?;
+    let content = crate::orchestration::tool::exec_common::read_text_capped(
+        path,
+        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+    )
+    .context("failed to read yarn.lock")?;
     // Parse simple yarn.lock format: lines starting with `"` are package specifiers.
     let mut packages = Vec::new();
     for line in content.lines() {
@@ -369,7 +411,11 @@ fn extract_yarn_lock(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
 }
 
 fn extract_requirements_txt(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
-    let content = std::fs::read_to_string(path).context("failed to read requirements.txt")?;
+    let content = crate::orchestration::tool::exec_common::read_text_capped(
+        path,
+        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+    )
+    .context("failed to read requirements.txt")?;
     let mut packages = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();
@@ -395,7 +441,11 @@ fn extract_requirements_txt(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
 }
 
 fn extract_go_deps(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
-    let content = std::fs::read_to_string(path).context("failed to read go.sum/go.mod")?;
+    let content = crate::orchestration::tool::exec_common::read_text_capped(
+        path,
+        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+    )
+    .context("failed to read go.sum/go.mod")?;
     let mut packages = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();
@@ -418,7 +468,11 @@ fn extract_go_deps(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
 }
 
 fn extract_pipfile_lock(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
-    let content = std::fs::read_to_string(path).context("failed to read Pipfile.lock")?;
+    let content = crate::orchestration::tool::exec_common::read_text_capped(
+        path,
+        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+    )
+    .context("failed to read Pipfile.lock")?;
     let parsed: Value = serde_json::from_str(&content).context("failed to parse Pipfile.lock")?;
 
     let mut packages = Vec::new();
@@ -447,7 +501,11 @@ fn extract_pipfile_lock(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
 
 fn extract_poetry_lock(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
     // Poetry uses TOML-based poetry.lock similar to Cargo.lock.
-    let content = std::fs::read_to_string(path).context("failed to read poetry.lock")?;
+    let content = crate::orchestration::tool::exec_common::read_text_capped(
+        path,
+        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+    )
+    .context("failed to read poetry.lock")?;
     let parsed: Value = toml::from_str(&content).context("failed to parse poetry.lock as TOML")?;
 
     let packages = parsed["package"]
@@ -471,7 +529,11 @@ fn extract_poetry_lock(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
 }
 
 fn extract_gemfile_lock(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
-    let content = std::fs::read_to_string(path).context("failed to read Gemfile.lock")?;
+    let content = crate::orchestration::tool::exec_common::read_text_capped(
+        path,
+        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+    )
+    .context("failed to read Gemfile.lock")?;
     let mut packages = Vec::new();
     let mut in_specs = false;
     for line in content.lines() {
@@ -529,7 +591,7 @@ fn query_osv(pkg: &OsvPackage) -> Result<Vec<Value>> {
         body["version"] = json!(version);
     }
 
-    let resp = client
+    let mut resp = client
         .post("https://api.osv.dev/v1/query")
         .timeout(std::time::Duration::from_secs(15))
         .json(&body)
@@ -544,7 +606,14 @@ fn query_osv(pkg: &OsvPackage) -> Result<Vec<Value>> {
         ));
     }
 
-    let data: Value = resp.json().context("failed to parse OSV API response")?;
+    // Capped body read: OSV returns full advisory lists for popular packages;
+    // `resp.json()` would buffer the whole body unboundedly.
+    let body = crate::orchestration::tool::extended::http::read_blocking_body_capped(
+        &mut resp,
+        "osv.dev API",
+    )
+    .context("failed to read OSV API response")?;
+    let data: Value = serde_json::from_slice(&body).context("failed to parse OSV API response")?;
 
     let vulns = data["vulns"]
         .as_array()

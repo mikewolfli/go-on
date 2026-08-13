@@ -383,12 +383,10 @@ Memories:
                 return 0;
             }
 
-            // Collect all streamed tokens into one response string.
-            let mut buf = String::new();
-            while let Some(token) = rx.recv().await {
-                buf.push_str(&token);
-            }
-            let response = buf;
+            // Collect all streamed tokens into one response string, bounded
+            // by the shared stream caps (distillation patterns get parsed
+            // from this text).
+            let response = crate::acp::helpers::conversation::drain_channel_capped(&mut rx).await;
 
             if response.is_empty() {
                 return 0;

@@ -46,6 +46,13 @@ pub struct HubServer {
     rpc_count: Arc<Mutex<u64>>,
 }
 
+/// Vault capacity bound: keys are client-controlled (`hub.store` /
+/// `memory.ingest`), so an unbounded vault would grow without limit on a
+/// long-running hub. New keys are REJECTED when full — explicit, never a
+/// silent eviction (a vault must not drop stored data under the caller's
+/// feet).
+const MAX_VAULT_KEYS: usize = 10_000;
+
 impl HubServer {
     /// Create a new Hub server bound to `127.0.0.1:<port>` (0 = auto-assign).
     pub fn with_port(port: u16) -> Result<Self> {
@@ -201,12 +208,25 @@ async fn handle_rpc(
     // Parse headers.
     let mut content_length: usize = 0;
     let mut auth = String::new();
+    let mut header_count: usize = 0;
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).await?;
         let line = line.trim();
         if line.is_empty() {
             break;
+        }
+        // Bound the header COUNT as well as each line's size: a loopback
+        // client sending an endless stream of small headers must not keep the
+        // parser looping without bound.
+        header_count += 1;
+        if header_count > crate::shared::http_timeouts::MAX_HTTP_HEADER_COUNT {
+            return write_json(
+                &mut stream,
+                431,
+                json_rpc_error(None, INVALID_REQUEST, "Too many headers"),
+            )
+            .await;
         }
         // Bound header size (shared constant with the MCP/ACP arms) so a
         // hostile client cannot grow memory unboundedly with header lines.
@@ -325,7 +345,19 @@ async fn handle_rpc(
                 return Ok(());
             }
             let value = value.cloned().unwrap_or(json!(null));
-            vault.lock().await.insert(key.to_string(), value);
+            // Vault capacity bound (see MAX_VAULT_KEYS): reject new keys when
+            // full instead of silently evicting stored data.
+            let mut vault = vault.lock().await;
+            if vault.len() >= MAX_VAULT_KEYS && !vault.contains_key(key) {
+                let err = json_rpc_error(
+                    Some(req_id.clone()),
+                    INVALID_PARAMS,
+                    format!("vault full (max {MAX_VAULT_KEYS} keys)"),
+                );
+                write_json(&mut stream, 200, err).await?;
+                return Ok(());
+            }
+            vault.insert(key.to_string(), value);
             json!({"ok": true, "key": key})
         }
         "hub.retrieve" => {
@@ -360,7 +392,19 @@ async fn handle_rpc(
                 .to_string();
             let count = entries.as_array().map(|a| a.len()).unwrap_or(0);
             let key = format!("memory.entries.{}", source);
-            vault.lock().await.insert(key.clone(), entries);
+            // Same vault capacity bound as hub.store: an unbounded set of
+            // remote sources would grow the vault without limit.
+            let mut vault = vault.lock().await;
+            if vault.len() >= MAX_VAULT_KEYS && !vault.contains_key(&key) {
+                let err = json_rpc_error(
+                    Some(req_id.clone()),
+                    INVALID_PARAMS,
+                    format!("vault full (max {MAX_VAULT_KEYS} keys)"),
+                );
+                write_json(&mut stream, 200, err).await?;
+                return Ok(());
+            }
+            vault.insert(key.clone(), entries);
             json!({"ok": true, "stored": count, "key": key})
         }
         _ => {

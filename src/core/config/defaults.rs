@@ -295,7 +295,6 @@ mod adaptive {
             }
 
             super::super::types::AdaptiveConfig {
-                adaptive_mode: true,
                 minimal_config: super::super::types::MinimalConfig {
                     default_phase: super::default_coding_phase(),
                     available_providers,

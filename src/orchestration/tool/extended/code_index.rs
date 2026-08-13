@@ -190,6 +190,9 @@ impl CodeIndex {
 
         let mut dir_stack = vec![root.clone()];
         while let Some(dir) = dir_stack.pop() {
+            if files_scanned >= MAX_INDEX_FILES {
+                break;
+            }
             let entries = match fs::read_dir(&dir) {
                 Ok(e) => e,
                 Err(_) => continue,

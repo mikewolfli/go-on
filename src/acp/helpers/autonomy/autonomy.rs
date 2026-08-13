@@ -31,6 +31,27 @@ pub(crate) async fn run_followup_after_tool_observation(
         let mut response = String::new();
         let mut reasoning = String::new();
         let mut selected_model: Option<String> = None;
+        let mut chunks = 0usize;
+        let mut total_chars = 0usize;
+
+        macro_rules! append_capped {
+            ($buf:expr, $token:expr) => {{
+                let next_chars = $token.chars().count();
+                if crate::acp::helpers::conversation::stream_would_exceed_limits(
+                    chunks,
+                    total_chars,
+                    next_chars,
+                ) {
+                    tracing::warn!(
+                        "tool follow-up: output truncated at {total_chars} chars (chunks {chunks})"
+                    );
+                    break;
+                }
+                $buf.push_str(&$token);
+                chunks += 1;
+                total_chars += next_chars;
+            }};
+        }
 
         while let Some(token) = receiver.recv().await {
             match classify_agent_token(&token) {
@@ -41,10 +62,10 @@ pub(crate) async fn run_followup_after_tool_observation(
                     continue;
                 }
                 AgentToken::Reasoning(reasoning_token) => {
-                    reasoning.push_str(&reasoning_token);
+                    append_capped!(reasoning, reasoning_token);
                 }
                 AgentToken::Content(text) => {
-                    response.push_str(&text);
+                    append_capped!(response, text);
                 }
             }
         }

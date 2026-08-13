@@ -24,16 +24,30 @@ impl Tool for CargoCheckTool {
 
         debug!(directory = %directory, "tool: running cargo check");
 
-        let output = Command::new("cargo")
-            .arg("check")
+        // Capped execution: `cargo check` diagnostics on a big workspace can
+        // be hundreds of MB — `Command::output()` would buffer it all (OOM)
+        // and push it unclipped into the LLM context.
+        let mut cmd = Command::new("cargo");
+        cmd.arg("check")
             .arg("--message-format=json")
-            .current_dir(&current_dir)
-            .output()
-            .context("failed to run cargo check")?;
+            .current_dir(&current_dir);
+        let capped = crate::orchestration::tool::exec_common::run_command_capped(
+            &mut cmd,
+            crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+        )
+        .context("failed to run cargo check")?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let success = output.status.success();
+        let stdout = capped.stdout_lossy();
+        let stderr = capped.stderr_lossy();
+        let success = capped.status == Some(0);
+        if capped.stdout_truncated || capped.stderr_truncated {
+            tracing::warn!(
+                "cargo check: output truncated at {} bytes (stdout={}, stderr={})",
+                crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+                capped.stdout_truncated,
+                capped.stderr_truncated
+            );
+        }
 
         // Parse JSON diagnostic messages from cargo output
         let mut errors: Vec<serde_json::Value> = Vec::new();
@@ -76,7 +90,7 @@ impl Tool for CargoCheckTool {
                 "warnings": warnings,
                 "warning_count": warnings.len(),
                 "raw_stderr": stderr,
-                "exit_code": output.status.code(),
+                "exit_code": capped.status,
             })),
             error: (!success).then(|| {
                 format!(

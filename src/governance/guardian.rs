@@ -247,11 +247,10 @@ impl GuardianReviewer {
 
         match result {
             Ok(Ok(())) => {
-                // Collect the full response
-                let mut response = String::new();
-                while let Some(token) = token_rx.recv().await {
-                    response.push_str(&token);
-                }
+                // Collect the full response, bounded by the shared stream
+                // caps (the decision text is also surfaced to callers).
+                let response =
+                    crate::acp::helpers::conversation::drain_channel_capped(&mut token_rx).await;
                 let decision = Self::parse_decision(&response);
                 {
                     let mut cb = self.circuit_breaker.lock().await;

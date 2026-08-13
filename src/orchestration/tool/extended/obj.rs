@@ -15,8 +15,6 @@ use anyhow::{Context, Result};
 #[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 use std::collections::BTreeSet;
 #[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
-use std::fs;
-#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 use tracing::info;
 
 /// Parse a single OBJ vertex/line from a whitespace-split token list.
@@ -167,8 +165,11 @@ impl Tool for ObjReadTool {
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
         let validated = sanitize_path(input, path)?;
 
-        let content = fs::read_to_string(&validated)
-            .with_context(|| format!("failed to read OBJ: {}", validated.display()))?;
+        let content = crate::orchestration::tool::exec_common::read_text_capped(
+            &validated,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("failed to read OBJ: {}", validated.display()))?;
 
         let summary = parse_obj(&content);
         let byte_size = content.len();

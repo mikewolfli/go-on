@@ -311,8 +311,9 @@ impl ThreadSafeAuditLog {
         inner.entries.push_back(entry.clone());
 
         // NDJSON persistence is offloaded to a dedicated writer thread; the
-        // channel send is non-blocking (unbounded), so the request hot path
-        // never performs open/append/close disk I/O.
+        // channel send is non-blocking (`try_send` on a bounded channel), so
+        // the request hot path never performs open/append/close disk I/O and
+        // never blocks on a backed-up writer.
         if let Some(ref tx) = inner.writer {
             // Bounded channel: on overflow (writer thread backed up under a
             // burst), drop the entry and count it instead of letting the

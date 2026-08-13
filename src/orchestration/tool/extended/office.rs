@@ -63,7 +63,11 @@ impl Tool for ReadExcelTool {
 
         let validated = sanitize_path(input, path)?;
 
-        let bytes = fs::read(&validated).context("failed to read Excel file")?;
+        let bytes = crate::orchestration::tool::exec_common::read_file_capped(
+            &validated,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .context("failed to read Excel file")?;
 
         let parsed = crate::multimodal::excel_processor::parse_excel_bytes(&bytes)
             .map_err(|e| anyhow::anyhow!("Excel parse error: {e}"))?;
@@ -112,7 +116,11 @@ impl Tool for ReadPptTool {
 
         let validated = sanitize_path(input, path)?;
 
-        let bytes = fs::read(&validated).context("failed to read PowerPoint file")?;
+        let bytes = crate::orchestration::tool::exec_common::read_file_capped(
+            &validated,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .context("failed to read PowerPoint file")?;
 
         let parsed = crate::multimodal::ppt_processor::parse_pptx_bytes(&bytes)
             .map_err(|e| anyhow::anyhow!("PPT parse error: {e}"))?;

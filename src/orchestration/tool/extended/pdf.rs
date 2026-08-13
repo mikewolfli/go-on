@@ -34,8 +34,11 @@ impl Tool for ReadPdfTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
         let validated = sanitize_path(input, path)?;
-        let content = fs::read(&validated)
-            .with_context(|| format!("failed to read PDF: {}", validated.display()))?;
+        let content = crate::orchestration::tool::exec_common::read_file_capped(
+            &validated,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("failed to read PDF: {}", validated.display()))?;
 
         // Single PDF extraction implementation (shared with the multimodal
         // pipeline — the previous inline lopdf copy was removed).
@@ -235,8 +238,11 @@ fn merge_pdf_documents(docs: &[lopdf::Document]) -> Result<lopdf::Document> {
 /// Load a PDF document from disk (shared by merge/split — single read+parse).
 #[cfg(feature = "document-pdf")]
 fn load_pdf_document(path: &std::path::Path) -> Result<lopdf::Document> {
-    let content =
-        fs::read(path).with_context(|| format!("failed to read PDF: {}", path.display()))?;
+    let content = crate::orchestration::tool::exec_common::read_file_capped(
+        path,
+        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+    )
+    .with_context(|| format!("failed to read PDF: {}", path.display()))?;
     lopdf::Document::load_mem(&content)
         .with_context(|| format!("failed to parse PDF: {}", path.display()))
 }

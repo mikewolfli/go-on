@@ -17,6 +17,10 @@ use super::execution::{
     extract_intent_tokens, normalize_name, tokenize_with_stopwords, PromptBasedSkill,
 };
 
+/// Cap for the on-disk prompt-skills file read at startup (accumulates every
+/// prompt-based skill's full template).
+pub(crate) const MAX_PROMPT_SKILLS_FILE_BYTES: usize = 32 * 1024 * 1024;
+
 /// Convert a JSON schema Value (e.g. `{"type":"object","properties":{"code":{"type":"string"}}}`)
 /// into a flat `HashMap<String, String>` suitable for `PromptBasedSkill::input_schema`.
 fn schema_value_to_map(schema: &serde_json::Value) -> HashMap<String, String> {
@@ -622,8 +626,13 @@ impl SkillRegistry {
         if !path.exists() {
             return Ok(());
         }
-        let content =
-            std::fs::read_to_string(path).with_context(|| "failed to read prompt skills file")?;
+        // Capped read: the file accumulates every prompt-based skill's full
+        // template, so a large/many-skills install must not OOM startup.
+        let content = crate::orchestration::tool::exec_common::read_text_capped(
+            path,
+            MAX_PROMPT_SKILLS_FILE_BYTES,
+        )
+        .with_context(|| "failed to read prompt skills file")?;
         let saved: Vec<SavedPromptSkill> =
             serde_json::from_str(&content).context("failed to parse prompt skills file")?;
         for entry in saved {

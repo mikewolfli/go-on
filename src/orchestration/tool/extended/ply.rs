@@ -15,8 +15,6 @@ use anyhow::{Context, Result};
 #[cfg(feature = "cad-ply")]
 use std::collections::BTreeMap;
 #[cfg(feature = "cad-ply")]
-use std::fs;
-#[cfg(feature = "cad-ply")]
 use tracing::info;
 
 /// Axis-aligned bounding box: (min, max) as ((x, y, z), (x, y, z)).
@@ -198,8 +196,11 @@ impl Tool for PlyReadTool {
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
         let validated = sanitize_path(input, path)?;
 
-        let content = fs::read_to_string(&validated)
-            .with_context(|| format!("failed to read PLY: {}", validated.display()))?;
+        let content = crate::orchestration::tool::exec_common::read_text_capped(
+            &validated,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("failed to read PLY: {}", validated.display()))?;
 
         let summary = parse_ply(&content)?;
         let byte_size = content.len();

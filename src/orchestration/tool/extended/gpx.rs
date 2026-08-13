@@ -14,8 +14,6 @@ use crate::shared::text::find_ascii_case_insensitive;
 #[cfg(feature = "gis-gpx")]
 use anyhow::{Context, Result};
 #[cfg(feature = "gis-gpx")]
-use std::fs;
-#[cfg(feature = "gis-gpx")]
 use tracing::info;
 
 #[cfg(feature = "gis-gpx")]
@@ -36,8 +34,11 @@ impl Tool for GpxReadTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
         let validated = sanitize_path(input, path)?;
-        let content = fs::read_to_string(&validated)
-            .with_context(|| format!("failed to read GPX: {}", validated.display()))?;
+        let content = crate::orchestration::tool::exec_common::read_text_capped(
+            &validated,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("failed to read GPX: {}", validated.display()))?;
 
         let byte_size = content.len();
 

@@ -53,6 +53,11 @@ pub(crate) async fn start_server(
     // http_request tool's global state for runtime sandboxing.
     crate::orchestration::tool_extended::http::init_url_policy(config.security.url_policy.clone());
 
+    // Load the OS-level command sandbox config ([security.command_sandbox]) and
+    // inject it into the global command-sandbox state so model-issued commands
+    // (shell_exec et al.) run inside a bwrap namespace when available.
+    crate::security::sandbox::init_command_sandbox(config.security.command_sandbox.clone());
+
     // Initialize capability graph for agent capability-based routing
     let capability_graph = Arc::new(Mutex::new(CapabilityGraph::new()));
 

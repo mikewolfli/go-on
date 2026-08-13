@@ -13,6 +13,33 @@ use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 use tracing::{debug, info, warn};
 
+/// Run a build/lint/dependency command with capped output (OOM guard + LLM
+/// context bound) and an explicit truncation warning. `args` are `String` so
+/// the package name can be appended without lifetime gymnastics.
+fn run_capped_tool<S: AsRef<std::ffi::OsStr>>(
+    tool: &str,
+    args: &[S],
+    cwd: &Path,
+    what: &str,
+) -> Result<crate::orchestration::tool::exec_common::CappedCommandOutput> {
+    let mut cmd = Command::new(tool);
+    cmd.args(args).current_dir(cwd);
+    let capped = crate::orchestration::tool::exec_common::run_command_capped(
+        &mut cmd,
+        crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+    )
+    .with_context(|| format!("failed to execute '{}'", tool))?;
+    if capped.stdout_truncated || capped.stderr_truncated {
+        warn!(
+            "{what}: output truncated at {} bytes (stdout={}, stderr={})",
+            crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+            capped.stdout_truncated,
+            capped.stderr_truncated
+        );
+    }
+    Ok(capped)
+}
+
 /// Detect the build system for a given project directory.
 /// Returns (build_tool, build_command_args) if detected.
 fn detect_build_system(dir: &Path) -> Option<(&'static str, &'static [&'static str])> {
@@ -95,16 +122,12 @@ impl Tool for RunBuildTool {
             "tool: build_run starting"
         );
 
-        let output = Command::new(build_tool)
-            .args(args)
-            .current_dir(&current_dir)
-            .output()
-            .with_context(|| format!("failed to execute '{}'", build_tool))?;
+        let capped = run_capped_tool(build_tool, args, &current_dir, "build_run")?;
 
-        let success = output.status.success();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code();
+        let success = capped.status == Some(0);
+        let stdout = capped.stdout_lossy();
+        let stderr = capped.stderr_lossy();
+        let exit_code = capped.status;
 
         if success {
             info!(
@@ -178,16 +201,12 @@ impl Tool for LintCodeTool {
             "tool: lint_run starting"
         );
 
-        let output = Command::new(linter)
-            .args(args)
-            .current_dir(&current_dir)
-            .output()
-            .with_context(|| format!("failed to execute '{}'", linter))?;
+        let capped = run_capped_tool(linter, args, &current_dir, "lint_run")?;
 
-        let success = output.status.success();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code();
+        let success = capped.status == Some(0);
+        let stdout = capped.stdout_lossy();
+        let stderr = capped.stderr_lossy();
+        let exit_code = capped.status;
 
         info!(
             linter = %linter,
@@ -262,16 +281,12 @@ impl Tool for AddDependencyTool {
             "tool: dependency_add starting"
         );
 
-        let output = Command::new(manager)
-            .args(&full_args)
-            .current_dir(&current_dir)
-            .output()
-            .with_context(|| format!("failed to execute '{}'", manager))?;
+        let capped = run_capped_tool(manager, &full_args, &current_dir, "dependency_add")?;
 
-        let success = output.status.success();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code();
+        let success = capped.status == Some(0);
+        let stdout = capped.stdout_lossy();
+        let stderr = capped.stderr_lossy();
+        let exit_code = capped.status;
 
         if success {
             info!(

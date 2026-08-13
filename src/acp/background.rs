@@ -364,6 +364,44 @@ pub async fn start_background_tasks(
         advisor.start_digest_schedule();
     }
 
+    // ── Session/token revocation-blacklist cleanup (daily) ────────────────
+    // `logout` → `revoke_session` inserts one blacklist entry per revoked
+    // token; `cleanup_expired` is the only pruner and previously had ZERO
+    // production callers (only tests), so the blacklist grew without bound on
+    // long-running multi-user servers. Daily pruning keeps it bounded; the
+    // removed count is logged so the cleanup is observable, never silent.
+    if let Some(ref session_manager) = server.session.session_manager {
+        let session_manager = Arc::clone(session_manager);
+        let shutdown = shutdown_notify.clone();
+        spawn_background_task(
+            async move {
+                // S6: delay 500ms to let the server start accepting requests first
+                tokio::time::sleep(STARTUP_DEFER_DELAY).await;
+
+                let mut ticker = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+                ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                // First tick fires immediately (after the 500ms sleep)
+                ticker.tick().await;
+
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = ticker.tick() => {}
+                    }
+
+                    let removed = session_manager.cleanup_expired();
+                    if removed > 0 {
+                        info!(
+                            "Session cleanup: removed {} expired sessions/revocation entries",
+                            removed
+                        );
+                    }
+                }
+            },
+            "session_token_cleanup",
+        );
+    }
+
     // Policy hot-reload (BLUE56-D01) was removed in the 2026-08-06 cleanup:
     // `PolicyReloader`/`reloadable_policy` had no production caller — no reload
     // loop ran and the evaluator's `policy_reloader` was always None. See

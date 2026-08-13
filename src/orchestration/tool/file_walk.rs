@@ -12,20 +12,36 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+/// Default bound for `search_files` results when the caller does not supply
+/// `max_results`: the result list flows into the LLM context, so an unbounded
+/// walk of a huge tree (tens of thousands of paths) would bloat the response.
+pub const DEFAULT_SEARCH_FILES_MAX: usize = 1000;
+
+/// Hard cap for an EXPLICIT `max_results` value: the parameter is
+/// model-controlled, so a value like 10^9 must not disable the bound.
+pub const MAX_SEARCH_FILES_HARD_CAP: usize = 100_000;
+
 /// Recursively walk a directory tree and collect files matching the given
-/// glob [`Pattern`]. Returns their full paths.
+/// glob [`Pattern`] up to `max` results. Returns their full paths.
 pub fn collect_matching_files(
     root: &Path,
     current: &Path,
     matcher: &Pattern,
     files: &mut Vec<String>,
+    max: usize,
 ) -> Result<()> {
+    if files.len() >= max {
+        return Ok(());
+    }
     for entry in std::fs::read_dir(current)? {
+        if files.len() >= max {
+            break;
+        }
         let entry = entry?;
         let path = entry.path();
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            collect_matching_files(root, &path, matcher, files)?;
+            collect_matching_files(root, &path, matcher, files, max)?;
             continue;
         }
 
@@ -39,14 +55,25 @@ pub fn collect_matching_files(
 }
 
 /// Recursively walk a directory tree using `tokio::fs` and collect files
-/// matching the given glob pattern. Returns their full paths.
-pub async fn collect_matching_files_async(root: PathBuf, matcher: Pattern) -> Result<Vec<String>> {
+/// matching the given glob pattern up to `max` results. Returns their full
+/// paths.
+pub async fn collect_matching_files_async(
+    root: PathBuf,
+    matcher: Pattern,
+    max: usize,
+) -> Result<Vec<String>> {
     let mut files = Vec::new();
     let mut dirs_to_visit = vec![root.clone()];
 
     while let Some(dir) = dirs_to_visit.pop() {
+        if files.len() >= max {
+            break;
+        }
         let mut rd = tokio::fs::read_dir(&dir).await?;
         while let Some(entry) = rd.next_entry().await? {
+            if files.len() >= max {
+                break;
+            }
             let path = entry.path();
             if entry.file_type().await?.is_dir() {
                 dirs_to_visit.push(path);

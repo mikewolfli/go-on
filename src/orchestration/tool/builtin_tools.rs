@@ -481,17 +481,32 @@ impl Tool for SearchFilesTool {
         let directory = input.payload["directory"].as_str().unwrap_or(".");
         let root = sanitize_path(input, directory)?;
         let matcher = Pattern::new(pattern)?;
+        // Bounded result set: the response flows into the LLM context, so an
+        // unbounded walk of a huge tree would bloat it. The bound is explicit
+        // in the response (`truncated`), never silent. Explicit values are
+        // clamped to a hard cap so the model cannot disable the bound.
+        let max_results = input.payload["max_results"]
+            .as_u64()
+            .map(|v| {
+                (v as usize).min(crate::orchestration::tool::file_walk::MAX_SEARCH_FILES_HARD_CAP)
+            })
+            .unwrap_or(crate::orchestration::tool::file_walk::DEFAULT_SEARCH_FILES_MAX);
         let mut files = Vec::new();
         crate::orchestration::tool::file_walk::collect_matching_files(
-            &root, &root, &matcher, &mut files,
+            &root,
+            &root,
+            &matcher,
+            &mut files,
+            max_results,
         )?;
+        let truncated = files.len() >= max_results;
 
         let elapsed = start.elapsed().as_millis() as u64;
         span.record("latency_ms", elapsed);
         span.record("success", true);
         Ok(ToolOutput {
             success: true,
-            result: Some(serde_json::json!({"files": files})),
+            result: Some(serde_json::json!({"files": files, "truncated": truncated})),
             error: None,
             verification: Some("search_done".to_string()),
             audit_log: Some(format!(
@@ -515,15 +530,24 @@ impl Tool for SearchFilesTool {
             let root = sanitize_path(&input, directory)?;
             let matcher = glob::Pattern::new(pattern)?;
 
+            let max_results = input.payload["max_results"]
+                .as_u64()
+                .map(|v| {
+                    (v as usize)
+                        .min(crate::orchestration::tool::file_walk::MAX_SEARCH_FILES_HARD_CAP)
+                })
+                .unwrap_or(crate::orchestration::tool::file_walk::DEFAULT_SEARCH_FILES_MAX);
             let files = crate::orchestration::tool::file_walk::collect_matching_files_async(
                 root.clone(),
                 matcher,
+                max_results,
             )
             .await?;
+            let truncated = files.len() >= max_results;
 
             Ok(ToolOutput {
                 success: true,
-                result: Some(serde_json::json!({"files": files})),
+                result: Some(serde_json::json!({"files": files, "truncated": truncated})),
                 error: None,
                 verification: Some("search_done".to_string()),
                 audit_log: Some(format!(
@@ -785,16 +809,26 @@ impl Tool for RunTestsTool {
         }
         let current_dir = sanitize_path(input, input.payload["directory"].as_str().unwrap_or("."))?;
         debug!(command = %command_name, args = ?args, directory = %current_dir.display(), "tool: running shell command");
-        let output = Command::new(command_name)
-            .args(&args)
-            .current_dir(&current_dir)
-            .output()?;
-        let success = output.status.success();
+        let mut cmd = Command::new(command_name);
+        cmd.args(&args).current_dir(&current_dir);
+        let capped = crate::orchestration::tool::exec_common::run_command_capped(
+            &mut cmd,
+            crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+        )?;
+        let success = capped.status == Some(0);
+        if capped.stdout_truncated || capped.stderr_truncated {
+            warn!(
+                "run_tests: output truncated at {} bytes (stdout={}, stderr={})",
+                crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+                capped.stdout_truncated,
+                capped.stderr_truncated
+            );
+        }
         if !success {
             warn!(
                 command = %command_name,
-                exit_code = ?output.status.code(),
-                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                exit_code = ?capped.status,
+                stderr = %capped.stderr_lossy().trim(),
                 "tool: shell command failed"
             );
         }
@@ -807,11 +841,11 @@ impl Tool for RunTestsTool {
             result: Some(serde_json::json!({
                 "command": command_name,
                 "args": args,
-                "stdout": String::from_utf8_lossy(&output.stdout).to_string(),
-                "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
-                "exit_code": output.status.code(),
+                "stdout": capped.stdout_lossy(),
+                "stderr": capped.stderr_lossy(),
+                "exit_code": capped.status,
             })),
-            error: (!success).then(|| String::from_utf8_lossy(&output.stderr).trim().to_string()),
+            error: (!success).then(|| capped.stderr_lossy().trim().to_string()),
             verification: Some("tests_passed".to_string()),
             audit_log: Some(format!(
                 "Executed '{}' in '{}'",
@@ -862,17 +896,27 @@ impl Tool for RunTestsTool {
             }
             let current_dir =
                 sanitize_path(&input, input.payload["directory"].as_str().unwrap_or("."))?;
-            let output = tokio::process::Command::new(command_name)
-                .args(&args)
-                .current_dir(&current_dir)
-                .output()
-                .await?;
-            let success = output.status.success();
+            let mut cmd = tokio::process::Command::new(command_name);
+            cmd.args(&args).current_dir(&current_dir);
+            let capped = crate::orchestration::tool::exec_common::run_command_capped_async(
+                &mut cmd,
+                crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+            )
+            .await?;
+            let success = capped.status == Some(0);
+            if capped.stdout_truncated || capped.stderr_truncated {
+                tracing::warn!(
+                    "run_tests: output truncated at {} bytes (stdout={}, stderr={})",
+                    crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+                    capped.stdout_truncated,
+                    capped.stderr_truncated
+                );
+            }
             if !success {
                 tracing::warn!(
                     command = %command_name,
-                    exit_code = ?output.status.code(),
-                    stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                    exit_code = ?capped.status,
+                    stderr = %capped.stderr_lossy().trim(),
                     "tool: shell command failed"
                 );
             }
@@ -881,12 +925,11 @@ impl Tool for RunTestsTool {
                 result: Some(serde_json::json!({
                     "command": command_name,
                     "args": args,
-                    "stdout": String::from_utf8_lossy(&output.stdout).to_string(),
-                    "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
-                    "exit_code": output.status.code(),
+                    "stdout": capped.stdout_lossy(),
+                    "stderr": capped.stderr_lossy(),
+                    "exit_code": capped.status,
                 })),
-                error: (!success)
-                    .then(|| String::from_utf8_lossy(&output.stderr).trim().to_string()),
+                error: (!success).then(|| capped.stderr_lossy().trim().to_string()),
                 verification: Some("tests_passed".to_string()),
                 audit_log: Some(format!(
                     "Executed '{}' in '{}'",
@@ -942,8 +985,17 @@ impl Tool for InspectGitDiffTool {
         if !files.is_empty() {
             command.arg("--").args(&files);
         }
-        let output = command.output()?;
-        let success = output.status.success();
+        let capped = crate::orchestration::tool::exec_common::run_command_capped(
+            &mut command,
+            crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+        )?;
+        let success = capped.status == Some(0);
+        if capped.stdout_truncated || capped.stderr_truncated {
+            tracing::warn!(
+                "inspect_git_diff: output truncated at {} bytes",
+                crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES
+            );
+        }
 
         let elapsed = start.elapsed().as_millis() as u64;
         span.record("latency_ms", elapsed);
@@ -951,13 +1003,13 @@ impl Tool for InspectGitDiffTool {
         Ok(ToolOutput {
             success,
             result: Some(serde_json::json!({
-                "diff": String::from_utf8_lossy(&output.stdout).to_string(),
-                "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
-                "exit_code": output.status.code(),
+                "diff": capped.stdout_lossy(),
+                "stderr": capped.stderr_lossy(),
+                "exit_code": capped.status,
                 "staged": staged,
                 "files": files,
             })),
-            error: (!success).then(|| String::from_utf8_lossy(&output.stderr).trim().to_string()),
+            error: (!success).then(|| capped.stderr_lossy().trim().to_string()),
             verification: Some("diff_inspected".to_string()),
             audit_log: Some(format!("git diff inspected in '{}'", current_dir)),
             pua_report: Some(tool_execution_report(
@@ -993,20 +1045,29 @@ impl Tool for InspectGitDiffTool {
             if !files.is_empty() {
                 command.arg("--").args(&files);
             }
-            let output = command.output().await?;
-            let success = output.status.success();
+            let capped = crate::orchestration::tool::exec_common::run_command_capped_async(
+                &mut command,
+                crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+            )
+            .await?;
+            let success = capped.status == Some(0);
+            if capped.stdout_truncated || capped.stderr_truncated {
+                tracing::warn!(
+                    "inspect_git_diff: output truncated at {} bytes",
+                    crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES
+                );
+            }
 
             Ok(ToolOutput {
                 success,
                 result: Some(serde_json::json!({
-                    "diff": String::from_utf8_lossy(&output.stdout).to_string(),
-                    "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
-                    "exit_code": output.status.code(),
+                    "diff": capped.stdout_lossy(),
+                    "stderr": capped.stderr_lossy(),
+                    "exit_code": capped.status,
                     "staged": staged,
                     "files": files,
                 })),
-                error: (!success)
-                    .then(|| String::from_utf8_lossy(&output.stderr).trim().to_string()),
+                error: (!success).then(|| capped.stderr_lossy().trim().to_string()),
                 verification: Some("diff_inspected".to_string()),
                 audit_log: Some(format!("git diff inspected in '{}'", current_dir)),
                 pua_report: Some(tool_execution_report(
@@ -1412,6 +1473,46 @@ mod tests {
     }
 
     #[test]
+    fn search_files_respects_and_reports_max_results() {
+        // Regression: `search_files` previously walked the whole tree with no
+        // result bound; it must honor `max_results` and report the truncation
+        // explicitly (never silent).
+        let tmp = TempDir::new().unwrap();
+        for i in 0..5 {
+            fs::write(tmp.path().join(format!("f{i}.txt")), b"x").unwrap();
+        }
+
+        let input = write_input(Some(tmp.path().to_path_buf()));
+        let input = ToolInput {
+            payload: serde_json::json!({
+                "pattern": "*.txt",
+                "directory": tmp.path().to_str().unwrap(),
+                "max_results": 2,
+            }),
+            ..input
+        };
+        let result = SearchFilesTool.run(&input).expect("run");
+        let payload = result.result.expect("result");
+        let files = payload["files"].as_array().expect("files");
+        assert_eq!(files.len(), 2, "max_results must bound the result set");
+        assert!(payload["truncated"].as_bool().unwrap());
+
+        // Without max_results the default bound (1000) applies and is not
+        // reported as truncated for small trees.
+        let input2 = ToolInput {
+            payload: serde_json::json!({
+                "pattern": "*.txt",
+                "directory": tmp.path().to_str().unwrap(),
+            }),
+            ..write_input(Some(tmp.path().to_path_buf()))
+        };
+        let result2 = SearchFilesTool.run(&input2).expect("run");
+        let payload2 = result2.result.expect("result");
+        assert_eq!(payload2["files"].as_array().unwrap().len(), 5);
+        assert!(!payload2["truncated"].as_bool().unwrap());
+    }
+
+    #[test]
     fn sanitize_path_for_write_allows_existing_paths_inside_base() {
         let tmp = TempDir::new().unwrap();
         let base = tmp.path().join("base");
@@ -1423,5 +1524,22 @@ mod tests {
             sanitize_path_for_write(&write_input(Some(base.clone())), &target.to_string_lossy())
                 .unwrap();
         assert!(ok.starts_with(&base));
+    }
+
+    #[test]
+    fn apply_patch_rejects_oversized_patch() {
+        // Regression: apply_patch must bound the patch size (same cap as
+        // write_file) instead of piping unbounded data to git apply.
+        let oversized = "x".repeat(MAX_WRITE_PAYLOAD_BYTES + 1);
+        let input = write_input(None);
+        let input = ToolInput {
+            payload: serde_json::json!({"patch": oversized}),
+            ..input
+        };
+        let err = ApplyPatchTool.run(&input).unwrap_err();
+        assert!(
+            err.to_string().contains("BLOCKED"),
+            "oversized patch must be rejected, got: {err}"
+        );
     }
 }

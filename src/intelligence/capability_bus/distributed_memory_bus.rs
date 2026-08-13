@@ -135,7 +135,8 @@ pub struct DistributedMemoryBusProfile {
     pub shared_entries: u32,
     /// Total sync operations performed.
     pub total_syncs: u64,
-    /// Total entries removed by pruning.
+    /// Number of entries evicted from the SHARED store by the capacity
+    /// bound (local-store evictions are not counted here).
     pub entries_pruned: u64,
     /// Whether the transport layer is running.
     pub transport_running: bool,
@@ -176,7 +177,10 @@ pub struct DistributedMemoryBus {
     remote_peers: Arc<RwLock<HashMap<String, String>>>,
     /// Shared memory entries synced from peers.
     shared_entries: Arc<Mutex<VecDeque<SharedMemoryEntry>>>,
-    /// Maximum number of entries to retain (local + shared).
+    /// Maximum number of entries retained PER STORE (local and shared are
+    /// each capped at this — the local-trim paths only ever pop from the
+    /// local queue, so the shared queue is bounded independently at its two
+    /// write sites). Worst case total is 2× `max_entries`.
     max_entries: usize,
     /// Profile / metrics snapshot.
     profile: Arc<Mutex<DistributedMemoryBusProfile>>,
@@ -468,28 +472,28 @@ impl DistributedMemoryBus {
         };
 
         // 3. Insert into shared_entries
-        //    We compute the total length without re-acquiring shared_entries
-        //    to avoid a deadlock with maybe_evict_oldest.
+        //    shared_entries is dropped before local_entries is locked, and
+        //    maybe_evict_oldest only touches the local deque — no lock is ever
+        //    held across two bus stores.
         {
             let mut guard = self
                 .shared_entries
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             guard.push_back(shared_entry);
+            // Shared store is INDEPENDENTLY bounded: the eviction paths below
+            // only ever pop from `local_entries`, so without a cap here every
+            // share would grow the queue without bound.
+            let pruned = Self::trim_shared(&mut guard, self.max_entries);
             let shared_len = guard.len();
             drop(guard);
+            self.record_prunes(pruned);
 
             let mut local = self.local_entries.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("lock poisoned");
                 poisoned.into_inner()
             });
-            let total = local.len() + shared_len;
-            if total > self.max_entries {
-                let to_remove = total - self.max_entries;
-                for _ in 0..to_remove {
-                    local.pop_front();
-                }
-            }
+            Self::maybe_evict_oldest(&mut local, shared_len, self.max_entries);
         }
 
         // 4. Update profile
@@ -545,11 +549,48 @@ impl DistributedMemoryBus {
     // Internal helpers
     // ------------------------------------------------------------------
 
+    /// Trim the shared queue to `max_entries` (oldest first). Returns the
+    /// number of entries pruned. Pure function: never touches the profile
+    /// while a bus lock is held.
+    fn trim_shared(guard: &mut VecDeque<SharedMemoryEntry>, max_entries: usize) -> usize {
+        let mut pruned = 0usize;
+        while guard.len() > max_entries {
+            guard.pop_front();
+            pruned += 1;
+        }
+        pruned
+    }
+
+    /// Record shared-store evictions in the profile (called with NO bus lock
+    /// held, keeping the bus locks strictly serial).
+    fn record_prunes(&self, pruned: usize) {
+        if pruned > 0 {
+            let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned");
+                poisoned.into_inner()
+            });
+            p.entries_pruned = p.entries_pruned.wrapping_add(pruned as u64);
+        }
+    }
+
+    /// Re-queue a drained sync batch at the front of the local store so the
+    /// next cycle retries it (same push_front order as the all-peers-failed
+    /// path — sync attempts must never silently drop queued entries). Only
+    /// used by the multi-users-server transport.
+    #[cfg(feature = "multi-users-server")]
+    fn requeue(local_entries: &Arc<Mutex<VecDeque<MemoryBusEntry>>>, entries: Vec<MemoryBusEntry>) {
+        let mut guard = local_entries.lock().unwrap_or_else(|e| e.into_inner());
+        for entry in entries {
+            guard.push_front(entry);
+        }
+    }
+
     /// Evict the oldest entries (by insertion order = creation order) from the
     /// combined local + shared stores until we are at or under `max_entries`.
     ///
     /// Eviction only happens from the **local** store; shared entries are
-    /// treated as higher priority.
+    /// treated as higher priority (the shared queue is bounded independently
+    /// at its two write sites — `share_with_peers` and `ingest_shared`).
     fn maybe_evict_oldest(
         local: &mut VecDeque<MemoryBusEntry>,
         shared_len: usize,
@@ -674,21 +715,21 @@ impl DistributedMemoryBus {
             };
             guard.push_back(shared);
         }
+        // Shared store is INDEPENDENTLY bounded (same rationale as
+        // share_with_peers): the local-only trim below would otherwise leave
+        // every ingested batch growing the queue without bound.
+        let pruned = Self::trim_shared(&mut guard, self.max_entries);
         let shared_len = guard.len();
         drop(guard);
+        self.record_prunes(pruned);
 
-        // Evict from local if over capacity
+        // Evict from local if over capacity (shared helper — same logic as
+        // store_local's eviction).
         let mut local = self.local_entries.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned");
             poisoned.into_inner()
         });
-        let total = local.len() + shared_len;
-        if total > self.max_entries {
-            let to_remove = total - self.max_entries;
-            for _ in 0..to_remove {
-                local.pop_front();
-            }
-        }
+        Self::maybe_evict_oldest(&mut local, shared_len, self.max_entries);
         drop(local);
 
         // Update profile
@@ -724,6 +765,15 @@ impl DistributedMemoryBus {
         profile: &Arc<Mutex<DistributedMemoryBusProfile>>,
         config: &MemoryTransportConfig,
     ) -> anyhow::Result<usize> {
+        // No peers to sync to — nothing to do this cycle. Checked BEFORE
+        // draining so queued entries are never silently dropped (module
+        // contract: sync attempts fail loudly, never silently).
+        let peers: HashMap<String, String> =
+            remote_peers.read().map(|r| r.clone()).unwrap_or_default();
+        if peers.is_empty() {
+            return Ok(0);
+        }
+
         // Collect local entries that haven't been synced yet. The deque is
         // drained so each entry is sent exactly once: entries added while we
         // are sending stay queued for the NEXT cycle (incremental sync —
@@ -737,18 +787,17 @@ impl DistributedMemoryBus {
             return Ok(0);
         }
 
-        // Serialise all entries to JSON
-        let payload = serde_json::to_string(&json!({ "entries": entries_to_sync }))?;
+        // Serialise all entries to JSON. On failure the drained batch is
+        // re-queued (same contract as the all-peers-failed path below): a sync
+        // attempt must never silently drop queued entries.
+        let payload = match serde_json::to_string(&json!({ "entries": entries_to_sync })) {
+            Ok(p) => p,
+            Err(e) => {
+                Self::requeue(local_entries, entries_to_sync);
+                return Err(anyhow::anyhow!("dmb sync failed: serialisation error: {e}"));
+            }
+        };
         let payload_bytes = payload.len();
-
-        // Get current peers
-        let peers: HashMap<String, String> =
-            remote_peers.read().map(|r| r.clone()).unwrap_or_default();
-
-        if peers.is_empty() {
-            // No peers to sync to — nothing to do this cycle.
-            return Ok(0);
-        }
 
         // Real HTTP transport: POST each batch to the peer's JSON-RPC endpoint.
         // Reuse the process-global blocking client (previously a fresh client
@@ -757,6 +806,7 @@ impl DistributedMemoryBus {
             Ok(c) => c,
             Err(e) => {
                 let message = format!("failed to build dmb transport client: {}", e);
+                Self::requeue(local_entries, entries_to_sync);
                 return Err(anyhow::anyhow!("dmb sync failed: {}", message));
             }
         };
@@ -795,11 +845,27 @@ impl DistributedMemoryBus {
                         if let Some(token) = &config.auth_token {
                             request = request.bearer_auth(token);
                         }
-                        let result = request.send().map(|resp| {
-                            if resp.status().is_success() {
-                                Ok(entries_for_peer.len())
+                        let result = request.send().map(|mut resp| {
+                            if !resp.status().is_success() {
+                                return Err(format!("HTTP {}", resp.status()));
+                            }
+                            // JSON-RPC over HTTP may return 200 with an error
+                            // body (e.g. a full vault on the receiving hub): a
+                            // status-only check would acknowledge the batch
+                            // while the entries were silently rejected. Parse
+                            // the body and treat an `error` member as failure.
+                            let body = match crate::orchestration::tool::extended::http::
+                                read_blocking_body_capped(&mut resp, "dmb sync")
+                            {
+                                Ok(b) => b,
+                                Err(e) => return Err(e.to_string()),
+                            };
+                            let value: serde_json::Value =
+                                serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+                            if value.get("error").is_some() {
+                                Err("JSON-RPC error response (e.g. vault full)".to_string())
                             } else {
-                                Err(format!("HTTP {}", resp.status()))
+                                Ok(entries_for_peer.len())
                             }
                         });
                         (
@@ -835,11 +901,7 @@ impl DistributedMemoryBus {
             // No peer acknowledged the batch — re-queue the entries so they
             // are retried on the next cycle, and report the failure instead of
             // pretending the entries were delivered.
-            let mut guard = local_entries.lock().unwrap_or_else(|e| e.into_inner());
-            for entry in entries_to_sync {
-                guard.push_front(entry);
-            }
-            drop(guard);
+            Self::requeue(local_entries, entries_to_sync);
             let message = failures.join("; ");
             return Err(anyhow::anyhow!("dmb sync failed: {}", message));
         }
@@ -969,5 +1031,25 @@ mod tests {
             vec!["b", "c", "d"],
             "oldest entry 'a' should have been evicted"
         );
+    }
+
+    #[test]
+    fn shared_entries_stay_bounded_at_capacity() {
+        // Regression: the eviction paths only ever pop from `local_entries`, so
+        // without an independent bound the shared queue grew without limit.
+        let bus = make_bus(5); // small capacity
+        for i in 0..50 {
+            let id = bus.store_local(&format!("k{i}"), "v", vec![], 0.5, 0);
+            // share may fail once local eviction drops the id — the bound is
+            // what we assert, not every share landing.
+            let _ = bus.share_with_peers(&id);
+        }
+        let shared = bus.shared_entries.lock().expect("lock shared_entries");
+        assert!(
+            shared.len() <= 5,
+            "shared queue must be bounded, got {}",
+            shared.len()
+        );
+        assert!(!shared.is_empty(), "at least some shares must land");
     }
 }

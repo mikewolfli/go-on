@@ -382,15 +382,17 @@ impl Tool for StlReadTool {
         crate::orchestration::tool::ToolExposure::Deferred
     }
 
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
         let validated = sanitize_path(input, path)?;
 
-        let bytes = fs::read(&validated)
-            .with_context(|| format!("failed to read STL: {}", validated.display()))?;
+        let bytes = crate::orchestration::tool::exec_common::read_file_capped(
+            &validated,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("failed to read STL: {}", validated.display()))?;
 
         let is_binary = is_binary_stl(&bytes);
 
@@ -464,7 +466,6 @@ impl Tool for StlGenerateTool {
     fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
         crate::orchestration::tool::ToolExposure::Deferred
     }
-
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]

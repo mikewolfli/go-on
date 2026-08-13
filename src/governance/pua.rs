@@ -158,9 +158,37 @@ pub enum LearningRecord {
 
 pub const LEARNING_RECORDS_FILE: &str = "learning-records.ndjson";
 
+/// Rotate the active learning-records file once it exceeds this size.
+const LEARNING_RECORDS_ROTATE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Keep at most this many rotated archives (each up to
+/// [`LEARNING_RECORDS_ROTATE_BYTES`]): bounds the disk footprint of the
+/// append-only learning history. Older archives are pruned on rotation.
+pub const MAX_LEARNING_RECORDS_ARCHIVES: usize = 8;
+
 pub fn append_learning_record(storage_dir: &Path, record: &LearningRecord) -> std::io::Result<()> {
     fs::create_dir_all(storage_dir)?;
     let file_path = storage_dir.join(LEARNING_RECORDS_FILE);
+    // Rotation guard: the file is line-appended and would grow unboundedly;
+    // rotate at [`LEARNING_RECORDS_ROTATE_BYTES`] by archiving the current
+    // file and starting fresh, then prune archives past the retention bound.
+    // A failed rotation is logged (not silently ignored): the append below
+    // still succeeds and the next rotation retries.
+    if let Ok(meta) = fs::metadata(&file_path) {
+        if meta.len() > LEARNING_RECORDS_ROTATE_BYTES {
+            let archive_path =
+                learning_archive_path(storage_dir, crate::shared::timestamps::now_ts_ms_u64());
+            match fs::rename(&file_path, &archive_path) {
+                Ok(()) => prune_learning_archives(storage_dir),
+                Err(e) => {
+                    tracing::warn!(
+                        "learning-records: rotation of {} failed: {e}",
+                        file_path.display()
+                    )
+                }
+            }
+        }
+    }
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -168,6 +196,111 @@ pub fn append_learning_record(storage_dir: &Path, record: &LearningRecord) -> st
     let line = serde_json::to_string(record)
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
     writeln!(file, "{}", line)
+}
+
+fn learning_archive_path(storage_dir: &Path, ts_ms: u64) -> PathBuf {
+    storage_dir.join(format!(
+        "{}-{}.ndjson",
+        LEARNING_RECORDS_FILE.trim_end_matches(".ndjson"),
+        ts_ms
+    ))
+}
+
+/// Collect rotated archive paths (oldest → newest by embedded timestamp).
+fn learning_archives(storage_dir: &Path) -> std::io::Result<Vec<(u64, PathBuf)>> {
+    let prefix = format!("{}-", LEARNING_RECORDS_FILE.trim_end_matches(".ndjson"));
+    let mut archives = Vec::new();
+    for entry in fs::read_dir(storage_dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(rest) = name
+            .strip_prefix(&prefix)
+            .and_then(|s| s.strip_suffix(".ndjson"))
+        {
+            if let Ok(ts) = rest.parse::<u64>() {
+                archives.push((ts, entry.path()));
+            }
+        }
+    }
+    archives.sort_by_key(|(ts, _)| *ts);
+    Ok(archives)
+}
+
+/// Prune rotated archives beyond [`MAX_LEARNING_RECORDS_ARCHIVES`] (oldest
+/// first). Called after each rotation so the append-only history stays
+/// bounded on disk; pruning is logged (oldest archives hold only data already
+/// returned to clients via previous reads, so dropping them is a documented
+/// retention choice, not a silent data loss).
+fn prune_learning_archives(storage_dir: &Path) {
+    let Ok(archives) = learning_archives(storage_dir) else {
+        return;
+    };
+    if archives.len() <= MAX_LEARNING_RECORDS_ARCHIVES {
+        return;
+    }
+    let excess = archives.len() - MAX_LEARNING_RECORDS_ARCHIVES;
+    for (_, path) in archives.iter().take(excess) {
+        match fs::remove_file(path) {
+            Ok(()) => {
+                tracing::warn!("learning-records: pruned old archive {}", path.display())
+            }
+            Err(e) => {
+                tracing::debug!("learning-records: failed to prune {}: {e}", path.display())
+            }
+        }
+    }
+}
+
+/// Tail-scan a records file for the LAST `want` records without parsing the
+/// whole file: read backwards in doubling windows until enough records are
+/// found or the start of the file is reached. The first (possibly partial)
+/// line of the window is skipped, matching the whole-file parser's line
+/// boundaries for everything after it.
+fn read_last_records(path: &Path, want: usize) -> std::io::Result<Vec<LearningRecord>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    if len == 0 || want == 0 {
+        return Ok(Vec::new());
+    }
+    let mut window = 64u64 * 1024;
+    loop {
+        let read_from = len.saturating_sub(window);
+        file.seek(SeekFrom::Start(read_from))?;
+        let mut buf = vec![0u8; (len - read_from) as usize];
+        file.read_exact(&mut buf)?;
+        let content = String::from_utf8_lossy(&buf);
+        // Skip a leading PARTIAL line — but only when the window really starts
+        // mid-line (read_from > 0 and the first byte is not a newline). When
+        // the window starts at a line boundary (read_from == 0, or the byte at
+        // read_from is '\n'), the first line is complete and must be parsed.
+        let start_idx = if read_from == 0 || buf.first() == Some(&b'\n') {
+            0
+        } else {
+            content.find('\n').map(|i| i + 1).unwrap_or(0)
+        };
+        let mut records = Vec::new();
+        for line in content[start_idx..].lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let record: LearningRecord = serde_json::from_str(trimmed).map_err(|err| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string())
+            })?;
+            records.push(record);
+        }
+        if records.len() >= want || read_from == 0 {
+            let take = records.len().min(want);
+            return Ok(records[records.len() - take..].to_vec());
+        }
+        // Not enough records in the window (very long records) — read further
+        // back. Saturating so a pathological file cannot overflow.
+        window = window.saturating_mul(2);
+        if window >= len {
+            window = len; // one more pass reads the whole file
+        }
+    }
 }
 
 pub fn load_learning_records(
@@ -178,28 +311,36 @@ pub fn load_learning_records(
         return Ok(Vec::new());
     }
 
-    let file_path = storage_dir.join(LEARNING_RECORDS_FILE);
-    let content = match fs::read_to_string(&file_path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e),
-    };
-    let mut records = Vec::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let record: LearningRecord = serde_json::from_str(trimmed)
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
-        records.push(record);
+    // Chronological order across rotated archives (oldest) → active file
+    // (newest). Scan newest → oldest, tail-limited, stopping once `limit`
+    // records are collected. Reading the archives keeps learning.summary/
+    // replay continuous across rotations — previously the rotated data
+    // became permanently invisible (the read side only ever looked at the
+    // active file).
+    let active = storage_dir.join(LEARNING_RECORDS_FILE);
+    let mut newest_first: Vec<PathBuf> = Vec::new();
+    if active.exists() {
+        newest_first.push(active);
+    }
+    for (_, path) in learning_archives(storage_dir)?.into_iter().rev() {
+        newest_first.push(path);
     }
 
-    if records.len() > limit {
-        Ok(records.split_off(records.len() - limit))
-    } else {
-        Ok(records)
+    let mut result: Vec<LearningRecord> = Vec::new();
+    let mut remaining = limit;
+    for path in newest_first {
+        if remaining == 0 {
+            break;
+        }
+        let recs = read_last_records(&path, remaining)?;
+        remaining -= recs.len();
+        // `recs` is the tail of an OLDER file; overall result must stay in
+        // chronological order, so prepend (older data before newer).
+        let mut merged = recs;
+        merged.extend(result);
+        result = merged;
     }
+    Ok(result)
 }
 
 #[derive(Debug, Clone)]
@@ -1239,5 +1380,123 @@ mod tests {
         let prompt = review_gate_prompt();
         assert!(prompt.contains("APPROVE"));
         assert!(prompt.contains("did the user ask for this"));
+    }
+
+    // ── learning-records tail-scan / archive read-back / archive pruning ──
+
+    fn pua_record(stage: &str) -> LearningRecord {
+        LearningRecord::Pua(PuaLearningRecord {
+            stage: stage.to_string(),
+            passed: true,
+            missing_checks: vec![],
+            escalation_level: 1,
+        })
+    }
+
+    #[test]
+    fn load_learning_records_returns_only_last_limit_records() {
+        let dir = unique_temp_dir("goon-pua-tail-limit");
+        for i in 0..5 {
+            append_learning_record(&dir, &pua_record(&format!("stage-{i}")))
+                .expect("append should succeed");
+        }
+
+        let records = load_learning_records(&dir, 2).expect("load should succeed");
+        assert_eq!(records.len(), 2, "only the last `limit` records");
+        match &records[0] {
+            LearningRecord::Pua(r) => assert_eq!(r.stage, "stage-3"),
+            _ => panic!("expected pua record"),
+        }
+        match &records[1] {
+            LearningRecord::Pua(r) => assert_eq!(r.stage, "stage-4"),
+            _ => panic!("expected pua record"),
+        }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn load_learning_records_reads_across_rotated_archives() {
+        let dir = unique_temp_dir("goon-pua-archives");
+        // Simulate two rotations: oldest archive, newer archive, active file.
+        let archive_old = learning_archive_path(&dir, 1_000);
+        let archive_new = learning_archive_path(&dir, 2_000);
+        fs::write(
+            &archive_old,
+            format!("{}\n", serde_json::to_string(&pua_record("a")).unwrap()),
+        )
+        .expect("write old archive");
+        fs::write(
+            &archive_new,
+            format!("{}\n", serde_json::to_string(&pua_record("b")).unwrap()),
+        )
+        .expect("write new archive");
+        append_learning_record(&dir, &pua_record("c")).expect("append active");
+
+        // The read must see history across the rotation boundary, in
+        // chronological order — previously the archives were invisible.
+        let records = load_learning_records(&dir, 3).expect("load should succeed");
+        let stages: Vec<&str> = records
+            .iter()
+            .map(|r| match r {
+                LearningRecord::Pua(p) => p.stage.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(
+            stages,
+            vec!["a", "b", "c"],
+            "chronological order across archives"
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn load_learning_records_handles_records_larger_than_first_window() {
+        let dir = unique_temp_dir("goon-pua-big-record");
+        // First record > 64 KiB initial tail window: forces window growth.
+        let big = pua_record(&format!("big-{}", "x".repeat(200_000)));
+        append_learning_record(&dir, &big).expect("append big");
+        append_learning_record(&dir, &pua_record("small")).expect("append small");
+
+        let records = load_learning_records(&dir, 1).expect("load should succeed");
+        assert_eq!(records.len(), 1);
+        match &records[0] {
+            LearningRecord::Pua(r) => assert_eq!(r.stage, "small"),
+            _ => panic!("expected pua record"),
+        }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn prune_learning_archives_keeps_only_retention_bound() {
+        let dir = unique_temp_dir("goon-pua-prune");
+        let total = MAX_LEARNING_RECORDS_ARCHIVES + 3;
+        for i in 0..total {
+            let path = learning_archive_path(&dir, i as u64);
+            fs::write(
+                &path,
+                b"{}
+" as &[u8],
+            )
+            .expect("write archive");
+        }
+
+        prune_learning_archives(&dir);
+
+        let remaining = learning_archives(&dir).expect("list archives");
+        assert_eq!(
+            remaining.len(),
+            MAX_LEARNING_RECORDS_ARCHIVES,
+            "only the newest archives survive pruning"
+        );
+        // The oldest archives were pruned.
+        assert!(!remaining
+            .iter()
+            .any(|(ts, _)| *ts < (total - MAX_LEARNING_RECORDS_ARCHIVES) as u64));
+
+        let _ = fs::remove_dir_all(dir);
     }
 }

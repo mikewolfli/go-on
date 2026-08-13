@@ -7,6 +7,7 @@ pub mod audit_integrity;
 pub mod mtls;
 pub mod prompt_injection;
 pub mod request_signing;
+pub mod sandbox;
 pub mod security_advisor;
 pub mod severity;
 pub mod vulnerability_scan;

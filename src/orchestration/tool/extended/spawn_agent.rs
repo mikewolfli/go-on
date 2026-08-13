@@ -447,11 +447,10 @@ async fn execute_spawn(
 
         match chat_result {
             Ok(Ok(())) => {
-                // 7. Collect all streamed tokens.
-                let mut response = String::new();
-                while let Some(token) = rx.recv().await {
-                    response.push_str(&token);
-                }
+                // 7. Collect all streamed tokens, bounded by the shared
+                // stream caps (the response is surfaced to the caller).
+                let response =
+                    crate::acp::helpers::conversation::drain_channel_capped(&mut rx).await;
 
                 info!(
                     agent = %agent_name,

@@ -9,6 +9,11 @@ use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 use anyhow::{Context, Result};
 use tracing::debug;
 
+/// Maximum line-window size per call: `end_line` is model-controlled and
+/// unbounded, so the window is clamped to this many lines (the response is
+/// additionally bounded by the executor's output truncation).
+pub(crate) const MAX_LINES_PER_CALL: usize = 100_000;
+
 // ── ReadFileLinesTool ─────────────────────────────────────────────────────
 
 pub struct ReadFileLinesTool;
@@ -67,6 +72,13 @@ impl Tool for ReadFileLinesTool {
             );
         }
 
+        // Window bound: `end_line` is model-controlled and unbounded — a
+        // request for `end_line=1e9` would scan the whole file and accumulate
+        // unbounded lines. Clamp the window and report the clamp explicitly.
+        let window_clamped =
+            end_line.saturating_sub(start_line).saturating_add(1) > MAX_LINES_PER_CALL;
+        let end_line = end_line.min(start_line.saturating_add(MAX_LINES_PER_CALL - 1));
+
         debug!(
             path = %validated.display(),
             start_line = %start_line,
@@ -95,25 +107,25 @@ impl Tool for ReadFileLinesTool {
                 break; // EOF
             }
             total_lines += 1;
+            // Oversized lines must be drained to the newline REGARDLESS of
+            // the requested window: a >1MiB line before `start_line` would
+            // otherwise leave the reader mid-line, and each subsequent
+            // 1MiB fragment would be miscounted as a separate line (silent
+            // line-number corruption).
+            let oversized = line_buf.len() > MAX_LINE_BYTES;
+            if oversized {
+                // Shared drain: advances to the next line boundary without
+                // buffering the line and without consuming the next line's
+                // prefix.
+                crate::shared::bufread::drain_to_newline(&mut reader);
+            }
             if total_lines < start_line {
                 continue;
             }
             if total_lines > end_line {
                 break; // scanned past the requested window
             }
-            if line_buf.len() > MAX_LINE_BYTES {
-                // Oversized line: drain the remainder to stay aligned, then
-                // report it without buffering the whole line.
-                let mut drain = [0u8; 1024];
-                while line_buf.last() != Some(&b'\n') {
-                    let r = reader.read(&mut drain).unwrap_or(0);
-                    if r == 0 {
-                        break;
-                    }
-                    if drain[..r].contains(&b'\n') {
-                        break;
-                    }
-                }
+            if oversized {
                 lines.push(format!("[line too long — > {MAX_LINE_BYTES} bytes]"));
                 continue;
             }
@@ -129,8 +141,13 @@ impl Tool for ReadFileLinesTool {
         } else {
             total_lines
         };
-        let actual_start = start_line.min(reported_total.max(1));
-        let actual_end = end_line.min(reported_total);
+        // Empty file: report an empty range (start == end == 0) so the
+        // response never violates the start <= end contract.
+        let (actual_start, actual_end) = if reported_total == 0 {
+            (0, 0)
+        } else {
+            (start_line.min(reported_total), end_line.min(reported_total))
+        };
 
         debug!(
             total_lines = %reported_total,
@@ -148,6 +165,7 @@ impl Tool for ReadFileLinesTool {
                 "total_lines": reported_total,
                 "returned_count": lines.len(),
                 "truncated": truncated,
+                "window_clamped": window_clamped,
                 "path": validated.to_string_lossy(),
             })),
             error: None,
@@ -194,6 +212,35 @@ mod tests {
             .join("\n");
         std::fs::write(&path, content).unwrap();
         path
+    }
+
+    #[test]
+    fn oversized_window_is_clamped_and_reported() {
+        // Regression: `end_line` is model-controlled and unbounded — a request
+        // for end_line=1e9 must be clamped to MAX_LINES_PER_CALL and reported
+        // via `window_clamped` instead of scanning the whole file.
+        let tmp = TempDir::new().expect("temp dir");
+        let path = make_file(&tmp, "big.txt", MAX_LINES_PER_CALL + 50_000);
+        let input = tool_input(serde_json::json!({
+            "path": path.to_str().unwrap(),
+            "start_line": 1,
+            "end_line": 1_000_000_000,
+        }));
+        let result = ReadFileLinesTool.run(&input).expect("run");
+        assert!(result.success);
+        let payload = result.result.expect("payload");
+        assert!(
+            payload["window_clamped"].as_bool().unwrap(),
+            "oversized window must be flagged"
+        );
+        assert_eq!(
+            payload["returned_count"].as_u64().unwrap(),
+            MAX_LINES_PER_CALL as u64
+        );
+        assert_eq!(
+            payload["end_line"].as_u64().unwrap(),
+            MAX_LINES_PER_CALL as u64
+        );
     }
 
     #[test]
@@ -341,5 +388,43 @@ mod tests {
         let payload = result.result.expect("result payload");
         let lines = payload["lines"].as_array().expect("lines array");
         assert!(lines.is_empty());
+        // The reported range must not violate start <= end.
+        assert!(payload["start_line"].as_u64().unwrap() <= payload["end_line"].as_u64().unwrap());
+    }
+
+    #[test]
+    fn oversized_line_drain_preserves_following_lines() {
+        // Regression (P1): the drain loop after an oversized line must only
+        // consume UP TO the newline — a naive `read()` over-consumed the
+        // buffer and silently dropped the next line's prefix.
+        let tmp = TempDir::new().expect("temp dir");
+        let path = tmp.path().join("big_line.txt");
+        // Line 1: > 1 MiB (no newline until after the cap+1 bytes).
+        // Line 2: a short sentinel line whose integrity we assert.
+        let mut content = "x".repeat(1024 * 1024 + 100);
+        content.push_str("\nsentinel-尾行\n");
+        std::fs::write(&path, content).expect("write file");
+
+        let input = tool_input(serde_json::json!({
+            "path": path.to_str().unwrap(),
+            "start_line": 1,
+            "end_line": 3,
+        }));
+        let tool = ReadFileLinesTool;
+        let result = tool.run(&input).expect("run");
+        assert!(result.success);
+        let payload = result.result.expect("payload");
+        let lines = payload["lines"].as_array().expect("lines");
+        assert!(
+            lines[0].as_str().unwrap().starts_with("[line too long"),
+            "oversized line reported, got: {:?}",
+            lines[0]
+        );
+        assert_eq!(
+            lines[1].as_str().unwrap(),
+            "sentinel-尾行",
+            "line after the oversized line must be intact"
+        );
+        assert_eq!(payload["total_lines"].as_u64().unwrap(), 2);
     }
 }

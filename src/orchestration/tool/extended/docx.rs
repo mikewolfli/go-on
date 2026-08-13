@@ -10,8 +10,6 @@ use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 #[cfg(feature = "document-docx")]
 use anyhow::{Context, Result};
 #[cfg(feature = "document-docx")]
-use std::fs;
-#[cfg(feature = "document-docx")]
 use tracing::info;
 
 #[cfg(feature = "document-docx")]
@@ -28,8 +26,11 @@ impl Tool for ReadDocxTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
         let validated = sanitize_path(input, path)?;
-        let content = fs::read(&validated)
-            .with_context(|| format!("failed to read DOCX: {}", validated.display()))?;
+        let content = crate::orchestration::tool::exec_common::read_file_capped(
+            &validated,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("failed to read DOCX: {}", validated.display()))?;
 
         // Single DOCX extraction implementation (shared with the multimodal
         // pipeline — the previous inline docx-rs copy was removed).

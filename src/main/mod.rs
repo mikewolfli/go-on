@@ -382,6 +382,11 @@ async fn run() -> Result<()> {
 
     // Handle terminal chat mode
     if cli.chat {
+        // CLI chat also runs model-issued commands through the tool loop, so the
+        // command sandbox config applies here too.
+        crate::security::sandbox::init_command_sandbox(
+            config.security.command_sandbox.clone(),
+        );
         return server::handle_chat_mode(config, &cli, &config_path, skill_registry).await;
     }
 

@@ -13,6 +13,22 @@ model_selection_mode = "adaptive"
 governance_enabled = true
 governance_policy_mode = "audit"
 
+# ── OS-level command sandbox (bubblewrap) ───────────────────────────────
+# Wraps every model-issued command (shell_exec and future runner users) in a
+# bwrap user/pid namespace. Default mode when this section is absent is
+# "workspace-write" whenever bwrap is installed (see security::sandbox).
+#
+# [security.command_sandbox]
+#   # none | workspace-write | read-only | isolated
+#   mode = "workspace-write"
+#   # Optional extra writable root beyond the command's working directory.
+#   # workspace = "/path/to/writable"
+#   # Credential dirs under $HOME to mask (defaults shown).
+#   # masked_dirs = [".ssh", ".aws", ".gnupg", ".netrc", ".config/gcloud", ".config/gh"]
+#   # Env vars allowed into sandboxed commands even if they look like
+#   # credentials (escape hatch; default: none).
+#   # passthrough_env = ["GITHUB_TOKEN"]
+
 [cache]
 enabled = true
 path = "sqlite3/acp_cache.sqlite3"

@@ -446,24 +446,6 @@ fn validate_phase_options(phase_name: &str, options: &PhaseOptions) -> Result<()
             )
         );
     }
-    if matches!(options.max_history_messages, Some(0)) {
-        anyhow::bail!(
-            "{}",
-            tf(
-                "error.phase_field_positive",
-                &[("phase", phase_name), ("field", "max_history_messages")]
-            )
-        );
-    }
-    if matches!(options.max_history_chars, Some(0)) {
-        anyhow::bail!(
-            "{}",
-            tf(
-                "error.phase_field_positive",
-                &[("phase", phase_name), ("field", "max_history_chars")]
-            )
-        );
-    }
     if matches!(options.request_timeout_seconds, Some(0)) {
         anyhow::bail!(
             "{}",

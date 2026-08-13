@@ -449,6 +449,16 @@ pub async fn skill_create_payload(server: &AcpServer, params: Value) -> Result<V
         .filter(|p| !p.is_empty())
         .map(ToString::to_string)
         .ok_or_else(|| anyhow::anyhow!("missing required param: prompt_template"))?;
+    // Bound the template size: an oversized template would bloat the skill
+    // persistence file and be re-sent to the model on every invocation.
+    const MAX_PROMPT_TEMPLATE_BYTES: usize = 1024 * 1024;
+    if prompt_template.len() > MAX_PROMPT_TEMPLATE_BYTES {
+        anyhow::bail!(
+            "prompt_template too large: {} bytes > {} max",
+            prompt_template.len(),
+            MAX_PROMPT_TEMPLATE_BYTES
+        );
+    }
     let input_schema: std::collections::HashMap<String, String> = params
         .get("input_schema")
         .and_then(|v| serde_json::from_value(v.clone()).ok())

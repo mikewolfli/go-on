@@ -225,7 +225,13 @@ fn scan_learning_records_with_parseability(
         return Ok((Vec::new(), 0, 0));
     }
 
-    let content = fs::read_to_string(&records_path)?;
+    let content = match crate::orchestration::tool::exec_common::read_file_capped(
+        &records_path,
+        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+    ) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(e) => anyhow::bail!("failed to read learning records: {e}"),
+    };
     let mut parsed = Vec::new();
     let mut parse_errors = 0usize;
     let mut total_lines = 0usize;

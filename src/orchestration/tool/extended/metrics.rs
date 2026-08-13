@@ -45,13 +45,28 @@ impl Tool for CodeMetricsTool {
         );
 
         // Collect matching files using the `glob` crate.
+        // Sandbox: the pattern is joined onto the sanitized base dir, so an
+        // absolute pattern (or one containing `..`) would escape — reject
+        // both, mirroring search_files' root-relative semantics.
+        if glob_pattern.starts_with('/') || glob_pattern.starts_with('\\') {
+            anyhow::bail!("code_metrics: pattern must be relative to the search directory");
+        }
+        if glob_pattern.split(['/', '\\']).any(|seg| seg == "..") {
+            anyhow::bail!("code_metrics: pattern must not contain '..' segments");
+        }
         let full_pattern = base_dir.join(glob_pattern);
         let pattern_str = full_pattern.to_string_lossy().to_string();
-        let globber: Vec<PathBuf> = glob::glob(&pattern_str)
+        // File-count bound: a `**/*` pattern over a huge tree must not read
+        // every file into memory. The bound is reported explicitly.
+        const MAX_METRICS_FILES: usize = 5_000;
+        let mut globber: Vec<PathBuf> = glob::glob(&pattern_str)
             .context("failed to parse glob pattern")?
             .filter_map(Result::ok)
             .filter(|p| p.is_file())
+            .take(MAX_METRICS_FILES + 1)
             .collect();
+        let truncated = globber.len() > MAX_METRICS_FILES;
+        globber.truncate(MAX_METRICS_FILES);
 
         if globber.is_empty() {
             return Ok(ToolOutput {
@@ -99,6 +114,7 @@ impl Tool for CodeMetricsTool {
             result: Some(json!({
                 "files_analyzed": all_metrics.len(),
                 "total_lines": total_lines,
+                "truncated": truncated,
                 "metrics": all_metrics,
             })),
             error: None,
@@ -118,8 +134,11 @@ impl Tool for CodeMetricsTool {
 
 /// Analyze a single source file for code metrics.
 fn analyze_file(path: &std::path::Path) -> Result<Value> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let content = crate::orchestration::tool::exec_common::read_text_capped(
+        path,
+        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+    )
+    .with_context(|| format!("failed to read {}", path.display()))?;
 
     let total_lines = content.lines().count();
     let code_lines = content

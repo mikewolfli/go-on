@@ -99,6 +99,11 @@ pub struct SecurityConfig {
     /// Security is enforced at runtime (Layer 3), not via LLM pre-policy.
     #[serde(default)]
     pub url_policy: UrlPolicyConfig,
+    /// OS-level command sandbox (bubblewrap) for model-issued commands.
+    /// When unset, defaults to `workspace-write` whenever bwrap is present
+    /// (see `security::sandbox::effective_mode`).
+    #[serde(default)]
+    pub command_sandbox: Option<CommandSandboxConfig>,
     /// Enable GuardianReviewer for model-based tool review (BLUE71 §11).
     /// When enabled, every tool call is reviewed by a separate LLM agent
     /// before execution. Fail-closed: any review failure denies the tool.
@@ -109,6 +114,32 @@ pub struct SecurityConfig {
     /// Must be set when `guardian_enabled = true`.
     #[serde(default)]
     pub guardian_agent: String,
+}
+
+/// OS-level command sandbox configuration (`[security.command_sandbox]`).
+///
+/// LAYER 3: OS isolation for model-issued commands. `mode` values:
+/// - `none`: legacy direct execution (policy gates still apply)
+/// - `workspace-write`: workspace + $HOME writable, rest read-only,
+///   credential dirs masked, network enabled (default when bwrap exists)
+/// - `read-only`: everything read-only, network disabled
+/// - `isolated`: empty tmpfs root + read-only workspace, network disabled
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CommandSandboxConfig {
+    /// Sandbox mode string. Defaults to `workspace-write` when unset.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Extra writable root(s) beyond the command's working directory.
+    #[serde(default)]
+    pub workspace: Option<String>,
+    /// Credential directory names under $HOME to mask (`.ssh`, `.aws`, ...).
+    /// Empty means "use defaults".
+    #[serde(default)]
+    pub masked_dirs: Option<Vec<String>>,
+    /// Environment variable names allowed into sandboxed commands even when
+    /// they match the credential patterns (escape hatch; default empty).
+    #[serde(default)]
+    pub passthrough_env: Option<Vec<String>>,
 }
 
 /// URL access policy for the http_request tool.
@@ -266,10 +297,6 @@ pub struct ProtocolConfig {
 /// Simplified adaptive configuration for AI-driven setup
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdaptiveConfig {
-    /// Whether to use adaptive mode (AI determines best configuration)
-    #[serde(default = "super::defaults::default_true")]
-    pub adaptive_mode: bool,
-
     /// Minimum configuration required for operation
     pub minimal_config: MinimalConfig,
 }

@@ -87,6 +87,14 @@ pub struct BucketMap {
     inner: Mutex<HashMap<String, TokenBucket>>,
 }
 
+/// Maximum number of tracked buckets. Bucket keys are caller-controlled
+/// (tenant ids, phase keys, client IPs for the entry rate limiter), so an
+/// unbounded map would grow without limit on a long-running service. When
+/// exceeded, an arbitrary non-current bucket is evicted (a rate-limiter cache
+/// eviction is harmless: the evicted key simply gets a fresh bucket on its
+/// next request).
+pub const MAX_BUCKETS: usize = 10_000;
+
 impl BucketMap {
     /// Create an empty `BucketMap`.
     pub fn new() -> Self {
@@ -114,6 +122,14 @@ impl BucketMap {
     /// consumed, `false` if rate-limited.
     pub fn try_consume_n(&self, key: &str, tokens: f64, burst: f64, refill_rate: f64) -> bool {
         let mut map = crate::lock_or_recover!(self.inner);
+        // Bounded cache: evict an arbitrary bucket when over capacity (never
+        // the just-accessed key) so a flood of distinct keys cannot grow the
+        // map without bound.
+        if map.len() >= MAX_BUCKETS && !map.contains_key(key) {
+            if let Some(evict) = map.keys().next().cloned() {
+                map.remove(&evict);
+            }
+        }
         let bucket = map
             .entry(key.to_string())
             .or_insert_with(|| TokenBucket::new(burst, refill_rate));

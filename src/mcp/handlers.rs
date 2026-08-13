@@ -12,8 +12,8 @@ use crate::acp::r#impl::request::{
 };
 
 use super::{
-    JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
-    McpListToolsResult, McpServer, JSONRPC_VERSION, MCP_VERSION,
+    sanitize_log, JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult,
+    McpInitializeResult, McpListToolsResult, McpServer, JSONRPC_VERSION, MCP_VERSION,
 };
 use crate::tool::ToolInput;
 
@@ -265,6 +265,11 @@ impl McpServer {
         }
         if let Some(Value::String(id_str)) = &request.id {
             if id_str.chars().any(char::is_control) {
+                // Echo the original id back: serde_json escapes control
+                // characters on serialization, so the response is safe, and
+                // echoing lets the transport deliver the error instead of
+                // misclassifying it as a notification (which would make the
+                // client wait forever). The id is not logged here.
                 return Ok(JsonRpcResponse {
                     jsonrpc: JSONRPC_VERSION.to_string(),
                     result: None,
@@ -273,7 +278,7 @@ impl McpServer {
                         message: "Request id contains control characters".to_string(),
                         data: None,
                     }),
-                    id: None,
+                    id: request.id,
                 });
             }
         }
@@ -374,7 +379,7 @@ impl McpServer {
                     self.mark_cancelled_request(&request_id);
                     info!(
                         "MCP: received notifications/cancelled for request {}",
-                        request_id_key(&request_id)
+                        sanitize_log(&request_id_key(&request_id))
                     );
                 } else {
                     warn!("MCP: notifications/cancelled missing requestId");
@@ -417,12 +422,16 @@ impl McpServer {
                     // filter — reload_log_filter is the real mechanism.
                     match crate::observability::telemetry_enhanced::reload_log_filter(directive) {
                         Ok(()) => {
-                            info!("MCP: logging level set to \"{}\" (filter reloaded)", lvl);
+                            info!(
+                                "MCP: logging level set to \"{}\" (filter reloaded)",
+                                sanitize_log(lvl)
+                            );
                         }
                         Err(e) => {
                             warn!(
                                 "MCP: logging level stored as \"{}\" but filter not reloaded: {}",
-                                lvl, e
+                                sanitize_log(lvl),
+                                e
                             );
                         }
                     }
@@ -532,8 +541,8 @@ impl McpServer {
                     info!(
                         count = values.len(),
                         ref_type = ref_type,
-                        ref_name = ref_name,
-                        arg_name = argument_name,
+                        ref_name = sanitize_log(ref_name),
+                        arg_name = sanitize_log(argument_name),
                         "MCP: completion/complete"
                     );
                     Ok(json!({
@@ -621,7 +630,8 @@ impl McpServer {
         if negotiated_version != client_version {
             info!(
                 "MCP: version negotiation: client requested '{}', negotiated to '{}'",
-                client_version, negotiated_version
+                sanitize_log(client_version),
+                negotiated_version
             );
         }
 
@@ -689,7 +699,8 @@ impl McpServer {
 
         info!(
             "MCP: Calling tool '{}' with input: {:?}",
-            tool_name, tool_input
+            sanitize_log(&tool_name),
+            tool_input
         );
 
         // Steps 1-4: Delegate to the unified tool-execution chain shared with
@@ -817,7 +828,7 @@ impl McpServer {
         }
 
         // Not found — error
-        warn!("MCP: Unknown tool or skill '{}'", tool_name);
+        warn!("MCP: Unknown tool or skill '{}'", sanitize_log(&tool_name));
         Err(invalid_params(format!(
             "Unknown tool or skill: {}",
             tool_name
@@ -857,7 +868,11 @@ impl McpServer {
             &agents, &tools, uri,
         )
         .map_err(|e| {
-            warn!("MCP: unknown resource '{}': {}", uri, e);
+            warn!(
+                "MCP: unknown resource '{}': {}",
+                sanitize_log(uri),
+                sanitize_log(&e.to_string())
+            );
             invalid_params(format!("Unknown resource: {}", uri))
         })
     }
@@ -1009,17 +1024,34 @@ impl McpServer {
             .map(|m| m.id.clone())
             .unwrap_or_else(|| agent_name.clone());
 
-        // Call the agent
-        agent
-            .chat(agent_messages, None, Some(options), sender)
-            .await
-            .map_err(|e| anyhow::anyhow!("Sampling request failed: {}", e))?;
+        // Bounds for the sampling stream: the chat can emit tokens forever
+        // (misbehaving/remote model) and this handler has no other cap or
+        // timeout — mirror the main chat path's limits (256k chars, 300s).
+        const MAX_SAMPLING_CHARS: usize = 256_000;
+        const SAMPLING_TIMEOUT: Duration = Duration::from_secs(300);
 
-        // Collect streaming tokens
-        let mut full_text = String::new();
-        while let Some(token) = rx.recv().await {
-            full_text.push_str(&token);
-        }
+        let full_text = tokio::time::timeout(SAMPLING_TIMEOUT, async {
+            agent
+                .chat(agent_messages, None, Some(options), sender)
+                .await
+                .map_err(|e| anyhow::anyhow!("Sampling request failed: {}", e))?;
+
+            // Collect streaming tokens with a char cap. Dropping `rx` on
+            // truncation closes the channel, which stops the agent's sends.
+            let mut full_text = String::new();
+            while let Some(token) = rx.recv().await {
+                full_text.push_str(&token);
+                if full_text.len() > MAX_SAMPLING_CHARS {
+                    tracing::warn!(
+                        "MCP: sampling/createMessage output truncated at {MAX_SAMPLING_CHARS} chars"
+                    );
+                    break;
+                }
+            }
+            Ok::<String, anyhow::Error>(full_text)
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("sampling/createMessage timed out"))??;
 
         info!(
             "MCP: sampling/createMessage completed ({} chars generated)",
@@ -1392,5 +1424,47 @@ mod tests {
             "idempotency_hits must accumulate on a cache hit, got {}",
             profile.idempotency_hits
         );
+    }
+
+    #[tokio::test]
+    async fn mcp_rejects_control_characters_in_method_and_id() {
+        let registry = OrchestrationToolRegistry::new_empty();
+        let (server, _harness_bus) = build_gov_server(registry);
+        initialize(&server).await;
+
+        // Method containing a newline: rejected with INVALID_REQUEST, and the
+        // id is echoed so the client can correlate the error.
+        let resp = server
+            .handle_request(JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                method: "ping\n[FAKE]".to_string(),
+                params: None,
+                id: Some(json!(7)),
+            })
+            .await
+            .expect("envelope");
+        assert_eq!(
+            resp.error.as_ref().expect("error").code,
+            crate::mcp::error_codes::INVALID_REQUEST
+        );
+        assert_eq!(resp.id, Some(json!(7)), "id must be echoed");
+
+        // String id with control chars: rejected AND the id is echoed (not
+        // None) so the transport does not misclassify the response as a
+        // notification and swallow the error (client would hang).
+        let resp2 = server
+            .handle_request(JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                method: "ping".to_string(),
+                params: None,
+                id: Some(json!("a\nb")),
+            })
+            .await
+            .expect("envelope");
+        assert_eq!(
+            resp2.error.as_ref().expect("error").code,
+            crate::mcp::error_codes::INVALID_REQUEST
+        );
+        assert_eq!(resp2.id, Some(json!("a\nb")), "id must be echoed");
     }
 }

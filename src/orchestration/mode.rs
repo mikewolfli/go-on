@@ -377,24 +377,22 @@ async fn execute_agent_chat_async(
     principles: Option<Vec<String>>,
     options: Option<std::collections::HashMap<String, serde_json::Value>>,
 ) -> Result<String> {
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let (tx, rx) = mpsc::unbounded_channel::<String>();
     let sender = StreamingSender::new(tx);
 
     let agent_ref: &dyn Agent = agent;
-    agent_ref
-        .chat(messages, principles, options, sender)
-        .await
-        .map_err(|e| anyhow::anyhow!("agent chat failed: {}", e))?;
+    let chat_future = agent_ref.chat(messages, principles, options, sender);
 
-    let mut full_output = String::new();
-    // Add timeout to prevent infinite hang on dropped sender
-    while let Some(token) = tokio::time::timeout(Duration::from_secs(300), rx.recv())
-        .await
-        .unwrap_or(None)
-    {
-        full_output.push_str(&token);
-    }
-    Ok(full_output)
+    // Shared capped collector (256k chars / 4096 chunks, 300s overall cap):
+    // drains the stream concurrently with the chat and aborts the chat task
+    // on truncation — a "chat first, drain later" order would buffer the
+    // whole stream in the channel before the cap applied.
+    crate::acp::helpers::conversation::collect_chat_output_capped(
+        chat_future,
+        rx,
+        Some(Duration::from_secs(300)),
+    )
+    .await
 }
 
 /// Execute an agent's run_task directly (already async).

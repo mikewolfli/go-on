@@ -46,7 +46,8 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string", "description": "Search pattern/glob"},
-                    "directory": {"type": "string", "description": "Search directory"}
+                    "directory": {"type": "string", "description": "Search directory"},
+                    "max_results": {"type": "integer", "description": "Maximum number of file paths to return (default 1000)", "default": 1000}
                 },
                 "required": ["pattern"]
             })),

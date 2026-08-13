@@ -192,6 +192,9 @@ impl McpStdioServer {
                                     // Batch amplification guard: a ≤10MB line
                                     // can carry ~270k tiny requests, each
                                     // spawning a concurrent task + audit.
+                                    // JSON-RPC 2.0 §6: a batch error is
+                                    // reported as an ARRAY of responses
+                                    // (mirroring the HTTP transport).
                                     if requests.len() > MAX_BATCH_SIZE {
                                         warn!(
                                             "MCP: batch request with {} items exceeds the {} item limit",
@@ -199,10 +202,25 @@ impl McpStdioServer {
                                             MAX_BATCH_SIZE
                                         );
                                         let mut stdout = stdout.lock().await;
-                                        let err_line = serde_json::to_string(&json!({
+                                        let err_line = serde_json::to_string(&vec![json!({
                                             "jsonrpc": "2.0",
                                             "id": null,
                                             "error": {"code": -32600, "message": format!("batch too large (max {} items)", MAX_BATCH_SIZE)}
+                                        })])?;
+                                        stdout.write_all(err_line.as_bytes()).await?;
+                                        stdout.write_all(b"\n").await?;
+                                        stdout.flush().await?;
+                                        continue;
+                                    }
+                                    // JSON-RPC 2.0 §6: an empty array is not
+                                    // a valid request — respond with a single
+                                    // Invalid Request error object.
+                                    if requests.is_empty() {
+                                        let mut stdout = stdout.lock().await;
+                                        let err_line = serde_json::to_string(&json!({
+                                            "jsonrpc": "2.0",
+                                            "id": null,
+                                            "error": {"code": -32600, "message": "Invalid Request: empty batch array"}
                                         }))?;
                                         stdout.write_all(err_line.as_bytes()).await?;
                                         stdout.write_all(b"\n").await?;
@@ -230,7 +248,10 @@ impl McpStdioServer {
                                                     "{}",
                                                     tf(
                                                         "error.handling_request",
-                                                        &[("error", &err_msg)],
+                                                        &[(
+                                                            "error",
+                                                            &crate::mcp::sanitize_log(&err_msg)
+                                                        )],
                                                     )
                                                 );
                                                 // Mirror the serial path: even a failed
@@ -291,7 +312,16 @@ impl McpStdioServer {
                                         }
                                         Err(e) => {
                                             let err_msg = format!("{}", e);
-                                            warn!("{}", tf("error.handling_request", &[("error", &err_msg)]));
+                                            warn!(
+                                                "{}",
+                                                tf(
+                                                    "error.handling_request",
+                                                    &[(
+                                                        "error",
+                                                        &crate::mcp::sanitize_log(&err_msg)
+                                                    )]
+                                                )
+                                            );
                                             let mut stdout = stdout.lock().await;
                                             send_handler_error(
                                                 &mut *stdout,
@@ -1090,7 +1120,8 @@ async fn handle_http_connection(
 
         // Batch amplification guard (same limit as the stdio transport): a
         // ≤10MB body can carry ~270k tiny requests, each spawning a
-        // concurrent task + audit.
+        // concurrent task + audit. JSON-RPC 2.0 §6: a batch error is reported
+        // as an ARRAY of response objects.
         if requests.len() > MAX_BATCH_SIZE {
             warn!(
                 "MCP HTTP: batch request with {} items exceeds the {} item limit",
@@ -1100,6 +1131,25 @@ async fn handle_http_connection(
             let error_response = mcp_error_response(
                 -32600,
                 format!("batch too large (max {} items)", MAX_BATCH_SIZE),
+                "mcp.batch_too_large",
+                None,
+            );
+            write_http_json_response(
+                socket,
+                200,
+                serde_json::to_value(vec![error_response])?,
+                &cors_headers,
+            )
+            .await?;
+            return Ok(());
+        }
+
+        // JSON-RPC 2.0 §6: an empty array is not a valid request — respond
+        // with a single Invalid Request error object.
+        if requests.is_empty() {
+            let error_response = mcp_error_response(
+                -32600,
+                "Invalid Request: empty batch array".to_string(),
                 "mcp.batch_too_large",
                 None,
             );
@@ -1123,7 +1173,9 @@ async fn handle_http_connection(
                 Err(e) => {
                     warn!(
                         "MCP HTTP: error handling batch request from {} {}: {}",
-                        method, path, e
+                        method,
+                        path,
+                        crate::mcp::sanitize_log(&e.to_string())
                     );
                     // Same error-code mapping as the single-request path and
                     // the stdio batch path (shared `handler_error_response`),
@@ -1190,7 +1242,9 @@ async fn handle_http_connection(
         Err(e) => {
             warn!(
                 "MCP HTTP: error handling request from {} {}: {}",
-                method, path, e
+                method,
+                path,
+                crate::mcp::sanitize_log(&e.to_string())
             );
             // Keep the connection alive: write a JSON-RPC error response with
             // the error code mapped by `error_code_for` (same shape as the

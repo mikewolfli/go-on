@@ -135,15 +135,28 @@ impl UnifiedKnowledgeBus {
 
     /// Add a knowledge insight (equivalent to KnowledgeBus::add_insight).
     pub fn add_insight(&mut self, insight: KnowledgeInsight) {
-        if self.insights.len() >= MAX_KNOWLEDGE_INSIGHTS {
-            self.insights.remove(0);
-        }
+        let evicted = if self.insights.len() >= MAX_KNOWLEDGE_INSIGHTS {
+            Some(self.insights.remove(0))
+        } else {
+            None
+        };
         // Index by tags
         for tag in &insight.applicability_tags {
             self.knowledge_by_task
                 .entry(tag.clone())
                 .or_default()
                 .push(insight.clone());
+        }
+        // The evicted insight's per-tag clones must go too: the buckets were
+        // previously only appended to, so they grew without bound and the
+        // novelty heuristic (`is_novel_pattern`) kept seeing stale entries
+        // that had already been evicted from `insights`.
+        if let Some(old) = evicted {
+            for tag in &old.applicability_tags {
+                if let Some(bucket) = self.knowledge_by_task.get_mut(tag) {
+                    bucket.retain(|i| i.id != old.id);
+                }
+            }
         }
         self.insights.push(insight);
     }
@@ -310,5 +323,40 @@ mod tests {
         bus.record_outcome("a1", "t1", true, "ok".to_string());
         bus.record_outcome("a2", "t2", true, "ok".to_string());
         assert_eq!(bus.all_reputations().len(), 2);
+    }
+
+    #[test]
+    fn test_knowledge_by_task_buckets_stay_bounded_across_eviction() {
+        // Regression: per-tag buckets were only ever appended to, so they
+        // grew without bound while `insights` evicted at MAX_KNOWLEDGE_INSIGHTS
+        // (each evicted insight's clones stayed in the bucket forever).
+        let mut bus = UnifiedKnowledgeBus::new();
+        let total = MAX_KNOWLEDGE_INSIGHTS + 50;
+        for i in 0..total {
+            bus.add_insight(KnowledgeInsight {
+                id: format!("ki_{i}"),
+                pattern: format!("pattern-{i}"),
+                solution_summary: format!("solution-{i}"),
+                applicability_tags: vec!["tag-a".to_string()],
+                confidence: 0.5,
+                created_ms: i as u64,
+            });
+        }
+        assert_eq!(bus.insight_count(), MAX_KNOWLEDGE_INSIGHTS);
+        let bucket = bus
+            .knowledge_by_task
+            .get("tag-a")
+            .expect("bucket should exist");
+        assert!(
+            bucket.len() <= MAX_KNOWLEDGE_INSIGHTS,
+            "bucket must not exceed the insights bound, got {}",
+            bucket.len()
+        );
+        // The newest insight must still be visible in the bucket (eviction
+        // removes the oldest by id).
+        assert_eq!(
+            bucket.last().map(|i| i.id.as_str()),
+            Some(format!("ki_{}", total - 1).as_str())
+        );
     }
 }

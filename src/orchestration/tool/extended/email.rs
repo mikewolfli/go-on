@@ -11,8 +11,6 @@ use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 #[cfg(feature = "document-email")]
 use anyhow::{Context, Result};
 #[cfg(feature = "document-email")]
-use std::fs;
-#[cfg(feature = "document-email")]
 use tracing::info;
 
 // ── EmailParseTool ──────────────────────────────────────────────────────────
@@ -32,8 +30,11 @@ impl Tool for EmailParseTool {
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
         let validated = sanitize_path(input, path)?;
 
-        let content = fs::read_to_string(&validated)
-            .with_context(|| format!("failed to read EML: {}", validated.display()))?;
+        let content = crate::orchestration::tool::exec_common::read_text_capped(
+            &validated,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("failed to read EML: {}", validated.display()))?;
 
         info!(path = %validated.display(), bytes = content.len(), "parsing EML file");
 

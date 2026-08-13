@@ -69,22 +69,39 @@ impl ArtifactLedger {
 
         let latest_path = dir.join(latest_name);
         let stem = latest_name.strip_suffix(".json").unwrap_or(latest_name);
+        // Millisecond timestamp: the previous second-precision archive name
+        // collided when two concurrent requests wrote the same stem in the
+        // same second (each overwrote the other's archive).
         let archive_path = dir.join(format!(
             "{}-{}.json",
             stem,
-            crate::shared::timestamps::now_ts()
+            crate::shared::timestamps::now_ts_ms_u64()
         ));
         let encoded = serde_json::to_vec_pretty(value)?;
 
         fs::write(&archive_path, &encoded).with_context(|| {
             format!("failed to write ledger artifact {}", archive_path.display())
         })?;
-        fs::write(&latest_path, &encoded).with_context(|| {
-            format!(
-                "failed to write latest ledger artifact {}",
-                latest_path.display()
-            )
-        })?;
+        // Atomic replace of the latest file (temp + rename): a plain
+        // truncate+write lets a concurrent reader observe a torn/corrupt
+        // `latest` file. The temp name carries a unique suffix so two
+        // concurrent writers never share a temp file (a shared fixed name
+        // could be half-written by writer B when writer A renames it).
+        let tmp_path = latest_path.with_extension(format!(
+            "json.tmp.{}.{}",
+            std::process::id(),
+            crate::shared::timestamps::now_ts_ms_u64()
+        ));
+        fs::write(&tmp_path, &encoded)
+            .with_context(|| format!("failed to write ledger artifact {}", tmp_path.display()))?;
+        if let Err(e) = fs::rename(&tmp_path, &latest_path) {
+            let _ = fs::remove_file(&tmp_path); // best-effort temp cleanup
+            return Err(anyhow::anyhow!(
+                "failed to write latest ledger artifact {}: {}",
+                latest_path.display(),
+                e
+            ));
+        }
 
         // ── Prune old archives ────────────────────────────────────────────────
         // Keep at most MAX_ARCHIVES_PER_STEM archive files per artifact stem.

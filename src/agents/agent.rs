@@ -670,11 +670,9 @@ pub trait Agent: Send + Sync {
         // Call chat() — all agents implement this.
         self.chat(messages, None, None, sender).await?;
 
-        // Collect all streamed tokens.
-        let mut output = String::new();
-        while let Some(token) = rx.recv().await {
-            output.push_str(&token);
-        }
+        // Collect all streamed tokens, bounded by the shared stream caps
+        // (the output flows into the task result / LLM context).
+        let output = crate::acp::helpers::conversation::drain_channel_capped(&mut rx).await;
 
         Ok(AgentTaskResult {
             success: true,

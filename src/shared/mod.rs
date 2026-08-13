@@ -1,4 +1,5 @@
 pub mod alert_severity;
+pub mod bufread;
 pub mod db_pool;
 pub mod goon_paths;
 pub mod http_client;

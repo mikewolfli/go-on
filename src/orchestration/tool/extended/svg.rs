@@ -32,14 +32,16 @@ impl Tool for SvgReadTool {
         crate::orchestration::tool::ToolExposure::Deferred
     }
 
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
         let validated = sanitize_path(input, path)?;
-        let content = fs::read_to_string(&validated)
-            .with_context(|| format!("failed to read SVG: {}", validated.display()))?;
+        let content = crate::orchestration::tool::exec_common::read_text_capped(
+            &validated,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("failed to read SVG: {}", validated.display()))?;
 
         let mut parser =
             svg::read(&content).map_err(|e| anyhow::anyhow!("failed to parse SVG: {e}"))?;
@@ -115,7 +117,6 @@ impl Tool for SvgGenerateTool {
     fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
         crate::orchestration::tool::ToolExposure::Deferred
     }
-
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let width = input.payload["width"].as_u64().unwrap_or(800) as f64;
@@ -591,7 +592,6 @@ impl Tool for SvgExportTool {
     fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
         crate::orchestration::tool::ToolExposure::Deferred
     }
-
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         use svg::node::element::path::Data;

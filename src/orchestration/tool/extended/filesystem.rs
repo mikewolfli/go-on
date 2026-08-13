@@ -27,8 +27,16 @@ impl Tool for ListDirectoryTool {
 
         let validated = sanitize_path(input, path)?;
         let mut entries: Vec<serde_json::Value> = Vec::new();
+        // Entry bound: a directory with millions of entries must not produce
+        // a million-element JSON response (the executor truncates the text,
+        // but the JSON itself would still be built in full). The bound is
+        // reported explicitly (`truncated`), never silent.
+        const MAX_LIST_ENTRIES: usize = 10_000;
 
         for entry in fs::read_dir(&validated).context("failed to read directory")? {
+            if entries.len() >= MAX_LIST_ENTRIES {
+                break;
+            }
             let entry = entry?;
             let path = entry.path();
             let file_type = entry.file_type().ok();
@@ -61,12 +69,14 @@ impl Tool for ListDirectoryTool {
                 .cmp(&a_dir)
                 .then_with(|| a["name"].as_str().cmp(&b["name"].as_str()))
         });
+        let truncated = entries.len() >= MAX_LIST_ENTRIES;
 
         Ok(ToolOutput {
             success: true,
             result: Some(serde_json::json!({
                 "entries": entries,
                 "count": entries.len(),
+                "truncated": truncated,
                 "path": validated.to_string_lossy(),
             })),
             error: None,

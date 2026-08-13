@@ -12,8 +12,6 @@ use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 #[cfg(feature = "document-invoice")]
 use anyhow::{Context, Result};
 #[cfg(feature = "document-invoice")]
-use std::fs;
-#[cfg(feature = "document-invoice")]
 use tracing::info;
 
 // ── InvoiceParseTool ──────────────────────────────────────────────────────────
@@ -35,8 +33,11 @@ impl Tool for InvoiceParseTool {
             text.to_string()
         } else if let Some(p) = path {
             let validated = sanitize_path(input, p)?;
-            fs::read_to_string(&validated)
-                .with_context(|| format!("failed to read file: {}", validated.display()))?
+            crate::orchestration::tool::exec_common::read_text_capped(
+                &validated,
+                crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+            )
+            .with_context(|| format!("failed to read file: {}", validated.display()))?
         } else {
             anyhow::bail!("either 'text' or 'path' must be provided");
         };

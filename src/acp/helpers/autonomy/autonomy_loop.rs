@@ -238,6 +238,30 @@ pub async fn run_autonomy_loop(
             }
         };
         tokio::pin!(timeout_fut);
+        // Shared stream budget (same caps as the sampling / agent_runtime /
+        // mode paths): `response` accumulates across up to max_iterations
+        // rounds AND is re-sent to the model as context each round, so an
+        // unbounded stream would grow both sides without limit.
+        let mut chunks = 0usize;
+        let mut total_chars = 0usize;
+        let mut stream_guard = |next_chars: usize, what: &str| -> bool {
+            if crate::acp::helpers::conversation::stream_would_exceed_limits(
+                chunks,
+                total_chars,
+                next_chars,
+            ) {
+                tracing::warn!(
+                    target: "autonomy_loop",
+                    round = iteration,
+                    "autonomy_loop: {what} truncated at {total_chars} chars (chunks {chunks})"
+                );
+                true
+            } else {
+                chunks += 1;
+                total_chars += next_chars;
+                false
+            }
+        };
         loop {
             // $/cancel_request support: stop collecting tokens as soon as the
             // client cancels this request id — do not waste further LLM calls.
@@ -276,12 +300,20 @@ pub async fn run_autonomy_loop(
                                         "\n[Calling tool: {} with arguments: {}]\n",
                                         tool_name, tool_args
                                     );
+                                    if stream_guard(tool_call_text.chars().count(), "tool call") {
+                                        chat_task.abort();
+                                        break;
+                                    }
                                     tool_calls.push((tool_name, tool_args));
                                     response.push_str(&tool_call_text);
                                 }
                                 // Reasoning content — forward to SSE as a reasoning
                                 // frame so the GUI shows it inline (same as Zed chat).
                                 AgentToken::Reasoning(reasoning_token) => {
+                                    if stream_guard(reasoning_token.chars().count(), "reasoning") {
+                                        chat_task.abort();
+                                        break;
+                                    }
                                     reasoning.push_str(&reasoning_token);
                                     if let Some(ref tx) = config.progress_tx {
                                         if tx.send(StreamFrame {
@@ -301,6 +333,10 @@ pub async fn run_autonomy_loop(
                                 // Regular token — forward to SSE as chunk token
                                 // so the GUI displays it inline.
                                 AgentToken::Content(token) => {
+                                    if stream_guard(token.chars().count(), "response") {
+                                        chat_task.abort();
+                                        break;
+                                    }
                                     response.push_str(&token);
                                     if let Some(ref tx) = config.progress_tx {
                                         let _ = tx.send(StreamFrame {
@@ -543,10 +579,10 @@ pub async fn run_autonomy_loop(
             let summary_abort = summary_task.abort_handle();
             match tokio::time::timeout(summary_recv_timeout, summary_task).await {
                 Ok(Ok(Ok(()))) => {
-                    let mut summary = String::new();
-                    while let Some(token) = rx.recv().await {
-                        summary.push_str(&token);
-                    }
+                    // Bounded summary collection (shared stream caps): the
+                    // summary becomes the loop's final response.
+                    let summary =
+                        crate::acp::helpers::conversation::drain_channel_capped(&mut rx).await;
                     if !summary.trim().is_empty() {
                         final_response = summary;
                     }

@@ -10,6 +10,36 @@ use crate::tool::ToolRegistry;
 mod handlers;
 mod schema;
 
+/// Strip C0/C1 control characters before log interpolation.
+///
+/// tracing's formatter does not escape control characters in field/message
+/// values, so a client-controlled string containing `\n`/`\r` could forge
+/// log lines. Every client-supplied value interpolated into a log must go
+/// through this (or be rejected outright, like `method`/`id`).
+pub(crate) fn sanitize_log(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).collect()
+}
+
+#[cfg(test)]
+mod sanitize_log_tests {
+    use super::sanitize_log;
+
+    #[test]
+    fn sanitize_log_strips_control_characters() {
+        assert_eq!(sanitize_log("a\nb\tc\u{1b}"), "abc");
+        // ANSI suffix text after the ESC is printable and must be preserved.
+        assert_eq!(sanitize_log("c\u{1b}[31m"), "c[31m");
+        assert_eq!(sanitize_log("\r\n\u{0}"), "");
+    }
+
+    #[test]
+    fn sanitize_log_preserves_normal_text() {
+        assert_eq!(sanitize_log("normal path/to.txt"), "normal path/to.txt");
+        assert_eq!(sanitize_log(""), "");
+        assert_eq!(sanitize_log("中文-UTF8 ✓"), "中文-UTF8 ✓");
+    }
+}
+
 pub mod client;
 
 #[cfg(test)]

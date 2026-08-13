@@ -41,6 +41,8 @@ pub fn spawn_stdin_lines() -> tokio::sync::mpsc::UnboundedReceiver<String> {
             if read == 0 {
                 break; // EOF
             }
+            // Whether the read stopped at a newline (vs. the take cap).
+            let ended_at_newline = line.last() == Some(&b'\n');
             // Strip trailing newline / CRLF.
             while matches!(line.last(), Some(b'\n') | Some(b'\r')) {
                 line.pop();
@@ -50,15 +52,13 @@ pub fn spawn_stdin_lines() -> tokio::sync::mpsc::UnboundedReceiver<String> {
                 // the line so the stream stays aligned at the next message
                 // boundary — mirroring the HTTP arms' "payload too large"
                 // behavior (fail closed on the message, not the connection).
-                let mut drain = [0u8; 1024];
-                loop {
-                    let n = reader.read(&mut drain).unwrap_or(0);
-                    if n == 0 {
-                        break;
-                    }
-                    if drain[..n].contains(&b'\n') {
-                        break;
-                    }
+                // `fill_buf`/`consume` only discards bytes UP TO AND
+                // INCLUDING the newline — a plain `read()` would over-consume
+                // and silently corrupt the next message.
+                if !ended_at_newline {
+                    // Shared drain: advance to the next message boundary
+                    // without consuming the next message's prefix.
+                    crate::shared::bufread::drain_to_newline(&mut reader);
                 }
                 tracing::warn!(
                     target: "stdio",
@@ -69,7 +69,12 @@ pub fn spawn_stdin_lines() -> tokio::sync::mpsc::UnboundedReceiver<String> {
                 continue;
             }
             let Ok(line) = String::from_utf8(line) else {
-                break;
+                // One malformed byte sequence must not kill the reader: drop
+                // the line and keep serving (the HTTP arms return a parse
+                // error for the same garbage instead of closing the
+                // connection).
+                tracing::warn!(target: "stdio", "stdio line is not valid UTF-8 — dropping message");
+                continue;
             };
             if stdin_tx.send(line).is_err() {
                 // Receiver dropped (server exiting) — stop reading.

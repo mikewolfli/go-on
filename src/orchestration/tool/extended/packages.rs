@@ -116,6 +116,15 @@ fn url_encode(s: &str) -> String {
     url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
 
+/// Read a blocking response body under the shared policy cap and parse it as
+/// JSON (OOM guard for package-registry responses — the registries can return
+/// large bodies for popular packages).
+fn capped_json(resp: &mut reqwest::blocking::Response, what: &str) -> Result<Value> {
+    let body = crate::orchestration::tool::extended::http::read_blocking_body_capped(resp, what)
+        .with_context(|| format!("Failed to read {what} response"))?;
+    serde_json::from_slice(&body).with_context(|| format!("Failed to parse {what} response"))
+}
+
 /// Search crates.io for Rust packages.
 fn search_crates_io(
     client: &reqwest::blocking::Client,
@@ -128,12 +137,12 @@ fn search_crates_io(
         url_encode(query),
         per_page
     );
-    let resp = client
+    let mut resp = client
         .get(&url)
         .header("User-Agent", crate::shared::http_client::USER_AGENT)
         .send()
         .context("Failed to search crates.io")?;
-    let data: Value = resp.json().context("Failed to parse crates.io response")?;
+    let data: Value = capped_json(&mut resp, "crates.io")?;
 
     Ok(data["crates"]
         .as_array()
@@ -165,11 +174,11 @@ fn search_npm(
         url_encode(query),
         size
     );
-    let resp = client
+    let mut resp = client
         .get(&url)
         .send()
         .context("Failed to search npm registry")?;
-    let data: Value = resp.json().context("Failed to parse npm response")?;
+    let data: Value = capped_json(&mut resp, "npm")?;
 
     Ok(data["objects"]
         .as_array()
@@ -198,12 +207,12 @@ fn search_pypi(client: &reqwest::blocking::Client, query: &str) -> Result<Vec<Va
         "https://pypi.org/simple/search/?q={}&per_page=10",
         url_encode(query)
     );
-    let resp = client
+    let mut resp = client
         .get(&json_url)
         .header("Accept", "application/json")
         .send()
         .context("Failed to search PyPI")?;
-    let data: Value = resp.json().context("Failed to parse PyPI response")?;
+    let data: Value = capped_json(&mut resp, "PyPI search")?;
 
     // PyPI simple API returns a list of package names and URLs
     let packages = data.get("packages").and_then(|p| p.as_array()).cloned();
@@ -244,16 +253,14 @@ fn search_pypi(client: &reqwest::blocking::Client, query: &str) -> Result<Vec<Va
 /// Fetch detailed info about a specific PyPI package.
 fn fetch_pypi_detail(client: &reqwest::blocking::Client, name: &str) -> Result<Value> {
     let url = format!("https://pypi.org/pypi/{}/json", url_encode(name));
-    let resp = client
+    let mut resp = client
         .get(&url)
         .send()
         .context(format!("Failed to fetch PyPI detail for {}", name))?;
     if !resp.status().is_success() {
         return Ok(json!({ "name": name, "registry": "pypi" }));
     }
-    let data: Value = resp
-        .json()
-        .context("Failed to parse PyPI detail response")?;
+    let data: Value = capped_json(&mut resp, "PyPI detail")?;
     let info = &data["info"];
     Ok(json!({
         "name": info["name"],

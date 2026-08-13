@@ -47,6 +47,34 @@ pub(crate) async fn collect_agent_responses(
     let mut response = String::new();
     let mut reasoning_buffer = String::new();
     let mut tool_calls = Vec::new();
+    let mut chunks = 0usize;
+    let mut total_chars = 0usize;
+
+    // Shared stream cap (256k chars / 4096 chunks): the collected response
+    // flows into the LLM follow-up context, so an unbounded stream would
+    // bloat it. Truncation is explicit, never silent.
+    macro_rules! append_capped {
+        ($buf:expr, $token:expr) => {{
+            let next_chars = $token.chars().count();
+            if crate::acp::helpers::conversation::stream_would_exceed_limits(
+                chunks,
+                total_chars,
+                next_chars,
+            ) {
+                tracing::warn!(
+                    "collect_agent_responses: output truncated at {total_chars} chars (chunks {chunks})"
+                );
+                return Ok(CollectedResponse {
+                    response,
+                    reasoning: reasoning_buffer,
+                    tool_calls,
+                });
+            }
+            $buf.push_str(&$token);
+            chunks += 1;
+            total_chars += next_chars;
+        }};
+    }
 
     while let Some(token) = receiver.recv().await {
         match classify_agent_token(&token) {
@@ -57,10 +85,10 @@ pub(crate) async fn collect_agent_responses(
             }
             AgentToken::ReasoningMarker | AgentToken::Telemetry => continue,
             AgentToken::Reasoning(reasoning_token) => {
-                reasoning_buffer.push_str(&reasoning_token);
+                append_capped!(reasoning_buffer, reasoning_token);
                 continue;
             }
-            AgentToken::Content(text) => response.push_str(&text),
+            AgentToken::Content(text) => append_capped!(response, text),
         }
     }
 
@@ -348,12 +376,16 @@ pub(crate) async fn run_agent_collecting(
                 let mut tool_results: Vec<String> = Vec::new();
                 for item in &exec_result.tool_results {
                     let block = if item.success {
-                        let result_text = item
+                        let mut result_text = item
                             .output
                             .result
                             .as_ref()
                             .and_then(|r| serde_json::to_string_pretty(r).ok())
                             .unwrap_or_default();
+                        // Bound the block that flows into the LLM follow-up
+                        // context (same cap as the executor's consolidated
+                        // response path).
+                        crate::orchestration::tool::exec_common::truncate_output(&mut result_text);
                         build_tool_result_block(&item.tool_name, &result_text, false)
                     } else {
                         let err_text = item

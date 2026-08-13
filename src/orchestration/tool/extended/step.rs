@@ -14,8 +14,6 @@ use anyhow::{Context, Result};
 #[cfg(feature = "cad-step")]
 use std::collections::BTreeMap;
 #[cfg(feature = "cad-step")]
-use std::fs;
-#[cfg(feature = "cad-step")]
 use tracing::info;
 
 /// Parsed STEP file header fields.
@@ -376,8 +374,11 @@ impl Tool for StepReadTool {
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
         let validated = sanitize_path(input, path)?;
 
-        let content = fs::read_to_string(&validated)
-            .with_context(|| format!("failed to read STEP: {}", validated.display()))?;
+        let content = crate::orchestration::tool::exec_common::read_text_capped(
+            &validated,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("failed to read STEP: {}", validated.display()))?;
 
         // Basic validation: must be a STEP file
         if !content.contains("ISO-10303-21") {

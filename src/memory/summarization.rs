@@ -198,8 +198,25 @@ pub async fn llm_summarize(entries: &[MemoryEntry], agent: Option<&Arc<dyn Agent
 
         let task = tokio::spawn(async move { agent.chat(vec![msg], None, None, sender).await });
 
+        // Bounded collection (shared stream caps): the summary is stored in
+        // memory/served to the LLM, so an unbounded stream must not balloon it.
         let mut response = String::new();
+        let mut chunks = 0usize;
+        let mut total_chars = 0usize;
         while let Some(token) = rx.recv().await {
+            let next_chars = token.chars().count();
+            if crate::acp::helpers::conversation::stream_would_exceed_limits(
+                chunks,
+                total_chars,
+                next_chars,
+            ) {
+                tracing::warn!(
+                    "llm_summarize: output truncated at {total_chars} chars (chunks {chunks})"
+                );
+                break;
+            }
+            chunks += 1;
+            total_chars += next_chars;
             if token.starts_with(TOKEN_MODEL_USED_PREFIX)
                 || token.starts_with(TOKEN_TOOL_CALL_PREFIX)
             {

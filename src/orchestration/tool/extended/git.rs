@@ -97,17 +97,31 @@ impl Tool for GitTool {
 
         debug!(subcommand = %subcommand, args = ?args, directory = %directory, "tool: running git command");
 
-        let output = command.output()?;
-        let success = output.status.success();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        // Capped execution: `Command::output()` would buffer the full output
+        // of `git diff`/`git log` on a huge repo (OOM) and push it unclipped
+        // into the LLM context. Truncation is reported explicitly.
+        let capped = crate::orchestration::tool::exec_common::run_command_capped(
+            &mut command,
+            crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+        )?;
+        let success = capped.status == Some(0);
+        let stdout = capped.stdout_lossy();
+        let stderr = capped.stderr_lossy();
+        if capped.stdout_truncated || capped.stderr_truncated {
+            tracing::warn!(
+                "git {subcommand}: output truncated at {} bytes (stdout={}, stderr={})",
+                crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+                capped.stdout_truncated,
+                capped.stderr_truncated
+            );
+        }
 
         Ok(ToolOutput {
             success,
             result: Some(serde_json::json!({
                 "stdout": stdout,
                 "stderr": stderr,
-                "exit_code": output.status.code(),
+                "exit_code": capped.status,
                 "subcommand": subcommand,
             })),
             error: (!success).then(|| stderr.trim().to_string()),

@@ -20,6 +20,13 @@ pub const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 /// the ACP runtime, MCP server, and the hub hand-written HTTP server.
 pub const MAX_HTTP_HEADER_SIZE: usize = 64 * 1024;
 
+/// Maximum number of HTTP header LINES (the ACP/MCP arms bound the whole
+/// header block by [`MAX_HTTP_HEADER_SIZE`]; the hub parses line-by-line, so
+/// a per-line cap alone would let an endless stream of small lines run
+/// forever). Gated with the hub, its only consumer.
+#[cfg(feature = "sub-bus-distributed-memory")]
+pub const MAX_HTTP_HEADER_COUNT: usize = 100;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -36,5 +43,7 @@ mod tests {
     #[test]
     fn max_header_size_is_64k() {
         assert_eq!(MAX_HTTP_HEADER_SIZE, 64 * 1024);
+        #[cfg(feature = "sub-bus-distributed-memory")]
+        assert_eq!(MAX_HTTP_HEADER_COUNT, 100);
     }
 }

@@ -456,10 +456,9 @@ async fn run_single_review(
     let response = run_with_optional_timeout(
         deadline.map(|value| value.saturating_duration_since(Instant::now())),
         async move {
-            let mut resp = String::new();
-            while let Some(token) = receiver.recv().await {
-                resp.push_str(&token);
-            }
+            // Bounded collection (shared stream caps): the review text
+            // decides APPROVE/REJECT.
+            let resp = crate::acp::helpers::conversation::drain_channel_capped(&mut receiver).await;
             match task.await {
                 Ok(Ok(())) => Ok::<String, anyhow::Error>(resp),
                 Ok(Err(err)) => Err(err.into()),

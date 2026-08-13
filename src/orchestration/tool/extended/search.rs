@@ -134,18 +134,9 @@ fn collect_grep_matches(
                 }
                 line_num += 1;
                 if line_buf.len() > MAX_LINE_BYTES {
-                    // Oversized line: drain the remainder to stay aligned,
-                    // then skip (never buffer the whole line).
-                    let mut drain = [0u8; 1024];
-                    while line_buf.last() != Some(&b'\n') {
-                        let r = reader.read(&mut drain).unwrap_or(0);
-                        if r == 0 {
-                            break;
-                        }
-                        if drain[..r].contains(&b'\n') {
-                            break;
-                        }
-                    }
+                    // Shared drain: advance to the next line boundary without
+                    // buffering the line or consuming the next line's prefix.
+                    crate::shared::bufread::drain_to_newline(&mut reader);
                     continue;
                 }
                 if *state.total_matches >= state.max_matches {
@@ -154,16 +145,19 @@ fn collect_grep_matches(
                 while matches!(line_buf.last(), Some(b'\n') | Some(b'\r')) {
                     line_buf.pop();
                 }
-                let Ok(line) = String::from_utf8(line_buf.clone()) else {
+                // Match on the borrowed slice first; only allocate an owned
+                // String when the line actually matches (avoids a 1 MiB-per-
+                // line clone for every scanned line).
+                let Ok(line_ref) = std::str::from_utf8(&line_buf) else {
                     continue;
                 };
-                if regex.is_match(&line) {
+                if regex.is_match(line_ref) {
                     *state.total_matches += 1;
                     let relative = path.strip_prefix(root).unwrap_or(&path);
                     state.matches.push(serde_json::json!({
                         "file": relative.to_string_lossy(),
                         "line": line_num,
-                        "content": line,
+                        "content": line_ref,
                     }));
                 }
             }
@@ -172,6 +166,94 @@ fn collect_grep_matches(
     Ok(())
 }
 
-// FindFilesTool has been merged into SearchFilesTool in tool/mod.rs.
-// Use "search_files" (or alias "find_files") with max_results parameter.
-// The collect_matching_files_bounded function is now in tool/mod.rs.
+// FindFilesTool has been merged into SearchFilesTool (tool/mod.rs registers
+// the `find_files` alias). Result sets are bounded by the `max_results`
+// argument, implemented in tool/builtin_tools.rs + tool/file_walk.rs.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::orchestration::tool::ToolInput;
+    use tempfile::TempDir;
+
+    fn tool_input(payload: serde_json::Value) -> ToolInput {
+        ToolInput {
+            task_id: "test-grep".to_string(),
+            phase: "act".to_string(),
+            agent_role: "coder".to_string(),
+            objective: "test".to_string(),
+            constraints: None,
+            evidence: None,
+            payload,
+            allowed_base_dir: None,
+        }
+    }
+
+    #[test]
+    fn grep_oversized_line_is_drained_without_corrupting_next_line() {
+        // Regression (mirror of read_lines): an oversized first line must be
+        // drained to the newline only — a naive read() would consume the next
+        // line's prefix and the match below would silently miss content.
+        let tmp = TempDir::new().expect("temp dir");
+        let path = tmp.path().join("big.txt");
+        let mut content = "x".repeat(1024 * 1024 + 100);
+        content.push_str("\nsentinel-尾行\n");
+        std::fs::write(&path, content).expect("write file");
+
+        let input = tool_input(serde_json::json!({
+            "pattern": "sentinel",
+            "directory": tmp.path().to_str().unwrap(),
+        }));
+        let tool = GrepTool;
+        let result = tool.run(&input).expect("run");
+        assert!(result.success);
+        let payload = result.result.expect("payload");
+        let matches = payload["matches"].as_array().expect("matches array");
+        assert_eq!(matches.len(), 1, "only the sentinel line matches");
+        assert_eq!(
+            matches[0]["line"].as_u64().unwrap(),
+            2,
+            "line numbers must not drift across the oversized line"
+        );
+        assert_eq!(matches[0]["content"].as_str().unwrap(), "sentinel-尾行");
+    }
+
+    #[test]
+    fn grep_borrowed_matching_finds_case_insensitive_hit() {
+        // The match path works on the borrowed line slice (no per-line owned
+        // String clone unless the line matches).
+        let tmp = TempDir::new().expect("temp dir");
+        std::fs::write(tmp.path().join("a.txt"), "Hello World\nno match here\n")
+            .expect("write file");
+
+        let input = tool_input(serde_json::json!({
+            "pattern": "hello",
+            "directory": tmp.path().to_str().unwrap(),
+        }));
+        let result = GrepTool.run(&input).expect("run");
+        let payload = result.result.expect("payload");
+        let matches = payload["matches"].as_array().expect("matches");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0]["line"].as_u64().unwrap(), 1);
+        assert_eq!(matches[0]["content"].as_str().unwrap(), "Hello World");
+    }
+
+    #[test]
+    fn grep_reports_truncation_at_match_cap() {
+        // max_matches = 1000: a pattern matching every line must stop at the
+        // cap and report `truncated` (explicit, not silent).
+        let tmp = TempDir::new().expect("temp dir");
+        for i in 0..1200 {
+            std::fs::write(tmp.path().join(format!("f{i}.txt")), "match\n").expect("write file");
+        }
+
+        let input = tool_input(serde_json::json!({
+            "pattern": "match",
+            "directory": tmp.path().to_str().unwrap(),
+        }));
+        let result = GrepTool.run(&input).expect("run");
+        let payload = result.result.expect("payload");
+        assert_eq!(payload["matches"].as_array().unwrap().len(), 1000);
+        assert!(payload["truncated"].as_bool().unwrap());
+    }
+}

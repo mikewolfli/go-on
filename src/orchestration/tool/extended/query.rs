@@ -235,8 +235,11 @@ impl Tool for YamlQueryTool {
             "tool: yaml_query reading file"
         );
 
-        let content = std::fs::read_to_string(&file_path)
-            .with_context(|| format!("failed to read YAML file '{}'", file_path.display()))?;
+        let content = crate::orchestration::tool::exec_common::read_text_capped(
+            &file_path,
+            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        )
+        .with_context(|| format!("failed to read YAML file '{}'", file_path.display()))?;
 
         let parsed: Value = serde_yaml::from_str(&content)
             .with_context(|| format!("failed to parse YAML from '{}'", file_path.display()))?;

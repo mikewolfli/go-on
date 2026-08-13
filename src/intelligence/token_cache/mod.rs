@@ -851,7 +851,27 @@ impl Agent for CachedAgentWrapper {
         let collect_handle = tokio::spawn(async move {
             let mut response = String::new();
             let mut truncated = false;
+            let mut chunks = 0usize;
+            let mut total_chars = 0usize;
             while let Some(token) = collect_rx.recv().await {
+                // Bounded cache entry: an unbounded model stream would grow
+                // the cached response (and this collector's memory) without
+                // limit; mark truncated so the partial answer is not served
+                // as a complete cache hit.
+                let next_chars = token.chars().count();
+                if crate::acp::helpers::conversation::stream_would_exceed_limits(
+                    chunks,
+                    total_chars,
+                    next_chars,
+                ) {
+                    tracing::warn!(
+                        "token cache: response truncated at {total_chars} chars (chunks {chunks})"
+                    );
+                    truncated = true;
+                    break;
+                }
+                chunks += 1;
+                total_chars += next_chars;
                 // Forward each token to the caller immediately.
                 if fwd_sender.send(token.clone()).is_err() {
                     // The caller dropped the receiver — stop collecting and

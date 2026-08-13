@@ -429,10 +429,10 @@ impl SelfEvolutionAgent {
                 warn!("LLM agent patch generation failed: {e}, falling back to heuristic");
                 self.synthesize_patch_lines(&content, instruction)
             } else {
-                let mut llm_output = String::new();
-                while let Some(token) = rx.recv().await {
-                    llm_output.push_str(&token);
-                }
+                // Bounded collection: the patch output flows into file
+                // edits, so an unbounded model stream must not balloon it.
+                let llm_output =
+                    crate::acp::helpers::conversation::drain_channel_capped(&mut rx).await;
                 if llm_output.trim().is_empty() {
                     self.synthesize_patch_lines(&content, instruction)
                 } else {

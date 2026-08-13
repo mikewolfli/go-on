@@ -113,11 +113,14 @@ struct InternalChatParams {
 
 /// Tracks a spawned terminal process.
 pub(super) struct TerminalProcess {
-    /// The child process handle.
+    /// The child process handle. stdout/stderr are owned by the per-pipe
+    /// reader threads (spawned at create); `child` retains the pid and the
+    /// `kill`/`try_wait`/`wait` handles.
     child: std::process::Child,
     /// Captured stdout + stderr output so far (ring semantics: old bytes are
     /// dropped beyond [`MAX_TERMINAL_OUTPUT_BYTES`], see `truncated`).
-    output_buffer: Vec<u8>,
+    /// Written by the per-pipe reader threads, read under the state lock.
+    output_buffer: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
     /// Number of bytes of `output_buffer` already returned to clients via
     /// `terminal/output`. `terminal/output` returns only the delta since the
     /// last call, so a long-running process does not re-serialize history
@@ -125,12 +128,16 @@ pub(super) struct TerminalProcess {
     /// growth and O(n²) total transfer).
     read_offset: usize,
     /// True once output exceeded the buffer cap and the oldest bytes were
-    /// dropped.
-    truncated: bool,
+    /// dropped (set by the reader threads).
+    truncated: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Whether the process has exited.
     exited: bool,
     /// Exit status captured when process exited.
     exit_code: Option<i32>,
+    /// Reader threads for stdout/stderr. Dropping the handles detaches the
+    /// threads; they exit on their own once the pipes close (process exit or
+    /// kill).
+    readers: Vec<std::thread::JoinHandle<()>>,
 }
 
 /// Hard cap for a single terminal's captured output. Beyond this, the oldest
@@ -191,7 +198,17 @@ pub(super) fn make_room_for_terminal() {
     });
     if state.len() >= MAX_ACP_TERMINALS {
         if let Some(arbitrary) = state.keys().next().cloned() {
-            state.remove(&arbitrary);
+            if let Some(mut evicted) = state.remove(&arbitrary) {
+                // Kill the evicted process: a dropped Child handle alone would
+                // let the process keep running (and its reader threads keep
+                // reading pipes nobody references). Killing closes the pipes
+                // so the reader threads exit too.
+                let _ = evicted.child.kill();
+                warn!(
+                    terminal = %arbitrary,
+                    "ACP terminal map full: evicted and killed an arbitrary terminal"
+                );
+            }
         }
     }
 }

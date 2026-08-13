@@ -17,7 +17,6 @@ use super::*;
 use crate::acp::helpers::autonomy_metrics;
 use crate::acp::prelude::RuntimeMetrics;
 use crate::acp::server::{AcpServer, OutcomeEvent};
-use crate::i18n::runtime::tf;
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
 use crate::memory::vector::VectorStore;
 use crate::orchestration::task_router::TaskRouter;
@@ -1192,33 +1191,24 @@ async fn run_agent_chat_collecting(
     timeout_seconds: Option<u64>,
 ) -> Result<String> {
     use tokio::sync::mpsc;
-    use tokio::time::timeout;
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let (tx, rx) = mpsc::unbounded_channel::<String>();
     let sender = crate::agent::StreamingSender::new(tx);
     let chat_future = agent.chat(messages, principles, options, sender);
     let timeout_duration = timeout_seconds
         .map(Duration::from_secs)
         .unwrap_or(Duration::from_secs(120));
 
-    let result = match timeout(timeout_duration, chat_future).await {
-        Ok(Ok(())) => {
-            let mut full_response = String::new();
-            while let Some(token) = rx.recv().await {
-                full_response.push_str(&token);
-            }
-            Ok(full_response)
-        }
-        Ok(Err(err)) => Err(err.into()),
-        Err(_) => Err(anyhow::anyhow!(
-            "{}",
-            tf(
-                "error.agent_chat_timed_out",
-                &[("duration", &format!("{:?}", timeout_duration))]
-            )
-        )),
-    };
-    result
+    // Shared capped collector: drains the stream CONCURRENTLY with the chat
+    // (a "await chat first" order would buffer everything in the channel
+    // before any cap applied) and enforces the 256k/4096 stream limits,
+    // aborting the chat task on truncation.
+    crate::acp::helpers::conversation::collect_chat_output_capped(
+        chat_future,
+        rx,
+        Some(timeout_duration),
+    )
+    .await
 }
 
 fn extract_model_tool_calls(response: &str, max_tools: usize) -> Vec<Value> {

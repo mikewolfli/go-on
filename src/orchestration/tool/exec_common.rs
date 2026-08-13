@@ -49,6 +49,11 @@ pub fn truncate_output(s: &mut String) {
 ///
 /// Used by `shell_exec` and any tool that runs an
 /// external command and wants consistent output formatting.
+///
+/// # Parameters
+/// Eight parameters is one above the clippy default; each maps 1:1 to a
+/// `ToolOutput` field and merging them would obscure the audit trail.
+#[allow(clippy::too_many_arguments)]
 pub fn build_shell_tool_output(
     success: bool,
     stdout: String,
@@ -57,6 +62,7 @@ pub fn build_shell_tool_output(
     command: &str,
     directory: &str,
     tool_name: &str,
+    sandbox: &str,
 ) -> ToolOutput {
     let mut audit_stdout = stdout.clone();
     let mut audit_stderr = stderr.clone();
@@ -71,12 +77,13 @@ pub fn build_shell_tool_output(
             "exit_code": exit_code,
             "command": command,
             "directory": directory,
+            "sandbox": sandbox,
         })),
         error: (!success).then(|| stderr.trim().to_string()),
         verification: Some("shell_command_executed".to_string()),
         audit_log: Some(format!(
-            "Shell exec '{}' in '{}' (exit: {:?})",
-            command, directory, exit_code
+            "Shell exec '{}' in '{}' (exit: {:?}, sandbox: {})",
+            command, directory, exit_code, sandbox
         )),
         pua_report: Some(tool_execution_report(
             tool_name,
@@ -86,6 +93,7 @@ pub fn build_shell_tool_output(
 }
 
 /// Build a timeout ToolOutput for a shell command that exceeded its time limit.
+#[allow(clippy::too_many_arguments)]
 pub fn build_timeout_tool_output(
     stdout: String,
     stderr: String,
@@ -93,6 +101,7 @@ pub fn build_timeout_tool_output(
     directory: &str,
     timeout_ms: u64,
     tool_name: &str,
+    sandbox: &str,
 ) -> ToolOutput {
     ToolOutput {
         success: false,
@@ -103,12 +112,13 @@ pub fn build_timeout_tool_output(
             "command": command,
             "directory": directory,
             "timeout": true,
+            "sandbox": sandbox,
         })),
         error: Some(format!("Command timed out after {}ms", timeout_ms)),
         verification: Some("shell_command_executed".to_string()),
         audit_log: Some(format!(
-            "{} exec '{}' in '{}' timed out after {}ms",
-            tool_name, command, directory, timeout_ms
+            "{} exec '{}' in '{}' timed out after {}ms (sandbox: {})",
+            tool_name, command, directory, timeout_ms, sandbox
         )),
         pua_report: Some(tool_execution_report(
             tool_name,
@@ -293,6 +303,188 @@ pub fn read_file_capped(path: &std::path::Path, cap: usize) -> anyhow::Result<Ve
     Ok(data)
 }
 
+/// Text variant of [`read_file_capped`]: bytes are decoded lossily so text-
+/// oriented tools (TOML/YAML/XML/plain parsers) get the same input-side OOM
+/// guard without duplicating the cap logic per tool.
+pub fn read_text_capped(path: &std::path::Path, cap: usize) -> anyhow::Result<String> {
+    Ok(String::from_utf8_lossy(&read_file_capped(path, cap)?).into_owned())
+}
+
+/// Output of a command run under a byte cap.
+pub struct CappedCommandOutput {
+    /// Process exit code (None when the process was signaled).
+    pub status: Option<i32>,
+    /// stdout bytes (truncated at `cap`).
+    pub stdout: Vec<u8>,
+    /// stderr bytes (truncated at `cap`).
+    pub stderr: Vec<u8>,
+    /// True when stdout exceeded `cap` (explicit, never silent).
+    pub stdout_truncated: bool,
+    /// True when stderr exceeded `cap` (explicit, never silent).
+    pub stderr_truncated: bool,
+}
+
+impl CappedCommandOutput {
+    /// Decode stdout lossily.
+    pub fn stdout_lossy(&self) -> String {
+        String::from_utf8_lossy(&self.stdout).into_owned()
+    }
+    /// Decode stderr lossily.
+    pub fn stderr_lossy(&self) -> String {
+        String::from_utf8_lossy(&self.stderr).into_owned()
+    }
+}
+
+/// Run a command with BOTH stdout and stderr capped at `cap` bytes each.
+///
+/// `Command::output()`/`wait_with_output()` buffer the full output — a
+/// `git diff` over a huge repo or a verbose `cargo test` would OOM the
+/// process before the tool ever formatted a response. This spawns and reads
+/// the two pipes concurrently (one thread per pipe, so a full stdout pipe
+/// cannot deadlock the child's stderr writes), KEEPING only the first `cap`
+/// bytes of each stream while draining the rest — the child runs to natural
+/// completion (a `Read::take`-style stop would SIGPIPE-kill it on an
+/// oversized write and lose the true exit status). Output beyond the cap is
+/// dropped and the corresponding `*_truncated` flag is set — callers must
+/// surface it (warn/log), never silently truncate.
+pub fn run_command_capped(
+    cmd: &mut std::process::Command,
+    cap: usize,
+) -> anyhow::Result<CappedCommandOutput> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn command")?;
+    let stdout = child
+        .stdout
+        .take()
+        .map(|r| -> Box<dyn Read + Send> { Box::new(r) });
+    let stderr = child
+        .stderr
+        .take()
+        .map(|r| -> Box<dyn Read + Send> { Box::new(r) });
+    let read_capped = move |mut reader: Box<dyn Read + Send>| -> (Vec<u8>, bool) {
+        let mut kept = Vec::with_capacity(cap.min(64 * 1024));
+        let mut truncated = false;
+        let mut chunk = [0u8; 4096];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if kept.len() < cap {
+                        let take = (cap - kept.len()).min(n);
+                        kept.extend_from_slice(&chunk[..take]);
+                        if take < n {
+                            truncated = true;
+                        }
+                    } else {
+                        truncated = true;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        (kept, truncated)
+    };
+    let stdout_thread = stdout.map(|r| std::thread::spawn(move || read_capped(r)));
+    let stderr_thread = stderr.map(|r| std::thread::spawn(move || read_capped(r)));
+    let status = child.wait().ok().and_then(|s| s.code());
+    let stdout_res = stdout_thread.and_then(|h| h.join().ok());
+    let stderr_res = stderr_thread.and_then(|h| h.join().ok());
+    Ok(CappedCommandOutput {
+        status,
+        stdout: stdout_res
+            .as_ref()
+            .map(|(b, _)| b.clone())
+            .unwrap_or_default(),
+        stderr: stderr_res
+            .as_ref()
+            .map(|(b, _)| b.clone())
+            .unwrap_or_default(),
+        stdout_truncated: stdout_res.map(|(_, t)| t).unwrap_or(false),
+        stderr_truncated: stderr_res.map(|(_, t)| t).unwrap_or(false),
+    })
+}
+
+/// Tokio variant of [`run_command_capped`]: the two pipe reads run as
+/// concurrent futures (no threads) — the async equivalent of the thread-per-
+/// pipe design above, with the same keep-first-drain-rest semantics.
+pub async fn run_command_capped_async(
+    cmd: &mut tokio::process::Command,
+    cap: usize,
+) -> anyhow::Result<CappedCommandOutput> {
+    use tokio::io::AsyncReadExt;
+    let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to spawn command")?;
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let stdout_fut = async {
+        let mut kept = Vec::with_capacity(cap.min(64 * 1024));
+        let mut truncated = false;
+        let mut chunk = [0u8; 4096];
+        if let Some(mut reader) = stdout.take() {
+            loop {
+                match reader.read(&mut chunk).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if kept.len() < cap {
+                            let take = (cap - kept.len()).min(n);
+                            kept.extend_from_slice(&chunk[..take]);
+                            if take < n {
+                                truncated = true;
+                            }
+                        } else {
+                            truncated = true;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+        (kept, truncated)
+    };
+    let stderr_fut = async {
+        let mut kept = Vec::with_capacity(cap.min(64 * 1024));
+        let mut truncated = false;
+        let mut chunk = [0u8; 4096];
+        if let Some(mut reader) = stderr.take() {
+            loop {
+                match reader.read(&mut chunk).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if kept.len() < cap {
+                            let take = (cap - kept.len()).min(n);
+                            kept.extend_from_slice(&chunk[..take]);
+                            if take < n {
+                                truncated = true;
+                            }
+                        } else {
+                            truncated = true;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+        (kept, truncated)
+    };
+    let (stdout_res, stderr_res) = tokio::join!(stdout_fut, stderr_fut);
+    let status = child.wait().await.ok().and_then(|s| s.code());
+    Ok(CappedCommandOutput {
+        status,
+        stdout: stdout_res.0,
+        stderr: stderr_res.0,
+        stdout_truncated: stdout_res.1,
+        stderr_truncated: stderr_res.1,
+    })
+}
+
 /// Async variant of [`read_file_capped`] for tokio contexts.
 pub async fn read_file_capped_async(path: &std::path::Path, cap: usize) -> anyhow::Result<Vec<u8>> {
     let mut file = tokio::fs::File::open(path)
@@ -346,5 +538,49 @@ mod tests {
         // Cap enforced during the read too (metadata check bypassed).
         let err2 = read_file_capped(&big, 10).unwrap_err();
         assert!(err2.to_string().contains("limit"), "got: {err2}");
+    }
+
+    #[test]
+    fn read_text_capped_decodes_lossily() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("mixed.txt");
+        std::fs::write(&path, b"hello \xff world").unwrap();
+        let text = read_text_capped(&path, 1024).unwrap();
+        assert!(text.starts_with("hello "), "lossy decode, got: {text}");
+    }
+
+    #[test]
+    fn run_command_capped_keeps_small_output() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg("printf 'hello-world'");
+        let out = run_command_capped(&mut cmd, 1024).expect("run");
+        assert_eq!(out.status, Some(0));
+        assert!(!out.stdout_truncated);
+        assert_eq!(out.stdout_lossy(), "hello-world");
+        assert!(!out.stderr_truncated);
+    }
+
+    #[test]
+    fn run_command_capped_truncates_oversized_stdout() {
+        // 100 KiB of output under a 1 KiB cap: the cap must hold and the
+        // truncation must be reported explicitly (never silent).
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg("printf 'x%.0s' $(seq 1 100000)");
+        let out = run_command_capped(&mut cmd, 1024).expect("run");
+        assert_eq!(out.status, Some(0));
+        assert!(out.stdout_truncated, "oversized stdout must be flagged");
+        assert_eq!(out.stdout.len(), 1024, "output must be capped");
+    }
+
+    #[test]
+    fn run_command_capped_reports_stdout_and_stderr_independently() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c")
+            .arg("printf 'err%.0s' $(seq 1 100000) >&2; echo ok");
+        let out = run_command_capped(&mut cmd, 1024).expect("run");
+        assert_eq!(out.stdout_lossy(), "ok\n");
+        assert!(!out.stdout_truncated);
+        assert!(out.stderr_truncated, "oversized stderr must be flagged");
+        assert_eq!(out.stderr.len(), 1024);
     }
 }

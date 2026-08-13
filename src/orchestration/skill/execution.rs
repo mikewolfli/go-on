@@ -305,10 +305,9 @@ impl PromptSkillAgent for ChatBasedSkillAgent {
             .await
             .map_err(|e| anyhow::anyhow!("LLM agent chat failed: {}", e))?;
 
-        let mut response = String::new();
-        while let Some(token) = rx.recv().await {
-            response.push_str(&token);
-        }
+        // Bounded collection: the skill's execution result is returned to the
+        // caller and may flow into further LLM context.
+        let response = crate::acp::helpers::conversation::drain_channel_capped(&mut rx).await;
 
         if response.is_empty() {
             anyhow::bail!("LLM agent returned empty response");

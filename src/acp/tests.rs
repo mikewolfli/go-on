@@ -234,7 +234,6 @@ mod test_suite {
         // auto-detection (the former `to_app_config` conversion was removed
         // with the un-wired adaptive-learning chain).
         let adaptive_config = AdaptiveConfig::auto_detect();
-        assert!(adaptive_config.adaptive_mode);
         assert!(!adaptive_config
             .minimal_config
             .available_providers

@@ -573,6 +573,11 @@ fn format_tool_output_for_response(tool_name: &str, output: &ToolOutput) -> Stri
             .cloned()
             .unwrap_or_else(|| format!("{:?}", output))
     };
+    // Bound the block that flows into the LLM context: a tool whose `result`
+    // embeds a huge file/diff would otherwise bloat the follow-up message far
+    // past the shell-output cap. Truncation is warned inside the helper.
+    let mut body_content = body_content;
+    crate::orchestration::tool::exec_common::truncate_output(&mut body_content);
 
     format!(
         "\n<details>\
