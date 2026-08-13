@@ -304,9 +304,16 @@ pub async fn should_escalate_approval_strategy(
     // Ask mode never escalates (single-turn Q&A).
     // Edit mode escalates only if high-risk or sensitive.
     // FullAuto escalates only when complexity exceeds threshold.
-    // SafeGuard inherently requires escalation for human review.
+    // SafeGuard does NOT escalate here: per SAFEGUARD_MODE.md it is
+    // "automatic execution with targeted user confirmation at high-risk
+    // nodes", which the pipeline implements as per-tool approval requests
+    // (`session/request_permission`) instead of rejecting the whole request.
+    // Blanket-escalating made SafeGuard — the default session mode —
+    // unusable over ACP: Zed sends no mode, the session defaults to
+    // safeguard, and every prompt was rejected (-32040) before reaching
+    // the approval flow. The injection / sensitive-content / history /
+    // phase checks below still apply to every mode.
     let mode_requires_escalation = match mode {
-        "safeguard" => true,
         "full_auto" => {
             // FullAuto only escalates when there are complex instructions
             // or sensitive content. Simple automation tasks don't need escalation.
@@ -361,6 +368,18 @@ pub async fn should_escalate_approval_strategy(
     }
 
     // ── 4. Sensitive content detection (safety checker) ────────────
+    // In non-enforce governance policy modes ("audit"/"advisory"/"disabled")
+    // governance is log-only: the finding is recorded for audit but the request
+    // is NOT rejected. Only "active" (or the default empty mode, which means
+    // strict) enforces. The substring keywords below (api_key, token=, …) are
+    // ordinary words in legitimate coding prompts (config files, env setup,
+    // CI pipelines), so rejecting on them without an approval UI (Zed's ACP
+    // stdio transport has none) makes everyday tasks fail hard with -32040.
+    let enforce_sensitive_and_history = {
+        let cfg = &server.runtime_config;
+        let mode = cfg.governance_policy_mode.trim().to_ascii_lowercase();
+        cfg.governance_enabled && (mode.is_empty() || mode == "active")
+    };
     let has_sensitive_content = messages.iter().any(|msg| {
         let content = msg.content.to_lowercase();
         content.contains("password")
@@ -373,6 +392,12 @@ pub async fn should_escalate_approval_strategy(
             || content.contains("ssn")
             || content.contains("social security")
     });
+    if has_sensitive_content && !enforce_sensitive_and_history {
+        tracing::warn!(
+            target: "escalation",
+            "sensitive content detected — governance policy mode is not 'active'; auditing instead of escalating"
+        );
+    }
 
     // ── 5. Conversation history ────────────────────────────────────
     let history_requires_escalation = if let Some(conv_id) = conversation_id {
@@ -390,8 +415,8 @@ pub async fn should_escalate_approval_strategy(
 
     Ok(mode_requires_escalation
         || has_injection
-        || has_sensitive_content
-        || history_requires_escalation
+        || (enforce_sensitive_and_history && has_sensitive_content)
+        || (enforce_sensitive_and_history && history_requires_escalation)
         || phase_requires_escalation)
 }
 

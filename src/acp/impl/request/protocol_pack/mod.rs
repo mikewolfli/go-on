@@ -513,6 +513,10 @@ pub(super) fn build_chat_params_from_acp(params: Value, session_state: &AcpSessi
         .map(|s| s.to_string());
     let options = {
         let cwd = session_state.cwd.as_ref();
+        // PhaseOptions.extra is #[serde(flatten)]ed, so extra keys must be
+        // emitted at the TOP level of the options object. The previous code
+        // nested them under an "extra" key, which the flatten turned into
+        // extra["extra"] — silently dropping cwd / model / directories.
         let mut extra = serde_json::Map::new();
         if let Some(cwd) = cwd {
             extra.insert("cwd".to_string(), Value::String(cwd.clone()));
@@ -540,9 +544,7 @@ pub(super) fn build_chat_params_from_acp(params: Value, session_state: &AcpSessi
                 extra.insert("model".to_string(), Value::String(m.to_string()));
             }
         }
-        let mut options = serde_json::Map::new();
-        options.insert("extra".to_string(), Value::Object(extra));
-        Some(Value::Object(options))
+        Some(Value::Object(extra))
     };
 
     serde_json::to_value(InternalChatParams {
@@ -635,6 +637,52 @@ pub(super) fn build_default_modes() -> crate::schema::SessionModeState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_chat_params_from_acp_options_are_flat_not_nested() {
+        // Regression: PhaseOptions.extra is #[serde(flatten)]ed — the ACP
+        // bridge used to emit options as {"extra": {cwd, model}}, which the
+        // flatten mapped to extra["extra"] and silently dropped cwd/model.
+        let acp_params = json!({
+            "sessionId": "repro-1",
+            "prompt": [
+                {"type": "text", "text": "Hello, how are you?"}
+            ]
+        });
+        let mut session_state = AcpSessionState::default();
+        session_state.cwd = Some("/Users/test/project".to_string());
+        session_state.config_options.insert(
+            "model".to_string(),
+            Value::String("deepseek-v4-flash".to_string()),
+        );
+        let value = build_chat_params_from_acp(acp_params.clone(), &session_state);
+        let text = acp_prompt_to_text(&acp_params);
+        assert_eq!(text, "Hello, how are you?");
+        let params: crate::acp::r#impl::chat::ChatParams =
+            serde_json::from_value(value).expect("params parse");
+        assert_eq!(params.mode, "safeguard");
+        assert_eq!(params.conversation_id.as_deref(), Some("repro-1"));
+        assert!(params.phase.is_none());
+        let extra = params
+            .options
+            .as_ref()
+            .expect("options present")
+            .extra
+            .clone();
+        assert!(
+            !extra.contains_key("extra"),
+            "options must not be nested under an 'extra' key, got: {:?}",
+            extra
+        );
+        assert_eq!(
+            extra.get("cwd"),
+            Some(&Value::String("/Users/test/project".into()))
+        );
+        assert_eq!(
+            extra.get("model"),
+            Some(&Value::String("deepseek-v4-flash".into()))
+        );
+    }
 
     // ── normalize_acp_mode ────────────────────────────────────────────
 

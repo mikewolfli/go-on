@@ -49,7 +49,9 @@ mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     use crate::acp::helpers::agent_preference::reset_agent_switch_state_for_test;
     #[cfg(not(feature = "backend-postgres"))]
-    use crate::acp::r#impl::chat::{process_chat_request, ChatParams};
+    use crate::acp::r#impl::chat::{
+        process_chat_request, should_escalate_approval_strategy, ChatParams,
+    };
     #[cfg(not(feature = "backend-postgres"))]
     use crate::memory::agent_memory_bus::clear_agent_memory_bus;
 
@@ -873,5 +875,247 @@ mod unit_tests {
         assert_eq!(result["mode"], "edit");
         assert_eq!(result["done"], true);
         assert_eq!(result["phase"], "coding");
+    }
+
+    // ── Pre-chat approval-escalation gate (regression) ──────────────────
+    // SafeGuard is the default session mode and Zed sends no explicit mode,
+    // so a blanket "safeguard ⇒ escalate" rule rejected EVERY session/prompt
+    // with -32040 before the pipeline (and its per-tool approval flow) ran.
+
+    #[cfg(not(feature = "backend-postgres"))]
+    fn chat_msg(content: &str) -> Message {
+        Message {
+            role: "user".to_string(),
+            content: content.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "backend-postgres"))]
+    async fn safeguard_benign_prompt_does_not_escalate() {
+        let server = ServerBuilder::new().build();
+        let escalated = should_escalate_approval_strategy(
+            &server,
+            "safeguard",
+            &[chat_msg("Please summarize the quarterly report.")],
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("gate evaluation should not fail");
+        assert!(
+            !escalated,
+            "safeguard mode must not reject benign prompts at the pre-chat gate"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "backend-postgres"))]
+    async fn safeguard_benign_prompt_with_conversation_id_does_not_escalate() {
+        // Real ACP clients (Zed) always send a sessionId, which is mapped to
+        // conversation_id — the existing benign test above passes None and
+        // never exercised this path.
+        let server = ServerBuilder::new().build();
+        let escalated = should_escalate_approval_strategy(
+            &server,
+            "safeguard",
+            &[chat_msg("Hello, how are you today?")],
+            Some("repro-conv"),
+            None,
+            None,
+        )
+        .await
+        .expect("gate evaluation should not fail");
+        assert!(
+            !escalated,
+            "safeguard mode must not reject benign prompts even with a conversation_id"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "backend-postgres"))]
+    async fn session_prompt_payload_hello_does_not_escalate_at_gate() {
+        // The full real entry point: what Zed actually sends. If the pre-chat
+        // gate escalates, the error contains "human approval"; if the gate
+        // passes, the pipeline fails later for missing test deps (different
+        // error) — which is what we assert.
+        use crate::acp::r#impl::request::protocol_pack::session::session_prompt_payload;
+        use crate::security::prompt_injection::{DetectionConfig, InjectionDetector};
+
+        let mut server = ServerBuilder::new().build();
+        server.governance_deps.injection_detector =
+            Some(Arc::new(InjectionDetector::new(DetectionConfig {
+                threshold: 0.8,
+                contamination_threshold: 0.7,
+                enable_contamination_check: false,
+            })));
+        let harness_bus = Arc::new(crate::governance::harness_bus::default_harness_bus());
+        server.governance_deps.harness_bus = Some(Arc::clone(&harness_bus));
+        server.governance_deps.capability_bus = Some(Arc::new(
+            crate::intelligence::capability_bus::core::CapabilityBus::new_default(
+                harness_bus,
+                None,
+            ),
+        ));
+
+        let params = json!({
+            "sessionId": "repro-1",
+            "prompt": [
+                {"type": "text", "text": "Hello, how are you?"}
+            ]
+        });
+        let result = session_prompt_payload(&server, params).await;
+        match result {
+            Ok(_) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("human approval"),
+                    "pre-chat gate escalated a benign prompt: {}",
+                    msg
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "backend-postgres"))]
+    async fn safeguard_benign_prompt_pre_chat_gate_with_full_governance_passes() {
+        // Faithful replica of the real server configuration (new_acp_server):
+        // injection detector + harness bus + options + conversation_id, which
+        // is what Zed's session/prompt requests actually hit.
+        use crate::acp::r#impl::chat::evaluate_pre_chat_gates;
+        use crate::security::prompt_injection::{DetectionConfig, InjectionDetector};
+
+        let mut server = ServerBuilder::new().build();
+        server.governance_deps.injection_detector =
+            Some(Arc::new(InjectionDetector::new(DetectionConfig {
+                threshold: 0.8,
+                contamination_threshold: 0.7,
+                enable_contamination_check: false,
+            })));
+        let harness_bus = Arc::new(crate::governance::harness_bus::default_harness_bus());
+        server.governance_deps.harness_bus = Some(Arc::clone(&harness_bus));
+        server.governance_deps.capability_bus = Some(Arc::new(
+            crate::intelligence::capability_bus::core::CapabilityBus::new_default(
+                harness_bus,
+                None,
+            ),
+        ));
+
+        let mut params = ChatParams {
+            mode: "safeguard".to_string(),
+            messages: vec![chat_msg("Hello, how are you today?")],
+            conversation_id: Some("repro-conv".to_string()),
+            branch_id: None,
+            phase: None,
+            options: Some(PhaseOptions {
+                extra: [("cwd".to_string(), json!("/Users/test/project"))]
+                    .into_iter()
+                    .collect(),
+                ..PhaseOptions::default()
+            }),
+            vector_hits: None,
+            model: None,
+            temperature: None,
+            max_tokens: None,
+        };
+
+        let gate = evaluate_pre_chat_gates(&server, &mut params)
+            .await
+            .expect("gate evaluation should not fail");
+        assert!(
+            matches!(gate, crate::acp::r#impl::chat::PreChatGate::Pass),
+            "pre-chat gate must pass benign safeguard prompts, got: {:?}",
+            gate
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "backend-postgres"))]
+    async fn safeguard_sensitive_content_still_escalates() {
+        let server = ServerBuilder::new().build();
+        let escalated = should_escalate_approval_strategy(
+            &server,
+            "safeguard",
+            &[chat_msg(
+                "Please rotate the production database credentials.",
+            )],
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("gate evaluation should not fail");
+        assert!(
+            escalated,
+            "sensitive content must still escalate in safeguard mode"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "backend-postgres"))]
+    async fn safeguard_sensitive_content_audit_mode_does_not_escalate() {
+        // governance_policy_mode = "audit" is documented as log-only. The
+        // pre-chat gate must not hard-reject sensitive-content prompts in
+        // audit mode (the user's zed-config.toml sets exactly this).
+        let mut server = ServerBuilder::new().build();
+        server.runtime_config.governance_policy_mode = "audit".to_string();
+        let escalated = should_escalate_approval_strategy(
+            &server,
+            "safeguard",
+            &[chat_msg("Please update the api_key value in config.toml.")],
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("gate evaluation should not fail");
+        assert!(
+            !escalated,
+            "audit mode is log-only: sensitive content must not escalate"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "backend-postgres"))]
+    async fn safeguard_sensitive_content_active_mode_still_escalates() {
+        let mut server = ServerBuilder::new().build();
+        server.runtime_config.governance_policy_mode = "active".to_string();
+        let escalated = should_escalate_approval_strategy(
+            &server,
+            "safeguard",
+            &[chat_msg("Update the api_key value in config.toml.")],
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("gate evaluation should not fail");
+        assert!(
+            escalated,
+            "active mode must still escalate sensitive content"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "backend-postgres"))]
+    async fn edit_high_risk_prompt_still_escalates() {
+        let server = ServerBuilder::new().build();
+        let escalated = should_escalate_approval_strategy(
+            &server,
+            "edit",
+            &[chat_msg("Please run rm -rf on the build directory.")],
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("gate evaluation should not fail");
+        assert!(
+            escalated,
+            "edit mode must still escalate high-risk operations"
+        );
     }
 }

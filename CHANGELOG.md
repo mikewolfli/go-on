@@ -22,6 +22,7 @@
 - **`known_tool_names` unified**: `governance/status.rs` now reads the canonical `ToolCapabilityRegistry::known_names` table (with a small legacy-name supplement) instead of a parallel hardcoded list that drifted from the classifier.
 - **`PolicyVerdict::AllowWithConstraints` removed**: a variant no path ever constructed; harness accounting and de-escalation counters updated.
 - **Memory monitor startup unblocked**: the startup one-shot runs on a blocking thread (`query_system_memory` spawns a subprocess on macOS / reads `/proc` on Linux).
+- **SafeGuard no longer blanket-rejects at the pre-chat gate**: `should_escalate_approval_strategy` treated `"safeguard"` as always-escalating, so every ACP request in the default session mode was rejected with -32040 (`EscalationRequired`) before the pipeline — and its per-tool `session/request_permission` approval flow — could run. Zed sends no mode, the session defaults to SafeGuard, so every Zed agent-panel prompt failed with `request requires human approval per governance policy (mode=safeguard)`. SafeGuard now passes the gate (its documented behavior: automatic execution with targeted human confirmation at high-risk nodes); the injection / sensitive-content / conversation-history / phase checks still apply to every mode. Regression tests added.
 
 #### Config / three-ends / docs
 
