@@ -8,6 +8,32 @@
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, info, warn};
 
+/// Whether an API key is actually configured (not empty, not the placeholder).
+/// Shared by the OpenAI and Qwen3 providers — previously each had a private
+/// copy with identical logic.
+fn has_api_key_configured(api_key: &str) -> bool {
+    !api_key.is_empty() && api_key != "sk-placeholder"
+}
+
+/// Fallback helper shared by the Ollama and Qwen3 providers: return a local
+/// hash embedding when `fallback_to_hash` is true, otherwise a zero vector to
+/// signal the failure to callers. `provider` names the provider for the
+/// warning text.
+fn fallback_or_zero(
+    provider: &str,
+    fallback_to_hash: bool,
+    text: &str,
+    dimensions: usize,
+) -> Vec<f32> {
+    if fallback_to_hash {
+        warn!("{provider}: falling back to local hash embedding");
+        local_hash_embed(text, dimensions)
+    } else {
+        warn!("{provider}: returning zero vector (fallback disabled)");
+        vec![0.0f32; dimensions]
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Trait
 // ---------------------------------------------------------------------------
@@ -152,7 +178,7 @@ impl OpenAiEmbeddingProvider {
 
     /// Check if this provider has an API key configured (not empty).
     pub fn has_api_key(&self) -> bool {
-        !self.config.api_key.is_empty() && self.config.api_key != "sk-placeholder"
+        has_api_key_configured(&self.config.api_key)
     }
 }
 
@@ -306,7 +332,12 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
                         "OllamaEmbeddingProvider: server returned {} — is ollama running?",
                         resp.status()
                     );
-                    return self.fallback_or_zero(text);
+                    return fallback_or_zero(
+                        "OllamaEmbeddingProvider",
+                        self.config.fallback_to_hash,
+                        text,
+                        self.config.dimensions,
+                    );
                 }
                 match resp.json::<serde_json::Value>() {
                     Ok(json) => {
@@ -336,21 +367,12 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
                 );
             }
         }
-        self.fallback_or_zero(text)
-    }
-}
-
-impl OllamaEmbeddingProvider {
-    /// Fallback helper: returns hash embedding if `fallback_to_hash` is true,
-    /// otherwise returns a zero vector to signal the embedding failure to callers.
-    fn fallback_or_zero(&self, text: &str) -> Vec<f32> {
-        if self.config.fallback_to_hash {
-            warn!("OllamaEmbeddingProvider: falling back to local hash embedding");
-            local_hash_embed(text, self.config.dimensions)
-        } else {
-            warn!("OllamaEmbeddingProvider: returning zero vector (fallback disabled)");
-            vec![0.0f32; self.config.dimensions]
-        }
+        fallback_or_zero(
+            "OllamaEmbeddingProvider",
+            self.config.fallback_to_hash,
+            text,
+            self.config.dimensions,
+        )
     }
 }
 
@@ -399,7 +421,7 @@ impl Qwen3EmbeddingProvider {
     }
 
     fn has_api_key(&self) -> bool {
-        !self.config.api_key.is_empty() && self.config.api_key != "sk-placeholder"
+        has_api_key_configured(&self.config.api_key)
     }
 }
 
@@ -407,7 +429,12 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
     fn embed(&self, text: &str) -> Vec<f32> {
         if !self.has_api_key() {
             debug!("Qwen3EmbeddingProvider: no DASHSCOPE_API_KEY configured");
-            return self.fallback_or_zero(text);
+            return fallback_or_zero(
+                "Qwen3EmbeddingProvider",
+                self.config.fallback_to_hash,
+                text,
+                self.config.dimensions,
+            );
         }
 
         let url = crate::shared::url_join::join_url(
@@ -441,7 +468,12 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
                         "Qwen3EmbeddingProvider: DashScope API returned {} — using fallback",
                         resp.status()
                     );
-                    return self.fallback_or_zero(text);
+                    return fallback_or_zero(
+                        "Qwen3EmbeddingProvider",
+                        self.config.fallback_to_hash,
+                        text,
+                        self.config.dimensions,
+                    );
                 }
                 match resp.json::<serde_json::Value>() {
                     Ok(json) => {
@@ -475,21 +507,12 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
                 warn!("Qwen3EmbeddingProvider: HTTP error: {} — using fallback", e);
             }
         }
-        self.fallback_or_zero(text)
-    }
-}
-
-impl Qwen3EmbeddingProvider {
-    /// Fallback helper: returns hash embedding if `fallback_to_hash` is true,
-    /// otherwise returns a zero vector to signal the embedding failure to callers.
-    fn fallback_or_zero(&self, text: &str) -> Vec<f32> {
-        if self.config.fallback_to_hash {
-            warn!("Qwen3EmbeddingProvider: falling back to local hash embedding");
-            local_hash_embed(text, self.config.dimensions)
-        } else {
-            warn!("Qwen3EmbeddingProvider: returning zero vector (fallback disabled)");
-            vec![0.0f32; self.config.dimensions]
-        }
+        fallback_or_zero(
+            "Qwen3EmbeddingProvider",
+            self.config.fallback_to_hash,
+            text,
+            self.config.dimensions,
+        )
     }
 }
 

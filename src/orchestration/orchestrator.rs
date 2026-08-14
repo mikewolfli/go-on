@@ -234,6 +234,12 @@ mod tests {
     use crate::orchestration::mode::resolve_mode_runtime;
     use std::sync::Arc;
 
+    // `OrchestrationContext` wraps the PROCESS-GLOBAL LivePerformanceFeed, so
+    // tests that write/read it must not run concurrently with each other
+    // (otherwise a parallel `record_success("gpt-4o-mini", ...)` inflates the
+    // EMA cost estimate and breaks the gpt-4 > gpt-4o-mini assertion below).
+    use serial_test::serial;
+
     fn runtime_for(mode: &str, registry: Arc<AgentRegistry>) -> Box<dyn crate::mode::ModeRuntime> {
         resolve_mode_runtime(mode, Some(registry), None).expect("mode runtime should resolve")
     }
@@ -274,12 +280,19 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_model_cost_estimates() {
         let ctx = OrchestrationContext::new();
-        assert!(estimate_model_cost(&ctx, "gpt-4") > estimate_model_cost(&ctx, "gpt-4o-mini"));
+        // Use a model pair that no other test writes into the PROCESS-GLOBAL
+        // LivePerformanceFeed: `test_performance_feed_dynamic_cost_affects_estimate`
+        // records a dynamic cost for gpt-4o-mini that (serial or not) persists
+        // in the shared feed and would inflate the "cheaper" side of this
+        // assertion on a later run.
+        assert!(estimate_model_cost(&ctx, "gpt-4") > estimate_model_cost(&ctx, "gpt-4o"));
     }
 
     #[test]
+    #[serial]
     fn test_performance_feed_dynamic_cost_affects_estimate() {
         let ctx = OrchestrationContext::new();
         ctx.performance_feed().record_success("gpt-4o-mini", 50);

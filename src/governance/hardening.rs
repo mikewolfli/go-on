@@ -672,7 +672,9 @@ impl SandboxPolicy {
 
     /// Check if file search/pattern matching operations are allowed at this security level
     ///
-    /// Search is a read-only operation, safe across most levels
+    /// Search is a read-only operation — currently allowed at every level
+    /// (including Isolated), matching `can_execute_read_file`. This is a
+    /// deliberate constant: no level restricts read-only inspection.
     pub fn can_execute_search(level: SandboxLevel) -> bool {
         match level {
             SandboxLevel::None => true,

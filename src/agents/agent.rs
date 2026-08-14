@@ -488,8 +488,15 @@ fn pick_secret_pool_index(field_name: &str, len: usize) -> usize {
     }
 
     if field_name.ends_with("secret_key_env") {
-        let current = state.get(&group).copied().unwrap_or(1);
-        return (current + len - 1) % len;
+        // Paired rotation: pick the index the api_key branch just used
+        // ((current - 1) mod len), then advance the shared per-group counter.
+        // Previously the counter was read but never written back, so a
+        // multi-valued secret pool never actually rotated — every call
+        // recomputed the same index from the initial value.
+        let entry = state.entry(group).or_insert(1);
+        let index = (*entry + len - 1) % len;
+        *entry = (*entry + 1) % len;
+        return index;
     }
 
     let entry = state.entry(group).or_insert(0);

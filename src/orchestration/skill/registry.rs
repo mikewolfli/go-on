@@ -435,22 +435,9 @@ impl SkillRegistry {
                         && !self.hidden_skills.contains(name.as_str()))
             })
             .map(|(name, skill)| {
-                let stats = self.stats.get(name).cloned().unwrap_or_default();
-                SkillDescriptor {
-                    name: skill.name().to_string(),
-                    description: skill.description().to_string(),
-                    input_schema: skill.input_schema(),
-                    namespace: self.namespaces.get(name).cloned(),
-                    score: stats.score(),
-                    total_calls: stats.total_calls,
-                    success_calls: stats.success_calls,
-                    failure_calls: stats.failure_calls,
-                    average_latency_ms: stats.average_latency_ms(),
-                    provenance: self.provenances.get(name).cloned(),
-                    hidden: skill.disable_model_invocation()
-                        || self.hidden_skills.contains(name.as_str()),
-                    policy: skill.policy().cloned(),
-                }
+                let hidden =
+                    skill.disable_model_invocation() || self.hidden_skills.contains(name.as_str());
+                self.build_descriptor(name, skill.as_ref(), hidden)
             })
             .collect::<Vec<_>>();
         items.sort_by(|a, b| {
@@ -477,8 +464,21 @@ impl SkillRegistry {
     /// skill is not registered.
     pub fn descriptor(&self, name: &str) -> Option<SkillDescriptor> {
         let skill = self.skills.get(name)?;
+        let hidden = skill.disable_model_invocation() || self.hidden_skills.contains(name);
+        Some(self.build_descriptor(name, skill.as_ref(), hidden))
+    }
+
+    /// Shared descriptor construction for [`Self::list`] and [`Self::descriptor`]
+    /// — previously the 15-field `SkillDescriptor` literal was duplicated in
+    /// both, so metadata/stat mapping could drift.
+    fn build_descriptor(
+        &self,
+        name: &str,
+        skill: &dyn super::Skill,
+        hidden: bool,
+    ) -> SkillDescriptor {
         let stats = self.stats.get(name).cloned().unwrap_or_default();
-        Some(SkillDescriptor {
+        SkillDescriptor {
             name: skill.name().to_string(),
             description: skill.description().to_string(),
             input_schema: skill.input_schema(),
@@ -489,9 +489,9 @@ impl SkillRegistry {
             failure_calls: stats.failure_calls,
             average_latency_ms: stats.average_latency_ms(),
             provenance: self.provenances.get(name).cloned(),
-            hidden: skill.disable_model_invocation() || self.hidden_skills.contains(name),
+            hidden,
             policy: skill.policy().cloned(),
-        })
+        }
     }
 
     /// Best fuzzy match for `requested` against the registered skills, using

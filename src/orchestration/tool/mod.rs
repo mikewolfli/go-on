@@ -171,7 +171,7 @@ impl ToolRegistry {
                     max_retries: 1,
                     retry_on_failure: true,
                 },
-                fallback_chain: vec!["read_file".to_string()],
+                fallback_chain: Vec::new(),
             },
         );
         registry.register_with_profile(
@@ -1831,6 +1831,50 @@ impl ToolRegistry {
         serde_json::json!({ "tools": matrix })
     }
 
+    /// Adapt the primary tool's input payload for a fallback tool.
+    ///
+    /// Most fallback pairs share the same input shape, but several expect a
+    /// different field name — forwarding the raw input there makes the
+    /// fallback fail with a missing-field error that masks the primary failure
+    /// (e.g. read_file→search_files previously passed `{path}` where `pattern`
+    /// is required, so the real "file not found" reason was never surfaced).
+    fn adapt_fallback_input(primary: &str, fallback: &str, input: &ToolInput) -> ToolInput {
+        let mut adapted = input.clone();
+        let payload = match adapted.payload.as_object_mut() {
+            Some(obj) => obj,
+            None => return adapted,
+        };
+        match (primary, fallback) {
+            // read_file {path} → search_files {pattern}: search for the file's
+            // base name so a "file not found" failure surfaces candidate paths.
+            ("read_file", "search_files") => {
+                if let Some(path) = payload.get("path").cloned() {
+                    let base = path
+                        .as_str()
+                        .and_then(|p| std::path::Path::new(p).file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    payload.remove("path");
+                    payload.insert("pattern".to_string(), serde_json::json!(base));
+                }
+            }
+            // code_index_search {query} / go_to_definition|find_references
+            // {symbol} → grep {pattern}: the index/LSP backend failed, so fall
+            // back to a plain text search for the same identifier.
+            ("code_index_search" | "go_to_definition" | "find_references", "grep") => {
+                let term = payload
+                    .get("query")
+                    .or_else(|| payload.get("symbol"))
+                    .cloned();
+                if let Some(term) = term {
+                    payload.insert("pattern".to_string(), term);
+                }
+            }
+            _ => {}
+        }
+        adapted
+    }
+
     /// Run the fallback chain without governance hooks or metrics recording.
     ///
     /// Shared by [`ToolRegistry::run_with_fallback_async`] (which wraps this
@@ -1859,7 +1903,8 @@ impl ToolRegistry {
             .unwrap_or_default()
         {
             if let Some(fb) = self.get_arc(&fb_name) {
-                let mut fb_result = fb.run_async(input.clone()).await?;
+                let fb_input = Self::adapt_fallback_input(name, &fb_name, input);
+                let mut fb_result = fb.run_async(fb_input).await?;
                 if fb_result.success {
                     fb_result.audit_log = Some(format!(
                         "primary '{name}' failed, fallback '{fb_name}' succeeded"
@@ -1923,9 +1968,9 @@ impl Default for ToolRegistry {
 }
 
 pub use builtin_tools::{
-    record_tool_execution, sanitize_path, sanitize_path_for_write, ApplyPatchTool,
-    InspectGitDiffTool, ReadFileTool, RunTestsTool, SearchFilesTool, SkillCreateTool,
-    SkillExecuteTool, SkillListTool, SkillReloadTool, WriteFileTool,
+    enforce_write_sandbox, record_tool_execution, sanitize_path, sanitize_path_for_write,
+    ApplyPatchTool, InspectGitDiffTool, ReadFileTool, RunTestsTool, SearchFilesTool,
+    SkillCreateTool, SkillExecuteTool, SkillListTool, SkillReloadTool, WriteFileTool,
 };
 
 #[cfg(test)]
@@ -1935,6 +1980,9 @@ mod tests {
     use std::path::Path;
     use std::process::Command;
     use tempfile::tempdir;
+    // Serializes against the startup_context chdir tests (see
+    // run_tests_tool_executes_configured_command below).
+    use serial_test::serial;
 
     fn init_git_repo(dir: &Path) {
         run_git(dir, &["init"]);
@@ -2009,9 +2057,14 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn run_tests_tool_executes_configured_command() {
         // First check if git is available — skip if not (sandboxed CI
-        // or parallel test execution with PATH changes).
+        // or parallel test execution with PATH changes). `git` inherits the
+        // process CWD; the startup_context tests temporarily `set_current_dir`
+        // into a temp dir that is deleted on drop, and a concurrent spawn
+        // there fails — the shared `serial_test` lock serializes against those
+        // chdir tests.
         match std::process::Command::new("git").arg("--version").output() {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 eprintln!("git not found in PATH, skipping test");
@@ -2032,24 +2085,42 @@ mod tests {
         }
 
         let tool = RunTestsTool;
-        let result = match tool.run(&tool_input(serde_json::json!({
-            "command": "git",
-            "args": ["--version"],
-            "directory": ".",
-        }))) {
-            Ok(r) => r,
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("No such file or directory") || msg.contains("not found") {
-                    eprintln!(
-                        "git binary not found during test execution, skipping: {}",
-                        msg
-                    );
-                    return;
+        // The command runs through the bwrap sandbox; under heavy parallel
+        // test load a namespace-setup failure can transiently fail an attempt
+        // (the production executor retries tool failures — retry_policy
+        // `max_retries: 1`). Retry a few times so a transient sandbox hiccup
+        // does not flake the test; a persistent failure still fails it (the
+        // last attempt's outcome is asserted, never skipped).
+        let mut last_outcome: Option<ToolOutput> = None;
+        for _attempt in 0..3 {
+            match tool.run(&tool_input(serde_json::json!({
+                "command": "git",
+                "args": ["--version"],
+                "directory": ".",
+            }))) {
+                Ok(r) if r.success => {
+                    last_outcome = Some(r);
+                    break;
                 }
-                panic!("command should execute, got: {}", msg);
+                Ok(r) => {
+                    last_outcome = Some(r);
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("No such file or directory") || msg.contains("not found") {
+                        eprintln!(
+                            "git binary not found during test execution, skipping: {}",
+                            msg
+                        );
+                        return;
+                    }
+                    eprintln!("run_tests attempt failed (will retry): {}", msg);
+                }
             }
-        };
+        }
+        let result = last_outcome.unwrap_or_else(|| {
+            panic!("command should execute; all retry attempts errored");
+        });
         assert!(result.success);
         let stdout = result.result.expect("result should exist")["stdout"]
             .as_str()

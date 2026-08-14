@@ -26,6 +26,18 @@ use super::streaming::{
     emit_stream_chunk, emit_stream_done, StreamEventMeta, StreamNotificationContext,
 };
 
+/// Aborts a spawned agent task when dropped. Used by
+/// [`run_agent_collecting`] so a mid-flight cancellation (e.g. the fallback
+/// path dropping losing candidates after the first success) stops the
+/// orphaned `agent.chat` task instead of letting it stream to completion.
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Collected result from streaming agent responses.
 pub(crate) struct CollectedResponse {
     pub response: String,
@@ -139,6 +151,11 @@ pub(crate) async fn run_agent_collecting(
     // Clone for use inside `collect` (the join-timeout branch) while the
     // original stays available to the outer `.inspect_err`.
     let collect_abort = abort_handle.clone();
+    // RAII guard: if THIS future is dropped mid-flight (not via timeout — e.g.
+    // the fallback path cancels losing candidates once the first success wins),
+    // abort the spawned agent.chat task. A dropped JoinHandle alone would
+    // detach the task and let it keep streaming/burning tokens to completion.
+    let _abort_on_drop = AbortOnDrop(abort_handle.clone());
 
     let collect = async move {
         let stream_started = Instant::now();

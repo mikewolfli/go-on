@@ -428,9 +428,17 @@ pub async fn new_acp_server(
 
     #[cfg(feature = "multi-users-server")]
     {
+        // Use the configured entry rate-limit knobs for the per-tenant limiter
+        // too (previously hardcoded `TenantRateLimit::default()` = 60/10, so
+        // the config `runtime.entry_rate_limit_rpm` / `burst` — default 240/60
+        // — only reached the per-IP PhaseRateLimiter and the status report,
+        // and the tenant limiter silently enforced different numbers).
         server.rate_limiting.rate_limit_middleware = Some(Arc::new(
             crate::protocol::rate_limit::RateLimitMiddleware::new(
-                crate::protocol::rate_limit::TenantRateLimit::default(),
+                crate::protocol::rate_limit::TenantRateLimit {
+                    rpm: server.runtime_config.entry_rate_limit_rpm.max(1),
+                    burst: server.runtime_config.entry_rate_limit_burst.max(1),
+                },
             ),
         ));
         // Activate the distributed-memory transport (cross-node memory sync).

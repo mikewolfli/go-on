@@ -240,6 +240,16 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
         };
         let mut thinking_buf = String::new();
         let mut message_buf = String::new();
+        // Whether any visible message content reached the client this turn.
+        // Some execution paths (e.g. the autonomy loop) stream reasoning and
+        // tool calls but no content tokens — for those, the final response
+        // text arrives only in the "result"/"done" payload and must be
+        // forwarded explicitly, or the thread ends on thinking alone.
+        let mut message_streamed = false;
+        // Whether the completion response was already forwarded: the pipeline
+        // emits both "done" and "result" carrying the same response text, so
+        // forwarding on both would duplicate the message in the thread.
+        let mut completion_forwarded = false;
         // Flush threshold: flush accumulated content when buffer exceeds this length
         const FLUSH_THRESHOLD: usize = 20;
 
@@ -271,6 +281,7 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                                 thinking_buf.clear();
                             }
                             message_buf.push_str(token);
+                            message_streamed = true;
                             if message_buf.len() >= FLUSH_THRESHOLD {
                                 send_chunk(&sid, "agent_message_chunk", &message_buf).await;
                                 message_buf.clear();
@@ -278,24 +289,7 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                         }
                     }
                 }
-                "phase_start" | "phase_end" => {
-                    // Send phase transitions as lightweight thought markers
-                    if let Some(desc) = frame.payload.get("description").and_then(|v| v.as_str()) {
-                        let phase = frame
-                            .payload
-                            .get("phase")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if !phase.is_empty() && !desc.is_empty() {
-                            send_chunk(
-                                &sid,
-                                "agent_thought_chunk",
-                                &format!("[{}] {}", phase, desc),
-                            )
-                            .await;
-                        }
-                    }
-                }
+
                 "tool_approval" => {
                     if !thinking_buf.is_empty() {
                         send_session_update(
@@ -376,9 +370,51 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                         send_chunk(&sid, "agent_thought_chunk", &thinking_buf).await;
                         thinking_buf.clear();
                     }
+                    let message_flushed = !message_buf.is_empty();
+                    if message_flushed {
+                        send_chunk(&sid, "agent_message_chunk", &message_buf).await;
+                        message_buf.clear();
+                    }
+                    // The final response can arrive ONLY in the completion
+                    // payload: when the agent streams reasoning + tool calls
+                    // but no content tokens, the "result"/"done" event is the
+                    // sole carrier of the response text. Forward it so the
+                    // thread never ends on thinking alone ("thinking 直接结
+                    // 束"). Skip when message content was already streamed
+                    // (forwarding would duplicate it) and only forward once,
+                    // since "done" and "result" carry the same text.
+                    if !completion_forwarded && !message_streamed && !message_flushed {
+                        if let Some(response) = frame
+                            .payload
+                            .get("response")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                        {
+                            send_chunk(&sid, "agent_message_chunk", response).await;
+                            completion_forwarded = true;
+                        }
+                    }
+                }
+                "error" => {
+                    // A stream-level error (e.g. pipeline completed with empty
+                    // response and empty agent) terminates the stream without a
+                    // "result" — flush pending content and surface the message
+                    // so the turn does not end silently.
+                    if !thinking_buf.is_empty() {
+                        send_chunk(&sid, "agent_thought_chunk", &thinking_buf).await;
+                        thinking_buf.clear();
+                    }
                     if !message_buf.is_empty() {
                         send_chunk(&sid, "agent_message_chunk", &message_buf).await;
                         message_buf.clear();
+                    }
+                    if let Some(msg) = frame
+                        .payload
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                    {
+                        send_chunk(&sid, "agent_message_chunk", msg).await;
                     }
                 }
                 _ => {}

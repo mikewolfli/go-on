@@ -105,6 +105,10 @@ pub struct ChatView {
     pub error: String,
     pub success_message: Option<String>,
     pub ai_status: AiStatus,
+    /// Live progress status text from backend `status` / `phase_start` SSE
+    /// events, shown next to the AI thinking indicator. Kept separate from
+    /// the message's thinking panel (which holds the model's reasoning).
+    pub stream_status: String,
     pub selected_phase: String,
     pub selected_mode: String,
     pub attachments: Vec<Attachment>,
@@ -524,6 +528,7 @@ impl ChatView {
             error: String::new(),
             success_message: None,
             ai_status: AiStatus::Idle,
+            stream_status: String::new(),
             selected_phase: initial_phase,
             selected_mode: saved_mode,
             attachments: Vec::new(),
@@ -946,6 +951,7 @@ impl ChatView {
         }
         self.session_state.active_session = self.session_state.sessions.len() - 1;
         self.ai_status = AiStatus::Idle;
+        self.stream_status.clear();
         self.attachments.clear();
         self.edit_msg_idx = None;
         self.edit_msg_buf.clear();
@@ -1026,6 +1032,7 @@ impl ChatView {
         self.ai_status = AiStatus::Idle;
         self.set_phase_record_status("stopped");
         self.stream_state.stream_progress = TokenProgress::default();
+        self.stream_status.clear();
     }
 }
 
@@ -1149,6 +1156,7 @@ mod tests {
             error: String::new(),
             success_message: None,
             ai_status: AiStatus::Idle,
+            stream_status: String::new(),
             selected_phase: String::new(),
             selected_mode: "edit".to_string(),
             attachments: Vec::new(),

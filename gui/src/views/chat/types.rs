@@ -142,6 +142,13 @@ pub enum PendingResponse {
         token: String,
         reasoning: String,
     },
+    /// Lightweight progress status from the backend (e.g. "Checking for
+    /// prompt injection...", "Pre-fetching URLs..."). Shown in the AI
+    /// thinking indicator — NOT in the message's thinking panel, which is
+    /// reserved for the model's actual reasoning.
+    AgentStatus {
+        message: String,
+    },
     TokenEconomy {
         generation_id: u64,
         input_tokens: usize,

@@ -836,27 +836,12 @@ pub(crate) async fn handle_workflow_execute(
         Some(&repair_context),
     );
     let repair_history = build_repair_history_response(&repair_context);
-    let review_status = if review_policy.required_reviews > 0 {
-        if execution_report.subtasks_failed == 0 {
-            "passed"
-        } else {
-            "rejected"
-        }
-    } else {
-        "not_required"
-    };
     let execution_status = if execution_report.subtasks_failed > 0 {
         "degraded"
     } else {
         "passed"
     };
-    let gates = build_gate_matrix(
-        requirement_gate_payload.clone(),
-        execution_status,
-        review_status,
-        "not_run",
-        None,
-    );
+    let gates = build_gate_matrix(requirement_gate_payload.clone(), execution_status, None);
     let change_bundle = build_change_bundle(
         "execution_summary",
         format!(

@@ -323,6 +323,15 @@ pub(crate) async fn handle_chat(
                 .sum();
             let compressor = SessionCompressor {
                 incremental: session_compression_state(&conversation_id),
+                // Wire the configured phase history budget into the hard
+                // compression cap: previously this stayed at the default 1000,
+                // so `requires_compression` could never fire before
+                // `should_compress` (threshold 50) and the `||` disjunct in
+                // the trigger below was dead. With a configured budget (e.g.
+                // max_history_messages = 30) the hard cap now matches the
+                // configured retention budget.
+                max_messages: configured_max_messages
+                    .unwrap_or(crate::orchestration::session_compressor::DEFAULT_MAX_MESSAGES),
                 ..SessionCompressor::default()
             };
             let compression_applied = if compressor.should_compress(msg_count, estimated_tokens)
@@ -840,7 +849,7 @@ fn record_trace_event(
     outputs: Option<Value>,
     duration_ms: u64,
 ) {
-    crate::acp::r#impl::request::record_trace_event(
+    crate::acp::r#impl::request::trace_pack::record_trace_event(
         server,
         trace,
         event_type,

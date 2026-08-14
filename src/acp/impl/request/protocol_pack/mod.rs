@@ -649,8 +649,10 @@ mod tests {
                 {"type": "text", "text": "Hello, how are you?"}
             ]
         });
-        let mut session_state = AcpSessionState::default();
-        session_state.cwd = Some("/Users/test/project".to_string());
+        let mut session_state = AcpSessionState {
+            cwd: Some("/Users/test/project".to_string()),
+            ..AcpSessionState::default()
+        };
         session_state.config_options.insert(
             "model".to_string(),
             Value::String("deepseek-v4-flash".to_string()),

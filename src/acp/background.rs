@@ -601,13 +601,19 @@ pub async fn start_background_tasks(
         spawn_background_task(
             async move {
                 // Skip the first tick to let the server start accepting requests.
-                // 10s interval = 2/3 of the 15s heartbeat timeout. Liveness
-                // signals come from real execution outcomes (task.rs reports
-                // heartbeats on success, faults on failure); a node that was
-                // registered but never reported is skipped by check_heartbeats
-                // (has_reported=false), so idle agents are not falsely flagged
-                // Offline.
-                let mut interval = tokio::time::interval(Duration::from_secs(10));
+                // The cycle interval comes from the engine's own config
+                // (FaultToleranceConfig::recovery_check_interval_ms, default
+                // 5000ms) — previously hardcoded to 10s, which made the config
+                // field dead. Liveness signals come from real execution
+                // outcomes (task.rs reports heartbeats on success, faults on
+                // failure); a node that was registered but never reported is
+                // skipped by check_heartbeats (has_reported=false), so idle
+                // agents are not falsely flagged Offline.
+                let recovery_interval = ft
+                    .recovery_check_interval()
+                    .await
+                    .max(std::time::Duration::from_secs(1));
+                let mut interval = tokio::time::interval(recovery_interval);
                 interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
                 interval.tick().await;
                 loop {

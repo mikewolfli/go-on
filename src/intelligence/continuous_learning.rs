@@ -680,6 +680,30 @@ Memories:
 
     // ── Retention scoring (GAP-B52-14) ────────────────────────────────────
 
+    /// Shared retention-score computation for a memory id: applies the
+    /// curve's decay when a curve exists, otherwise the default decay rate
+    /// from consolidation time. Single implementation used by both
+    /// [`Self::retention_score`] and [`Self::detect_forgetting_risk`] —
+    /// previously `detect_forgetting_risk` re-inlined the same branch.
+    fn retention_score_inner(
+        state: &CenterState,
+        id: &str,
+        importance: f64,
+        consolidated_ms: u64,
+        default_decay_rate: f64,
+        now: u64,
+    ) -> f64 {
+        match state.forgetting_curves.get(id) {
+            Some(curve) => Self::retention_strength(
+                importance,
+                curve.decay_rate,
+                now,
+                curve.last_reinforced_ms,
+            ),
+            None => Self::retention_strength(importance, default_decay_rate, now, consolidated_ms),
+        }
+    }
+
     /// Compute the retention score for a given memory entry using the
     /// **Ebbinghaus forgetting curve** formula at a given point in time.
     ///
@@ -697,23 +721,14 @@ Memories:
     /// Returns a value in `[0.0, 1.0]`.
     pub fn retention_score(&self, entry: &ConsolidatedMemory, now: u64) -> f64 {
         let state = lock_guard(&self.state);
-        match state.forgetting_curves.get(&entry.id) {
-            Some(curve) => Self::retention_strength(
-                entry.importance,
-                curve.decay_rate,
-                now,
-                curve.last_reinforced_ms,
-            ),
-            None => {
-                // No curve → score based purely on recency of consolidation.
-                Self::retention_strength(
-                    entry.importance,
-                    self.config.default_decay_rate,
-                    now,
-                    entry.consolidated_ms,
-                )
-            }
-        }
+        Self::retention_score_inner(
+            &state,
+            &entry.id,
+            entry.importance,
+            entry.consolidated_ms,
+            self.config.default_decay_rate,
+            now,
+        )
     }
 
     /// Detect memories at risk of being forgotten (retention score < 0.3)
@@ -740,17 +755,14 @@ Memories:
             };
 
             // Compute retention score using the Ebbinghaus formula.
-            let score = match state.forgetting_curves.get(&id) {
-                Some(c) => {
-                    Self::retention_strength(importance, c.decay_rate, now, c.last_reinforced_ms)
-                }
-                None => Self::retention_strength(
-                    importance,
-                    self.config.default_decay_rate,
-                    now,
-                    consolidated_ms,
-                ),
-            };
+            let score = Self::retention_score_inner(
+                &state,
+                &id,
+                importance,
+                consolidated_ms,
+                self.config.default_decay_rate,
+                now,
+            );
 
             // Update or create the forgetting risk record.
             let record = state
@@ -815,15 +827,16 @@ Memories:
     /// Perform a forgetting review cycle with full learning loop integration:
     /// 1. LLM distillation — create semantic summaries from consolidated memories.
     /// 2. Detect forgetting (raw `detect_forgetting`) and reinforce decaying memories.
-    /// 3. Replay important memories via `replay_important_memories()` for spaced repetition.
-    /// 4. Detect forgetting risks and reinforce at-risk memories (original logic).
-    /// 5. Fast-evict memories with 3+ consecutive critical scores.
+    /// 3. Detect forgetting risks and reinforce at-risk memories (spaced repetition;
+    ///    the former `replay_important_memories(5)` step computed a top-5 list and
+    ///    discarded it without reinforcing anything — removed as dead work).
+    /// 4. Fast-evict memories with 3+ consecutive critical scores.
     ///
     /// Returns `(replayed, evicted, patterns_extracted)`.
     ///
     /// # Unified forgetting policy
     ///
-    /// The rescue loop (steps 2/5) and the eviction loop (steps 4-6) share one
+    /// The rescue loop (steps 2/3) and the eviction loop (step 4) share one
     /// discriminator: only memories consolidated with importance at or above
     /// `min_retention_importance` are worth rescuing. Memories below the
     /// retention threshold — or already flagged for eviction — are deliberately
@@ -865,13 +878,10 @@ Memories:
             let _ = self.reinforce_memory(&curve.memory_id);
         }
 
-        // Step 3: Replay important memories (spaced repetition).
-        let _important = self.replay_important_memories(5);
-
-        // Step 4: Detect forgetting risks.
+        // Step 3: Detect forgetting risks.
         let at_risk = self.detect_forgetting_risk();
 
-        // Step 5: Replay important at-risk memories (same unified policy as
+        // Step 4: Replay important at-risk memories (same unified policy as
         // step 2 — never rescue what the eviction loop owns).
         let mut replayed = 0usize;
         for record in &at_risk {

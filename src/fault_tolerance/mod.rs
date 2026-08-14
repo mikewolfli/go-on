@@ -576,6 +576,15 @@ pub struct FaultToleranceEngine {
 }
 
 impl FaultToleranceEngine {
+    /// The configured recovery-cycle interval. Drives the background recovery
+    /// loop in `start_background_tasks` — previously that loop hardcoded a
+    /// 10s interval, making `FaultToleranceConfig::recovery_check_interval_ms`
+    /// a dead knob (serialized and set but never consumed).
+    pub async fn recovery_check_interval(&self) -> std::time::Duration {
+        let inner = self.inner.read().await;
+        std::time::Duration::from_millis(inner.config.recovery_check_interval_ms)
+    }
+
     /// Create a new engine with the given configuration.
     pub fn new(config: FaultToleranceConfig) -> Self {
         let inner = Inner {

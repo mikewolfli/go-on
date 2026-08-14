@@ -1346,6 +1346,7 @@ pub(crate) async fn act_phase(
             &trace.trace_id,
             &response_text,
             &None,
+            None,
         )
         .await?;
         stream_done_emitted = true;
@@ -1365,6 +1366,7 @@ pub(crate) async fn act_phase(
             &trace.trace_id,
             &response_text,
             &None,
+            None,
         )
         .await?;
         stream_done_emitted = true;
@@ -1515,30 +1517,17 @@ pub(crate) async fn act_phase(
             selected_agent = vote_result.selected_agent;
             last_err = vote_result.last_err;
             agent_attempts.extend(vote_result.agent_attempts);
-            if let Some(ref observer) = stream_observer {
-                let meta = StreamEventMeta {
-                    agent_name: &selected_agent,
-                    phase_name: &resolve_out.phase_name,
-                    trace_id: &trace.trace_id,
-                    mode: Some(&params.mode),
-                    risk_score: None,
-                    degrade_policy: None,
-                };
-                let total_chars = response_text.chars().count();
-                emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars)
-                    .await?;
-                emit_stream_done(
-                    server,
-                    Some(observer),
-                    meta,
-                    1,
-                    total_chars,
-                    0u64,
-                    selected_model_name.clone(),
-                    Some(&response_text),
-                )
-                .await?;
-            }
+            stream_cache_response(
+                server,
+                stream_observer.as_ref(),
+                &selected_agent,
+                &resolve_out.phase_name,
+                &trace.trace_id,
+                &response_text,
+                &selected_model_name,
+                Some(&params.mode),
+            )
+            .await?;
             (
                 vote_result.used_multi_model_vote,
                 vote_result.used_multi_agent_vote,
@@ -1858,6 +1847,7 @@ fn try_semantic_cache(server: &AcpServer, cache_key: &str) -> Option<String> {
         .and_then(|v| v.as_str().map(|s| s.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn stream_cache_response(
     server: &AcpServer,
     observer: Option<&StreamObserver>,
@@ -1866,13 +1856,14 @@ async fn stream_cache_response(
     tid: &str,
     text: &str,
     model: &Option<String>,
+    mode: Option<&str>,
 ) -> Result<()> {
     if let Some(o) = observer {
         let meta = StreamEventMeta {
             agent_name: agent,
             phase_name: phase,
             trace_id: tid,
-            mode: None,
+            mode,
             risk_score: None,
             degrade_policy: None,
         };
@@ -2447,15 +2438,18 @@ async fn run_mode_runtime_and_multi_agent(
     }
 
     // ── Multi-agent pipeline (Edit + multiple agents) ──────────────────
-    // Runs only as a safety net when the act-phase autonomy loop produced no
-    // output — the same guard applied to the mode runtime above. Without it,
-    // every Edit-mode request with >1 agents triggered a second full agentic
-    // execution (LLM decomposition + per-subtask LLM calls) whose result
-    // silently OVERWROTE the act-phase response.
+    // Runs only as a safety net when the act-phase autonomy loop AND the mode
+    // runtime above produced no output. The guard is re-evaluated AFTER the
+    // mode runtime so a successful emergency recovery is not silently
+    // overwritten by a second full agentic execution (previously the guard
+    // used the pre-mode-runtime value, so the mode runtime's answer was always
+    // discarded and the pipeline ran twice serially on the same request).
+    let act_or_mode_produced_output =
+        !exec_out.response_text.trim().is_empty() || !exec_out.selected_agent.trim().is_empty();
     if matches!(mode_runtime.kind(), ModeKind::Edit)
         && resolved.agents.len() > 1
         && !exec_out.cache_hit
-        && !act_phase_produced_output
+        && !act_or_mode_produced_output
     {
         run_multi_agent_pipeline(server, params, resolved, exec_out, phase_name).await;
     }

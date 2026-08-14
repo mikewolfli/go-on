@@ -366,6 +366,7 @@ pub async fn run_terminal_chat(
             &mut token_tracker,
             &mut current_mode,
             &session_path,
+            &mut stdin_rx,
         )
         .await;
     }
@@ -768,6 +769,7 @@ async fn dispatch_builtin_command(
                 registry,
                 current_agent_name,
                 current_mode,
+                stdin_rx,
             )
             .await;
         }
@@ -785,7 +787,14 @@ async fn dispatch_builtin_command(
         }
         // ── Retry ──
         "retry" => {
-            execute_retry_command(messages, current_agent, current_mode, token_tracker).await;
+            execute_retry_command(
+                messages,
+                current_agent,
+                current_mode,
+                token_tracker,
+                stdin_rx,
+            )
+            .await;
         }
         // ── Model (switch agent) ──
         model_cmd if model_cmd.starts_with("model") => {
@@ -806,6 +815,7 @@ async fn dispatch_builtin_command(
 }
 
 /// Process a user message through injection detection, run the agent, and auto-save.
+#[allow(clippy::too_many_arguments)]
 async fn process_user_message_and_run_agent(
     line: &str,
     messages: &mut Vec<Message>,
@@ -814,6 +824,7 @@ async fn process_user_message_and_run_agent(
     token_tracker: &mut TokenTracker,
     current_mode: &mut Box<dyn ModeRuntime>,
     session_path: &std::path::Path,
+    stdin_rx: &mut mpsc::Receiver<String>,
 ) {
     // ── Prompt injection detection ──
     {
@@ -883,6 +894,7 @@ async fn process_user_message_and_run_agent(
         messages,
         principles,
         Some(current_mode.as_ref()),
+        stdin_rx,
     )
     .await
     {
@@ -1537,6 +1549,7 @@ async fn execute_plan_command(
     registry: &Arc<AgentRegistry>,
     current_agent_name: &str,
     _current_mode: &Box<dyn ModeRuntime>,
+    stdin_rx: &mut mpsc::Receiver<String>,
 ) {
     if messages.is_empty() {
         eprintln!(
@@ -1577,6 +1590,7 @@ async fn execute_plan_command(
                 messages,
                 plan_principles,
                 Some(plan_mode.as_ref()),
+                stdin_rx,
             )
             .await
             {
@@ -1848,6 +1862,7 @@ async fn execute_retry_command(
     current_agent: &Arc<dyn Agent>,
     current_mode: &Box<dyn ModeRuntime>,
     token_tracker: &mut TokenTracker,
+    stdin_rx: &mut mpsc::Receiver<String>,
 ) {
     if messages.len() < 2 {
         eprintln!(
@@ -1876,6 +1891,7 @@ async fn execute_retry_command(
                 messages,
                 principles,
                 Some(current_mode.as_ref()),
+                stdin_rx,
             )
             .await
             {
@@ -2013,8 +2029,12 @@ fn check_compact_threshold(messages: &mut Vec<Message>) {
     if msg_count >= AUTO_COMPACT_THRESHOLD {
         let keep = AUTO_COMPACT_KEEP;
         let remove_count = msg_count.saturating_sub(keep);
-        // Keep the most recent `keep` messages (drop oldest)
-        messages.drain(..remove_count);
+        // Preserve the system message at index 0 (tool inventory + __tool_call__
+        // protocol framing) — the manual /compact path keeps messages[0] too,
+        // but this path previously drained from index 0, silently deleting the
+        // system framing after ~30 turns and degrading tool-calling.
+        let drain_start = 1.min(messages.len().saturating_sub(keep));
+        messages.drain(drain_start..remove_count);
         eprintln!(
             "{}{}{}",
             ansi!("32"),
@@ -2071,6 +2091,7 @@ async fn run_agent_with_tools(
     messages: &mut Vec<Message>,
     principles: Vec<String>,
     mode_runtime: Option<&dyn ModeRuntime>,
+    stdin_rx: &mut mpsc::Receiver<String>,
 ) -> Result<(String, usize, usize)> {
     // ── Estimate prompt tokens from existing messages using CJK-aware estimator ──
     let estimated_prompt_tokens: usize = messages
@@ -2084,7 +2105,8 @@ async fn run_agent_with_tools(
 
     // ── Phase 2 (inline): Filter/block tool calls by mode constraints + SafeGuard ──
     let filtered_calls = filter_tool_calls_by_mode(&tool_calls, mode_runtime);
-    let (filtered_calls, early_exit) = safeguard_approval(&filtered_calls, mode_runtime)?;
+    let (filtered_calls, early_exit) =
+        safeguard_approval(&filtered_calls, mode_runtime, stdin_rx).await?;
     if early_exit {
         // Cancelled by SafeGuard: the agent already consumed the prompt tokens.
         let estimated_completion_tokens =
@@ -2382,9 +2404,15 @@ fn filter_tool_calls_by_mode(
 /// Returns `(filtered_calls, early_exit)`; `early_exit` is `true` when the
 /// user cancelled execution. The caller reports real token usage in that case
 /// (the prompt tokens were already consumed to produce the response).
-fn safeguard_approval<'a>(
+///
+/// Reads the y/N answer from the same stdin channel every other interactive
+/// prompt uses: a direct `std::io::stdin().read_line()` here raced with the
+/// background stdin task (setup_chat_environment), which could consume the
+/// user's answer as a chat line and hang the blocking read on a tokio worker.
+async fn safeguard_approval<'a>(
     filtered_calls: &'a [(String, String)],
     mode_runtime: Option<&dyn ModeRuntime>,
+    stdin_rx: &mut mpsc::Receiver<String>,
 ) -> SafeguardApprovalResult<'a> {
     let mode_kind = mode_runtime.map(|m| m.kind());
     let is_safeguard = matches!(mode_kind, Some(ModeKind::SafeGuard));
@@ -2421,8 +2449,13 @@ fn safeguard_approval<'a>(
             ansi!("0")
         );
         std::io::Write::flush(&mut std::io::stdout()).ok();
-        let mut input = String::new();
-        let _ = std::io::stdin().read_line(&mut input);
+        let input = tokio::select! {
+            line = stdin_rx.recv() => line.unwrap_or_default(),
+            _ = signal::ctrl_c() => {
+                eprintln!("\nCancelled.");
+                return Ok((filtered_calls, true));
+            }
+        };
         if !input.trim().eq_ignore_ascii_case("y") {
             eprintln!(
                 "{}SafeGuard: Operation cancelled by user.{}",

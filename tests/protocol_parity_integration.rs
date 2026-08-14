@@ -72,6 +72,32 @@ fallback = true
     fs::write(path, content).expect("failed to write parity config");
 }
 
+/// Config with a `local_echo` agent so ACP session/prompt streaming runs
+/// without any LLM/network (echoes the last user message as a single token).
+fn write_local_echo_session_config(path: &Path) {
+    let content = r#"default_phase = "coding"
+
+[flow]
+name = "ACP Session Test"
+phases = ["coding"]
+
+[runtime]
+protocol_mode = "mcp_stdio"
+maintenance_interval_seconds = 600
+health_interval_seconds = 600
+shutdown_drain_seconds = 1
+
+[agents.local_echo]
+type = "local_echo"
+
+[phases.coding]
+description = "Coding"
+agents = ["local_echo"]
+fallback = true
+"#;
+    fs::write(path, content).expect("failed to write local_echo session config");
+}
+
 /// An ACP and MCP stdio harness — sends JSON-RPC lines, receives responses.
 ///
 /// Uses an mpsc channel to read child stdout in a background thread, so that
@@ -164,6 +190,43 @@ impl StdioHarness {
                         if v.get("id") == Some(&json!(id)) {
                             return v;
                         }
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        panic!("did not receive response for id={id}");
+    }
+
+    /// Send a request and collect EVERY stdout line until the response for
+    /// `id` arrives — notifications (no `id` / `id: null`) included, in
+    /// arrival order. Used to assert on streamed `session/update`
+    /// notifications, which `recv` skips.
+    fn send_collect(
+        &mut self,
+        id: u64,
+        method: &str,
+        params: Option<Value>,
+    ) -> (Value, Vec<Value>) {
+        let mut msg = json!({ "jsonrpc": "2.0", "id": id, "method": method });
+        if let Some(p) = params {
+            msg["params"] = p;
+        }
+        let line = serde_json::to_string(&msg).expect("encode failed");
+        let stdin = self.stdin.as_mut().expect("stdin closed");
+        writeln!(stdin, "{line}").expect("write failed");
+        stdin.flush().expect("flush failed");
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut notifications = Vec::new();
+        while Instant::now() < deadline {
+            match self.rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(line) => {
+                    if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                        if v.get("id") == Some(&json!(id)) {
+                            return (v, notifications);
+                        }
+                        notifications.push(v);
                     }
                 }
                 Err(_) => continue,
@@ -445,5 +508,134 @@ fn acp_and_mcp_tool_count_consistent() {
     assert!(
         acp_count >= mcp_count,
         "ACP must expose at least as many tools as MCP; acp={acp_count} mcp={mcp_count}"
+    );
+}
+
+/// Extract the text payload of a `session/update` notification chunk.
+fn session_update_text(notification: &Value) -> Option<(String, String)> {
+    let update = notification.get("params")?.get("update")?;
+    let kind = update.get("sessionUpdate")?.as_str()?.to_string();
+    let text = update
+        .pointer("/content/text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    Some((kind, text))
+}
+
+/// Regression: `session/prompt` must stream the agent's message to the client
+/// as `agent_message_chunk` notifications (so the thread shows an actual
+/// answer), and must NOT inject pipeline phase-lifecycle markers
+/// (`[observe]`/`[think]`/`[act]`/`[reflect]`) into the thinking stream —
+/// those were previously converted into `agent_thought_chunk` noise that made
+/// the thinking look discontinuous, and a reasoning/tool-call-only turn could
+/// end with no message at all ("thinking 直接结束").
+#[test]
+fn acp_session_prompt_streams_message_without_phase_noise() {
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.toml");
+    write_local_echo_session_config(&cfg);
+    let mut h = StdioHarness::spawn(&cfg, "acp_stdio");
+
+    let init = acp_initialize(&mut h);
+    assert_success_shape(&init, "acp_session:initialize");
+
+    let new_resp = h.send(2, "session/new", Some(json!({"mode": "ask"})));
+    assert_success_shape(&new_resp, "acp_session:session/new");
+    let session_id = new_resp["result"]["sessionId"]
+        .as_str()
+        .expect("session/new must return sessionId")
+        .to_string();
+
+    let (prompt_resp, notifications) = h.send_collect(
+        3,
+        "session/prompt",
+        Some(json!({
+            "sessionId": session_id,
+            "prompt": [{"type": "text", "text": "hello from acp session"}],
+        })),
+    );
+    assert_success_shape(&prompt_resp, "acp_session:session/prompt");
+
+    // 1. The echoed input must reach the client as agent_message_chunk(s).
+    let mut message_text = String::new();
+    for n in &notifications {
+        if let Some((kind, text)) = session_update_text(n) {
+            if kind == "agent_message_chunk" {
+                message_text.push_str(&text);
+            }
+        }
+    }
+    assert!(
+        message_text.contains("hello from acp session"),
+        "agent_message_chunk must carry the echoed input; got: {message_text:?}"
+    );
+
+    // 2. No phase-lifecycle markers anywhere in the streamed text.
+    for n in &notifications {
+        if let Some((_kind, text)) = session_update_text(n) {
+            for marker in ["[observe]", "[think]", "[act]", "[reflect]"] {
+                assert!(
+                    !text.contains(marker),
+                    "streamed text must not contain phase marker {marker}; got: {text:?}"
+                );
+            }
+        }
+    }
+}
+
+/// Regression: a turn that streams ONLY reasoning (no content tokens) must
+/// still end with a message. The local_echo agent echoes the prompt verbatim,
+/// so a `__thinking__`-prefixed prompt produces a reasoning-only turn — the
+/// final response text then arrives only on the completion `result` event.
+/// Without the bridge's completion-response forwarding this turn ended on
+/// thinking alone ("thinking 直接结束").
+#[test]
+fn acp_session_prompt_reasoning_only_turn_still_ends_with_message() {
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.toml");
+    write_local_echo_session_config(&cfg);
+    let mut h = StdioHarness::spawn(&cfg, "acp_stdio");
+
+    let init = acp_initialize(&mut h);
+    assert_success_shape(&init, "acp_session_r:initialize");
+
+    let new_resp = h.send(2, "session/new", Some(json!({"mode": "ask"})));
+    assert_success_shape(&new_resp, "acp_session_r:session/new");
+    let session_id = new_resp["result"]["sessionId"]
+        .as_str()
+        .expect("session/new must return sessionId")
+        .to_string();
+
+    let (prompt_resp, notifications) = h.send_collect(
+        3,
+        "session/prompt",
+        Some(json!({
+            "sessionId": session_id,
+            "prompt": [{"type": "text", "text": "__thinking__hello from acp session"}],
+        })),
+    );
+    assert_success_shape(&prompt_resp, "acp_session_r:session/prompt");
+
+    // The echoed reasoning must arrive as a thought chunk...
+    let mut thought_text = String::new();
+    // ...and the turn must still end with a non-empty message chunk.
+    let mut message_text = String::new();
+    for n in &notifications {
+        if let Some((kind, text)) = session_update_text(n) {
+            match kind.as_str() {
+                "agent_thought_chunk" => thought_text.push_str(&text),
+                "agent_message_chunk" => message_text.push_str(&text),
+                _ => {}
+            }
+        }
+    }
+    assert!(
+        thought_text.contains("hello from acp session"),
+        "reasoning must be streamed as agent_thought_chunk; got: {thought_text:?}"
+    );
+    assert!(
+        !message_text.trim().is_empty(),
+        "a reasoning-only turn must still end with a message (completion response forwarded); got: {message_text:?}"
     );
 }

@@ -330,6 +330,11 @@ impl Tool for EditFileTool {
         // Perform the single replacement
         let new_content = content.replace(old_text, new_text);
 
+        // Same LAYER-2 write sandbox as write_file/apply_patch: the 50 MiB
+        // disk-exhaustion cap and system-path blocklist must not be bypassable
+        // via the edit path (previously only path containment was enforced).
+        crate::orchestration::tool::enforce_write_sandbox(&validated, &new_content)?;
+
         fs::write(&validated, &new_content).context("failed to write file after edit")?;
 
         info!(

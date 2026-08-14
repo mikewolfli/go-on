@@ -589,24 +589,20 @@ async fn stream_openai_sse(
                 task.abort();
                 return Ok(());
             }
-            // Forward "done" event: if it carries a response, send the final chunk
-            // with finish_reason="stop" and the SSE [DONE] signal, then return.
+            // Forward "done" event: the full response has already been
+            // streamed as per-token "chunk" deltas, so re-sending the whole
+            // text here would duplicate the answer for any OpenAI-compatible
+            // client that concatenates delta.content. Emit only an empty
+            // delta carrying finish_reason="stop" to terminate the stream;
+            // the "result" branch below handles responses that were never
+            // chunked (e.g. a mode-runtime recovery with no chunk frames).
             if frame.event == "done" {
-                let response_text = frame
-                    .payload
-                    .get("response")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if !response_text.is_empty() {
-                    let payload =
-                        build_openai_chunk(&request_id, &model, response_text, Some("stop"));
-                    let _ = write_openai_sse_data(socket, &payload).await;
-                    write_openai_sse_done(socket).await?;
-                    record_outcome(true);
-                    task.abort();
-                    return Ok(());
-                }
-                continue;
+                let payload = build_openai_chunk(&request_id, &model, "", Some("stop"));
+                let _ = write_openai_sse_data(socket, &payload).await;
+                write_openai_sse_done(socket).await?;
+                record_outcome(true);
+                task.abort();
+                return Ok(());
             }
 
             // Forward "result" event: the final pipeline result carries the complete
@@ -1837,6 +1833,70 @@ pub(crate) async fn handle_response_get(
     Ok(())
 }
 
+/// Emit the response-completion SSE sequence (`response.output_text.delta` →
+/// `response.token_economy` → `response.completed`) shared by the success and
+/// degraded-upstream branches of [`handle_response_stream`] — previously the
+/// two branches duplicated ~50 lines and could drift on event shapes. When
+/// `emit_done` is set the SSE stream is also terminated.
+async fn emit_responses_completed(
+    socket: &mut HttpStream,
+    server: &AcpServer,
+    params: &ChatParams,
+    request_id: &str,
+    model: &str,
+    text: &str,
+    emit_done: bool,
+) -> Result<()> {
+    let item_id = next_responses_api_id("msg");
+    write_sse_event(
+        socket,
+        "response.output_text.delta",
+        &serde_json::json!({
+            "type": "response.output_text.delta",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": text,
+            "item_id": item_id,
+            "response_id": request_id,
+        }),
+    )
+    .await?;
+
+    write_sse_event(
+        socket,
+        "response.token_economy",
+        &serde_json::json!({
+            "type": "response.token_economy",
+            "response_id": request_id,
+            "token_economy": crate::acp::r#impl::chat::estimate_token_economy(&params.messages, text),
+        }),
+    )
+    .await?;
+
+    let completed = attach_responses_token_economy(
+        build_responses_api_response(request_id, model, text),
+        &params.messages,
+        text,
+    );
+    let completed = inject_platform_profiles_if_absent(completed, "responses.api");
+    store_responses_api_payload(server, &completed);
+
+    write_sse_event(
+        socket,
+        "response.completed",
+        &serde_json::json!({
+            "type": "response.completed",
+            "response": completed,
+        }),
+    )
+    .await?;
+
+    if emit_done {
+        write_openai_sse_done(socket).await?;
+    }
+    Ok(())
+}
+
 /// Streaming (SSE) path for POST /v1/responses when stream=true.
 #[allow(clippy::too_many_arguments)]
 async fn handle_response_stream(
@@ -1923,100 +1983,30 @@ async fn handle_response_stream(
                     .get("response")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
-                let item_id = next_responses_api_id("msg");
-
-                write_sse_event(
+                emit_responses_completed(
                     socket,
-                    "response.output_text.delta",
-                    &serde_json::json!({
-                        "type": "response.output_text.delta",
-                        "output_index": 0,
-                        "content_index": 0,
-                        "delta": text,
-                        "item_id": item_id,
-                        "response_id": request_id,
-                    }),
-                )
-                .await?;
-
-                write_sse_event(
-                    socket,
-                    "response.token_economy",
-                    &serde_json::json!({
-                        "type": "response.token_economy",
-                        "response_id": request_id,
-                        "token_economy": crate::acp::r#impl::chat::estimate_token_economy(&params.messages, text),
-                    }),
-                )
-                .await?;
-
-                let completed = attach_responses_token_economy(
-                    build_responses_api_response(request_id, model, text),
-                    &params.messages,
+                    server.as_ref(),
+                    &params,
+                    request_id,
+                    model,
                     text,
-                );
-                let completed = inject_platform_profiles_if_absent(completed, "responses.api");
-                store_responses_api_payload(server.as_ref(), &completed);
-
-                write_sse_event(
-                    socket,
-                    "response.completed",
-                    &serde_json::json!({
-                        "type": "response.completed",
-                        "response": completed,
-                    }),
+                    false,
                 )
                 .await?;
             }
             Err(err) => {
                 if is_setup_or_upstream_unavailable(&err) {
                     let text = degraded_openai_message(&err);
-                    let item_id = next_responses_api_id("msg");
-
-                    write_sse_event(
+                    emit_responses_completed(
                         socket,
-                        "response.output_text.delta",
-                        &serde_json::json!({
-                            "type": "response.output_text.delta",
-                            "output_index": 0,
-                            "content_index": 0,
-                            "delta": text,
-                            "item_id": item_id,
-                            "response_id": request_id,
-                        }),
-                    )
-                    .await?;
-
-                    write_sse_event(
-                        socket,
-                        "response.token_economy",
-                        &serde_json::json!({
-                            "type": "response.token_economy",
-                            "response_id": request_id,
-                            "token_economy": crate::acp::r#impl::chat::estimate_token_economy(&params.messages, &text),
-                        }),
-                    )
-                    .await?;
-
-                    let completed = attach_responses_token_economy(
-                        build_responses_api_response(request_id, model, &text),
-                        &params.messages,
+                        server.as_ref(),
+                        &params,
+                        request_id,
+                        model,
                         &text,
-                    );
-                    let completed = inject_platform_profiles_if_absent(completed, "responses.api");
-                    store_responses_api_payload(server.as_ref(), &completed);
-
-                    write_sse_event(
-                        socket,
-                        "response.completed",
-                        &serde_json::json!({
-                            "type": "response.completed",
-                            "response": completed,
-                        }),
+                        true,
                     )
                     .await?;
-
-                    write_openai_sse_done(socket).await?;
                     return Ok(());
                 }
 

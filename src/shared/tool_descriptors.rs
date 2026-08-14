@@ -55,26 +55,28 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
 
         "apply_patch" => McpTool {
             name: name.to_string(),
-            description: Some("Apply a patch to a file or directory.".to_string()),
+            description: Some(
+                "Apply a unified diff patch to a file or directory via `git apply` (piped via stdin).".to_string(),
+            ),
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path to apply the patch to"},
-                    "patch_content": {"type": "string", "description": "The unified diff/patch content to apply"},
-                    "format": {"type": "string", "enum": ["unified", "git"], "description": "Patch format (default: unified)"}
+                    "patch": {"type": "string", "description": "The unified diff/patch content to apply"},
+                    "check": {"type": "boolean", "description": "If true, only validate the patch with `git apply --check` without applying it"},
+                    "directory": {"type": "string", "description": "Working directory to apply the patch in (default: current directory)"}
                 },
-                "required": ["path", "patch_content"]
+                "required": ["patch"]
             })),
         },
         "run_tests" => McpTool {
             name: name.to_string(),
-            description: Some("Run tests for a Rust project.".to_string()),
+            description: Some("Run tests for a project using an allowlisted command (cargo, npm, yarn, pnpm, make, go, python, pytest, mvn, gradle, git).".to_string()),
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "directory": {"type": "string", "description": "Project directory containing Cargo.toml"},
-                    "filter": {"type": "string", "description": "Optional test name filter"},
-                    "features": {"type": "string", "description": "Optional feature flags (e.g. '--features local')"}
+                    "directory": {"type": "string", "description": "Project directory to run the tests in"},
+                    "command": {"type": "string", "enum": ["cargo", "npm", "yarn", "pnpm", "make", "go", "python", "pytest", "mvn", "gradle", "git"], "description": "Test runner command (default: cargo)"},
+                    "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments passed to the command (default: [\"test\"])"}
                 },
                 "required": ["directory"]
             })),
@@ -1626,15 +1628,13 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
         },
         "game_matchmaking" => McpTool {
             name: name.to_string(),
-            description: Some("Launch a game for matchmaking with a working directory and arguments.".to_string()),
+            description: Some(
+                "Query the current Steam player count for a known game (cs2, dota 2, tf2, rust, gmod). For server details use game_server_query.".to_string(),
+            ),
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "game": {"type": "string", "description": "Game name"},
-                    "executable": {"type": "string", "description": "Executable path"},
-                    "working_directory": {"type": "string", "description": "Working directory"},
-                    "args": {"type": "array", "items": {"type": "string"}, "description": "Launch arguments"},
-                    "detached": {"type": "boolean", "description": "Run detached"}
+                    "game": {"type": "string", "description": "Game name (cs2, dota 2, tf2, rust, gmod)"}
                 },
                 "required": ["game"]
             })),
@@ -1754,15 +1754,18 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
         },
         "game_save_manager" => McpTool {
             name: name.to_string(),
-            description: Some("Manage game save files (list, backup, restore).".to_string()),
+            description: Some(
+                "Manage game save files: list, backup, restore, show info, or list known save-path games.".to_string(),
+            ),
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["list", "backup", "restore"], "description": "Save action"},
-                    "game": {"type": "string", "description": "Game name"},
-                    "path": {"type": "string", "description": "Save path"}
+                    "action": {"type": "string", "enum": ["list", "backup", "restore", "info", "known-games"], "description": "Save action"},
+                    "game": {"type": "string", "description": "Game name (not needed for known-games)"},
+                    "path": {"type": "string", "description": "Custom save path (skips known-path lookup)"},
+                    "backup_path": {"type": "string", "description": "Backup directory to restore from (required for restore)"}
                 },
-                "required": ["action", "game"]
+                "required": ["action"]
             })),
         },
         "game_achievements" => McpTool {

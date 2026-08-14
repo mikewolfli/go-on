@@ -344,24 +344,29 @@ mod e2e_tests {
         let result = resp
             .get("result")
             .expect("governance.status should return result");
+        let governance = result
+            .get("governance")
+            .expect("governance.status result should carry a governance object");
 
-        // Should contain bus-level metrics (hard assertions — previously the
-        // `if let Some(...)` guards let a missing key pass silently).
+        // Should contain bus-level metrics objects (hard assertions — previously
+        // the `if let Some(...)` guards let a missing key pass silently). The
+        // payload nests these under `governance`, so the original top-level
+        // assertion was stale (it could never pass).
         assert!(
-            result.get("harness_bus").is_some(),
+            governance.get("harness_bus").is_some(),
             "governance.status must report harness_bus metrics"
         );
         assert!(
-            result.get("capability_bus").is_some(),
+            governance.get("capability_bus").is_some(),
             "governance.status must report capability_bus metrics"
         );
         assert!(
-            result.get("harness_bus").unwrap().is_object(),
-            "harness_bus should be an object"
+            governance.get("harness_bus").unwrap().is_object(),
+            "governance.harness_bus should be an object"
         );
         assert!(
-            result.get("capability_bus").unwrap().is_object(),
-            "capability_bus should be an object"
+            governance.get("capability_bus").unwrap().is_object(),
+            "governance.capability_bus should be an object"
         );
 
         harness.wait_for_exit(Duration::from_secs(5));

@@ -562,15 +562,11 @@ pub(crate) fn build_token_economy(
 pub(crate) fn build_gate_matrix(
     requirement_gate: Value,
     gate_status: &str,
-    status2: &str,
-    status3: &str,
     check: Option<(&str, &str)>,
 ) -> Value {
     let mut gates = json!({
         "requirement": requirement_gate,
         "gate": gate_status,
-        "status2": status2,
-        "status3": status3,
     });
     if let Some((check_name, check_status)) = check {
         gates[check_name] = Value::String(check_status.to_string());
@@ -916,23 +912,7 @@ pub(crate) fn inject_platform_profiles_if_absent(mut result: Value, method: &str
             );
         }
         // Also inject standard profiles for these endpoints
-        let empty_params = json!({});
-        if !obj.contains_key("learning_profile") {
-            obj.insert(
-                "learning_profile".to_string(),
-                build_learning_profile(method, "", &empty_params),
-            );
-        }
-        if !obj.contains_key("knowledge_refinement") {
-            let lp = obj
-                .get("learning_profile")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            obj.insert(
-                "knowledge_refinement".to_string(),
-                build_knowledge_refinement_profile(method, "", &empty_params, &lp),
-            );
-        }
+        inject_standard_profiles(obj, method);
         return result;
     }
 
@@ -1005,6 +985,14 @@ pub(crate) fn inject_platform_profiles_if_absent(mut result: Value, method: &str
         return result;
     }
     // All semantic endpoints get full learning_profile + knowledge_refinement if not already present.
+    inject_standard_profiles(obj, method);
+    result
+}
+
+/// Inject the standard `learning_profile` + `knowledge_refinement` pair when
+/// absent — shared by the platform-metadata and generic semantic branches of
+/// [`inject_platform_profiles_if_absent`] (previously two identical blocks).
+fn inject_standard_profiles(obj: &mut serde_json::Map<String, Value>, method: &str) {
     let empty_params = json!({});
     if !obj.contains_key("learning_profile") {
         obj.insert(
@@ -1022,7 +1010,6 @@ pub(crate) fn inject_platform_profiles_if_absent(mut result: Value, method: &str
             build_knowledge_refinement_profile(method, "", &empty_params, &lp),
         );
     }
-    result
 }
 
 #[cfg(test)]
@@ -1386,7 +1373,7 @@ mod tests {
     #[test]
     fn build_gate_matrix_includes_check() {
         let req_gate = json!({"required": true});
-        let gates = build_gate_matrix(req_gate, "open", "pass", "fail", Some(("custom", "ok")));
+        let gates = build_gate_matrix(req_gate, "open", Some(("custom", "ok")));
         assert_eq!(gates["gate"], "open");
         assert_eq!(gates["custom"], "ok");
     }
@@ -1394,7 +1381,7 @@ mod tests {
     #[test]
     fn build_gate_matrix_no_check() {
         let req_gate = json!({"required": false});
-        let gates = build_gate_matrix(req_gate, "closed", "pass", "fail", None);
+        let gates = build_gate_matrix(req_gate, "closed", None);
         assert_eq!(gates["requirement"]["required"], false);
         assert!(gates.get("custom").is_none());
     }

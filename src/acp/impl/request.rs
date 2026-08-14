@@ -99,7 +99,10 @@ mod repro_pack;
 mod runtime_pack;
 mod status_pack;
 pub(crate) mod tools_pack;
-mod trace_pack;
+// `pub(crate)`: the trace sink is called directly by the chat session handler
+// and the workflow pack (the former `request::record_trace_event` pass-through
+// wrapper was removed as pure indirection).
+pub(crate) mod trace_pack;
 mod util;
 pub(crate) mod workflow_pack;
 use self::chat_pack::{parse_messages, send_error};
@@ -138,33 +141,6 @@ pub(crate) fn append_trace_event(event: TraceEvent) {
         let overflow = guard.len() - 2048;
         guard.drain(0..overflow);
     }
-}
-
-/// Record a structured trace event via the trace sink.
-///
-/// Public wrapper over `trace_pack::record_trace_event` so sibling modules
-/// (e.g. the chat session handler) can emit lifecycle trace events.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn record_trace_event(
-    server: &AcpServer,
-    trace: &RequestTraceContext,
-    event_type: &str,
-    status: &str,
-    stage: &str,
-    inputs: Value,
-    outputs: Option<Value>,
-    duration_ms: u64,
-) {
-    self::trace_pack::record_trace_event(
-        server,
-        trace,
-        event_type,
-        status,
-        stage,
-        inputs,
-        outputs,
-        duration_ms,
-    );
 }
 
 // GAP-B50-36: Authenticate a JSON-RPC request before dispatch.
@@ -681,7 +657,7 @@ pub async fn handle_request(
         )
     };
 
-    record_trace_event(
+    self::trace_pack::record_trace_event(
         server,
         &trace,
         "request.start",
@@ -2441,7 +2417,7 @@ pub async fn handle_request(
         .record_request_outcome(success, duration_ms as f64);
     server.observability.metrics.dec_active_requests();
 
-    record_trace_event(
+    self::trace_pack::record_trace_event(
         server,
         &trace,
         "request.complete",

@@ -182,6 +182,27 @@ pub(crate) async fn handle_http_connection(
     // Compute CORS headers for this request (empty string when disabled)
     let cors_headers = compute_cors_response_headers(parsed.header_part, server.as_ref());
 
+    // HTTP/1.1 requires a Host header (RFC 7230 §5.4): reject malformed
+    // requests without one instead of silently serving them. HTTP/1.0
+    // requests (no "HTTP/1.1" in the request line) may legitimately omit
+    // Host. Enforced by http_accept_matrix_integration.
+    let request_line = parsed.header_part.lines().next().unwrap_or("");
+    let has_host = parsed.header_part.lines().skip(1).any(|l| {
+        l.split_once(':')
+            .is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case("host"))
+    });
+    if request_line.contains("HTTP/1.1") && !has_host {
+        write_http_json_response_with_context(
+            socket,
+            400,
+            serde_json::json!({"error": t("error.invalid_request")}),
+            "chat",
+            &cors_headers,
+        )
+        .await?;
+        return Ok(());
+    }
+
     // Extract user session if user auth is enabled
     let user_session: Option<crate::acp::r#impl::session::UserSession> =
         server.session.session_manager.as_ref().and_then(|sm| {

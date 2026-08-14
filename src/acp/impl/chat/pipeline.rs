@@ -70,14 +70,13 @@ impl PhaseTiming {
 
 // ── Pipeline outcome ─────────────────────────────────────────────────────
 
-/// Rich outcome of a pipeline run, including timing and phase-level results.
-/// Fields `timing`, `phase_name`, `mode` are kept on the struct for future
-/// observability wiring. The struct itself is pub(crate) via the run() method.
+/// Rich outcome of a pipeline run.
+/// `timing`/`phase_name`/`mode` were previously duplicated onto the struct
+/// solely to re-log the same per-phase timings in `process_chat_request`;
+/// that duplicate log was removed and the fields were dropped (the timing
+/// record lives in [`ChatPipeline::run`]).
 pub struct PipelineOutcome {
     pub result: Value,
-    pub timing: PhaseTiming,
-    pub phase_name: String,
-    pub mode: String,
 }
 
 // ── ChatPipeline ─────────────────────────────────────────────────────────
@@ -223,12 +222,7 @@ impl ChatPipeline {
                 timing.total_ms,
                 "skipped reflect phase — cache hit",
             );
-            return Ok(PipelineOutcome {
-                result,
-                timing,
-                phase_name: resolve_out.phase_name.clone(),
-                mode: params.mode.clone(),
-            });
+            return Ok(PipelineOutcome { result });
         }
 
         // ── Phase 4: Reflect ───────────────────────────────────────
@@ -285,12 +279,7 @@ impl ChatPipeline {
             "chat pipeline completed",
         );
 
-        Ok(PipelineOutcome {
-            result,
-            timing,
-            phase_name: resolve_out.phase_name.clone(),
-            mode: params.mode.clone(),
-        })
+        Ok(PipelineOutcome { result })
     }
 
     // ── OTel span helper ──────────────────────────────────────────────

@@ -901,20 +901,7 @@ impl VectorStore {
                 // BLUE69: Batch all hit count updates into a single SQL statement
                 // to avoid N individual UPDATE round-trips per search result.
                 if !scored.is_empty() {
-                    let placeholders: Vec<String> =
-                        (0..scored.len()).map(|i| format!("?{}", i + 1)).collect();
-                    let sql = format!(
-                        "UPDATE vector_memory SET hit_count = hit_count + 1, last_hit_at = ?{n_plus_1} WHERE memory_key IN ({})",
-                        placeholders.join(", "),
-                        n_plus_1 = scored.len() + 1
-                    );
-                    let mut params: Vec<&dyn rusqlite::types::ToSql> =
-                        Vec::with_capacity(scored.len() + 1);
-                    for (memory_key, _, _) in &scored {
-                        params.push(memory_key);
-                    }
-                    params.push(&now);
-                    conn.execute(&sql, params.as_slice())?;
+                    bump_hit_counts(&conn, &scored, now)?;
                 }
 
                 scored
@@ -1212,31 +1199,11 @@ impl VectorStore {
             poisoned.into_inner()
         });
         if !scored.is_empty() {
-            let placeholders: Vec<String> =
-                (0..scored.len()).map(|i| format!("?{}", i + 1)).collect();
-            let sql = format!(
-                "UPDATE vector_memory SET hit_count = hit_count + 1, last_hit_at = ?{n_plus_1} WHERE memory_key IN ({})",
-                placeholders.join(", "),
-                n_plus_1 = scored.len() + 1
-            );
-            let mut params: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(scored.len() + 1);
-            for (memory_key, _, _) in &scored {
-                params.push(memory_key);
-            }
-            params.push(&now);
-            let _ = conn.execute(&sql, params.as_slice());
+            bump_hit_counts(&conn, &scored, now)?;
         }
         drop(conn);
 
-        let hits: Vec<VectorHit> = scored
-            .into_iter()
-            .map(|(_, blended_score, response_text)| VectorHit {
-                similarity: blended_score,
-                response_snippet: trim_chars(&response_text, max_snippet_chars),
-            })
-            .collect();
-
-        let feedback = VectorPrecisionFeedback::new(&hits);
+        let (hits, feedback) = scored_to_hits(scored, top_k, max_snippet_chars);
         Ok((hits, feedback))
     }
 }
@@ -1431,6 +1398,30 @@ fn scored_to_hits(
         .collect();
     let feedback = VectorPrecisionFeedback::new(&hits);
     (hits, feedback)
+}
+
+/// Batch-increment `hit_count`/`last_hit_at` for the given scored keys in a
+/// single SQL `IN` statement. Shared by the SQLite and HNSW search paths —
+/// previously each had a verbatim copy of the placeholder-building loop.
+#[cfg(not(feature = "backend-postgres"))]
+fn bump_hit_counts(
+    conn: &rusqlite::Connection,
+    scored: &[(String, f32, String)],
+    now: i64,
+) -> anyhow::Result<()> {
+    let placeholders: Vec<String> = (0..scored.len()).map(|i| format!("?{}", i + 1)).collect();
+    let sql = format!(
+        "UPDATE vector_memory SET hit_count = hit_count + 1, last_hit_at = ?{n_plus_1} WHERE memory_key IN ({})",
+        placeholders.join(", "),
+        n_plus_1 = scored.len() + 1
+    );
+    let mut params: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(scored.len() + 1);
+    for (memory_key, _, _) in scored {
+        params.push(memory_key);
+    }
+    params.push(&now);
+    conn.execute(&sql, params.as_slice())?;
+    Ok(())
 }
 
 fn build_memory_key(phase: &str, query_text: &str) -> String {

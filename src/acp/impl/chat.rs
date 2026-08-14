@@ -671,18 +671,8 @@ pub(crate) async fn process_chat_request(
     let outcome =
         ChatPipeline::run(server, params, stream_observer.clone(), trace, span, ctx).await?;
 
-    // Log pipeline phase timing for observability
-    info!(
-        target: "chat_pipeline",
-        mode = outcome.mode,
-        phase = outcome.phase_name,
-        outcome.timing.observe_ms,
-        outcome.timing.think_ms,
-        outcome.timing.act_ms,
-        outcome.timing.reflect_ms,
-        outcome.timing.total_ms,
-        "chat pipeline completed",
-    );
+    // NOTE: `ChatPipeline::run` already logs the per-phase timings
+    // ("chat pipeline completed") — this duplicate record was removed.
 
     let result = outcome.result;
 
@@ -718,6 +708,16 @@ pub(crate) async fn process_chat_request(
                 status: None,
             });
         } else {
+            // Agent produced no response text (e.g. the autonomy loop ended
+            // with reasoning/tool calls only). Still emit a non-empty final
+            // response so streaming clients never see a turn that ends on
+            // thinking alone — otherwise the ACP bridge has nothing to
+            // forward and the thread ends silently.
+            let response_text = if response_text.is_empty() {
+                crate::i18n::runtime::t("error.chat.no_response_from_pipeline")
+            } else {
+                response_text.to_string()
+            };
             let payload = serde_json::json!({
                 "response": response_text,
                 "agent": agent,

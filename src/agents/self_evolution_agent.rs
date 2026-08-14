@@ -804,12 +804,15 @@ impl SelfEvolutionAgent {
         let mut patched: Vec<(usize, String)> = Vec::new();
         let mut base_line: Option<usize> = None;
 
+        // Prefix detection must use the RAW line, not `line.trim()`: the
+        // leading space of a context line IS its marker, and trimming it made
+        // context lines unrecognizable (and silently let "-" removals advance
+        // the new-file counter).
         for line in &lines {
-            let trimmed = line.trim();
             // Unified diff hunk header: @@ -old_line,old_count +new_line,new_count @@
-            if trimmed.starts_with("@@ -") && trimmed.contains(" @@") {
+            if line.starts_with("@@ -") && line.contains(" @@") {
                 // Parse the target line number from the "+new_line,new_count" part
-                let hunk_parts: Vec<&str> = trimmed.split_whitespace().collect();
+                let hunk_parts: Vec<&str> = line.split_whitespace().collect();
                 if hunk_parts.len() >= 2 {
                     // hunk_parts[1] is "-old_line,old_count", hunk_parts[2] is "+new_line,new_count"
                     let target = hunk_parts
@@ -826,23 +829,23 @@ impl SelfEvolutionAgent {
                 continue;
             }
 
-            // Only process addition lines ("+") and context lines (" ") from the new file.
-            if let Some(rest) = trimmed.strip_prefix('+') {
+            // Addition lines ("+") produce patches and advance the counter.
+            if let Some(rest) = line.strip_prefix('+') {
                 let content_line = rest.trim_end().to_string();
                 if let Some(bl) = base_line.as_mut() {
                     patched.push((*bl, content_line));
                     *bl = bl.saturating_add(1);
                 }
-            } else if trimmed.starts_with(' ') || trimmed.starts_with('-') {
-                // Context lines advance the base line counter
+            } else if line.starts_with(' ') {
+                // Context lines advance the new-file counter. Removal lines
+                // ("-") exist only in the OLD file, so they must NOT advance
+                // it — advancing would skew every patched line number after
+                // the removal. (The previous code trimmed the leading space,
+                // so context lines were never recognized and removals advanced
+                // the counter instead.)
                 if let Some(bl) = base_line.as_mut() {
                     *bl = bl.saturating_add(1);
                 }
-            }
-            // Remove lines, index lines, and blank lines are ignored by the counter progression
-            // but we still need to track context lines so line numbers stay accurate.
-            if trimmed.starts_with('-') {
-                // Removal lines don't advance the new-file line number
             }
         }
 
@@ -1093,13 +1096,6 @@ impl SelfEvolutionAgent {
                             && !trimmed.starts_with("//")
                         {
                             lines[ln - 1] = format!("{};", line);
-                            fixes += 1;
-                        }
-                    }
-                    // Handle "unused import" (alternate message)
-                    else if err_lower.contains("unused import") {
-                        if !line.trim_start().starts_with("//") {
-                            lines[ln - 1] = format!("// {}", line);
                             fixes += 1;
                         }
                     }
@@ -1408,6 +1404,25 @@ mod tests {
         let instruction = "@@ -0,0 +0,1 @@\n+let x = 1;\n";
         let patched = agent.parse_unified_diff_patch("", instruction);
         assert!(patched.is_none() || patched.as_ref().unwrap().iter().all(|(ln, _)| *ln >= 1));
+    }
+
+    #[test]
+    fn test_parse_unified_diff_removal_lines_do_not_advance_new_file_line() {
+        // Regression: removal ("-") lines exist only in the OLD file, so they
+        // must not advance the new-file line counter. The previous code
+        // advanced on removals (and left a no-op `if` block whose comment
+        // claimed the opposite), skewing every patched line number after a
+        // removal.
+        let (agent, _tmp_dir) = create_test_agent();
+        // Hunk: old lines 3-5 removed, new file context starts at line 3.
+        let instruction = "@@ -3,5 +3,2 @@\n-fn removed() {}\n fn kept() {}\n+fn added() {}\n";
+        let patched = agent
+            .parse_unified_diff_patch("", instruction)
+            .expect("diff should parse");
+        // Patches are produced for ADDITION lines only; the context line at
+        // new-file line 3 advances the counter (the removal does not), so the
+        // addition lands at new-file line 4.
+        assert_eq!(patched, vec![(4, "fn added() {}".to_string())]);
     }
 
     #[test]

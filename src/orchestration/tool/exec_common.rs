@@ -56,18 +56,22 @@ pub fn truncate_output(s: &mut String) {
 #[allow(clippy::too_many_arguments)]
 pub fn build_shell_tool_output(
     success: bool,
-    stdout: String,
-    stderr: String,
+    mut stdout: String,
+    mut stderr: String,
     exit_code: Option<i32>,
     command: &str,
     directory: &str,
     tool_name: &str,
     sandbox: &str,
 ) -> ToolOutput {
-    let mut audit_stdout = stdout.clone();
-    let mut audit_stderr = stderr.clone();
-    truncate_output(&mut audit_stdout);
-    truncate_output(&mut audit_stderr);
+    // Enforce the output cap at this single choke point: previously the
+    // truncated clones (`audit_stdout`/`audit_stderr`) were never referenced
+    // while the returned payload embedded the *untruncated* buffers, so the
+    // 10 MiB OOM guard only worked for callers that happened to truncate
+    // before calling this builder (shell.rs success path) and never for the
+    // timeout path.
+    truncate_output(&mut stdout);
+    truncate_output(&mut stderr);
 
     ToolOutput {
         success,
@@ -95,14 +99,18 @@ pub fn build_shell_tool_output(
 /// Build a timeout ToolOutput for a shell command that exceeded its time limit.
 #[allow(clippy::too_many_arguments)]
 pub fn build_timeout_tool_output(
-    stdout: String,
-    stderr: String,
+    mut stdout: String,
+    mut stderr: String,
     command: &str,
     directory: &str,
     timeout_ms: u64,
     tool_name: &str,
     sandbox: &str,
 ) -> ToolOutput {
+    // Apply the same output cap as the success path: a chatty command that
+    // times out must not leak unbounded output into the result payload.
+    truncate_output(&mut stdout);
+    truncate_output(&mut stderr);
     ToolOutput {
         success: false,
         result: Some(serde_json::json!({

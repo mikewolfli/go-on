@@ -1693,9 +1693,12 @@ mod tests {
     #[tokio::test]
     async fn test_circuit_breaker_half_open() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
-        // Use a very short timeout so the test doesn't take long.
+        // Recovery timeout must be large enough that the "immediately after
+        // trip" assertion cannot race the timeout under parallel-test load
+        // (a 1 ms timeout let scheduler delay flip Open→HalfOpen early and
+        // flaked the test).
         engine
-            .register_circuit_breaker("cb-cache", 1, 1)
+            .register_circuit_breaker("cb-cache", 1, 1000)
             .await
             .expect("register_circuit_breaker should succeed");
 
@@ -1711,8 +1714,8 @@ mod tests {
         // Immediately — not available, still open.
         assert!(!engine.is_available("cb-cache").await);
 
-        // Wait for the recovery timeout (1 ms + some slack).
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        // Wait for the recovery timeout (1000 ms + some slack).
+        tokio::time::sleep(Duration::from_millis(1100)).await;
 
         // Now probe should transition to half-open and return true.
         assert!(engine.probe("cb-cache").await);
@@ -1722,8 +1725,11 @@ mod tests {
     #[tokio::test]
     async fn test_circuit_breaker_resets_on_success() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        // 1000 ms recovery timeout: large enough that the "still open right
+        // after the trip" assertion cannot race the timeout under parallel
+        // test load (a 1 ms timeout flaked under scheduler delay).
         engine
-            .register_circuit_breaker("cb-api", 1, 1)
+            .register_circuit_breaker("cb-api", 1, 1000)
             .await
             .expect("register_circuit_breaker should succeed");
 
@@ -1735,7 +1741,7 @@ mod tests {
         assert!(!engine.is_available("cb-api").await);
 
         // Wait for recovery timeout.
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(1100)).await;
 
         // Now probe transitions to half-open.
         assert!(engine.probe("cb-api").await);

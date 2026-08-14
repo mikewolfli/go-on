@@ -484,6 +484,37 @@ async fn process_stream_events(
                             )
                             .await;
                         }
+                        "status" => {
+                            // Lightweight progress indicator ("Thinking...",
+                            // "Checking for prompt injection...", ...). Shown
+                            // as status text, never injected into thinking.
+                            let message = val
+                                .get("message")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if !message.is_empty() {
+                                send_pending(tx, PendingResponse::AgentStatus { message }).await;
+                            }
+                        }
+                        "phase_start" => {
+                            // Pipeline lifecycle transitions carry progress
+                            // descriptions ("Scanning project structure..."
+                            // (1/4)). Surface the start description as a status
+                            // text; phase_end is a completion echo and is
+                            // skipped to avoid status flicker. This keeps
+                            // lifecycle progress out of the thinking panel.
+                            let desc = val
+                                .get("description")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if !desc.is_empty() {
+                                send_pending(tx, PendingResponse::AgentStatus { message: desc })
+                                    .await;
+                            }
+                        }
+                        "phase_end" => {}
                         "tool_approval" => {
                             let tool_name = val
                                 .get("tool_name")
@@ -987,6 +1018,7 @@ impl ChatView {
         self.sending = true;
         self.error.clear();
         self.stop_requested = false;
+        self.stream_status.clear();
 
         (now, outbound_msg)
     }
@@ -1353,6 +1385,15 @@ impl ChatView {
                         self.model_state.selected_model = "auto".to_string();
                     }
                 }
+                PendingResponse::AgentStatus { message } => {
+                    // Live progress status shown in the AI thinking indicator.
+                    // Cleared when the generation completes or a chunk arrives.
+                    self.stream_status = message;
+                    if self.stream_status.len() > 120 {
+                        self.stream_status.truncate(120);
+                        self.stream_status.push_str("...");
+                    }
+                }
                 PendingResponse::StreamChunk {
                     generation_id,
                     token,
@@ -1644,6 +1685,8 @@ impl ChatView {
                     // Reset streaming progress on completion
                     self.stream_state.stream_progress = TokenProgress::default();
                     self.stream_state.abort_controller = None;
+                    // Clear live status text — the generation is done
+                    self.stream_status.clear();
                 }
                 PendingResponse::Error {
                     generation_id,
@@ -1786,6 +1829,8 @@ impl ChatView {
                     // Reset streaming progress on error
                     self.stream_state.stream_progress = TokenProgress::default();
                     self.stream_state.abort_controller = None;
+                    // Clear live status text on error
+                    self.stream_status.clear();
                 }
                 PendingResponse::SubAgentEvent {
                     generation_id,

@@ -1525,26 +1525,7 @@ pub(crate) async fn handle_task_execute(
         "failed"
     };
 
-    // Review gate status reflects the real review verdict + execution outcome
-    // (mirrors workflow.execute's honest gate reporting).
-    let review_approved = reviews
-        .iter()
-        .all(|r| r.get("verdict").and_then(Value::as_str) == Some("APPROVE"));
-    let review_gate_status = if review_policy.required_reviews == 0 {
-        "not_required"
-    } else if review_approved && execution_report.subtasks_failed == 0 {
-        "passed"
-    } else {
-        "rejected"
-    };
-
-    let gates = build_gate_matrix(
-        json!({"confirmed": true}),
-        execution_status,
-        review_gate_status,
-        "not_run",
-        None,
-    );
+    let gates = build_gate_matrix(json!({"confirmed": true}), execution_status, None);
     let change_bundle = build_change_bundle(
         "execution_summary",
         format!(

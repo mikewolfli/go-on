@@ -1354,7 +1354,14 @@ pub fn show_messages(chat: &mut ChatView, ui: &mut egui::Ui, i18n: &I18n) {
                         draw_role_avatar(ui, false);
                         ui.add_space(6.0);
                         ui.add(egui::Spinner::new());
-                        ui.colored_label(weak_text, i18n.t("chat.thinking"));
+                        if chat.stream_status.is_empty() {
+                            ui.colored_label(weak_text, i18n.t("chat.thinking"));
+                        } else {
+                            ui.colored_label(
+                                weak_text,
+                                format!("{} — {}", i18n.t("chat.thinking"), chat.stream_status),
+                            );
+                        }
                     });
                     ui.add_space(6.0);
                 }

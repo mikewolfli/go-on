@@ -75,9 +75,20 @@ impl Tool for DiagnosticsTool {
         );
 
         Ok(ToolOutput {
-            success: true,
+            success,
             result: Some(result),
-            error: None,
+            // Propagate the real exit status: `cargo check` failing (compile
+            // errors) must surface as a failed tool so the circuit breaker and
+            // ACP `completed` events reflect the actual outcome. Error text is
+            // bounded to the first stderr line so the field never balloons.
+            error: (!success).then(|| {
+                stderr
+                    .trim()
+                    .lines()
+                    .next()
+                    .unwrap_or("cargo check failed")
+                    .to_string()
+            }),
             verification: Some("diagnostics_checked".to_string()),
             audit_log: Some(format!(
                 "diagnostics: {} errors, {} warnings, exit={}",

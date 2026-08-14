@@ -139,13 +139,7 @@ impl FlowManager {
         // Unknown phase: silently fall back to the configured default phase.
         // This prevents errors when a GUI session has a stale phase value
         // (e.g. "act" from an older config) that no longer exists in [flow].phases.
-        if !self
-            .config
-            .flow
-            .phases
-            .iter()
-            .any(|name| name == &phase_name)
-        {
+        if !self.has_phase(&phase_name) {
             let fallback = self.config.default_phase().to_string();
             warn!(
                 "phase '{}' not in [flow].phases ({:?}), falling back to default '{}'",
@@ -213,41 +207,6 @@ impl FlowManager {
     }
 
     // ── Model selection (merged from FlowModelSelector) ────────────────
-
-    /// Resolve phase and select model in a single call.
-    /// Replaces the two-step pattern of `resolve()` + `FlowModelSelector::resolve_with_model_selection()`.
-    pub fn resolve_with_model(
-        &self,
-        ctx: &OrchestrationContext,
-        requested_phase: Option<String>,
-        registry: &AgentRegistry,
-        task_description: Option<&str>,
-    ) -> Result<ResolvedRoutingWithModel> {
-        let routing = self.resolve(requested_phase, registry)?;
-        let agent_selection = routing
-            .agents
-            .first()
-            .map(|(_, agent_arc)| {
-                Self::select_model_for_agent(
-                    ctx,
-                    agent_arc.as_ref(),
-                    &self.config,
-                    task_description,
-                )
-            })
-            .unwrap_or_else(|| AgentModelSelection {
-                selected_model: None,
-                selection_strategy: Self::selection_strategy(&self.config),
-                task_complexity: Self::analyze_task_complexity(task_description),
-            });
-
-        Ok(ResolvedRoutingWithModel {
-            routing,
-            selected_model: agent_selection.selected_model,
-            selection_strategy: agent_selection.selection_strategy,
-            task_complexity: agent_selection.task_complexity,
-        })
-    }
 
     pub(crate) fn select_model_for_agent(
         ctx: &OrchestrationContext,
@@ -345,15 +304,6 @@ impl FlowManager {
 // ---------------------------------------------------------------------------
 // Model selection types (merged from flow_with_models.rs)
 // ---------------------------------------------------------------------------
-
-/// Extended routing information with selected model.
-/// Returned by [`FlowManager::resolve_with_model`].
-pub struct ResolvedRoutingWithModel {
-    pub routing: ResolvedRouting,
-    pub selected_model: Option<ModelInfo>,
-    pub selection_strategy: ModelSelectionStrategy,
-    pub task_complexity: u8,
-}
 
 /// Intermediate result for model selection per agent.
 pub struct AgentModelSelection {

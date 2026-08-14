@@ -1085,35 +1085,23 @@ impl ModeRuntime for GenericModeRuntime {
     }
 
     fn allowed_tools(&self) -> Vec<String> {
-        let tools: Vec<&'static str> = match self.kind {
-            ModeKind::Ask => return vec![],
-            ModeKind::Plan => plan_tools(),
-            ModeKind::Edit | ModeKind::FullAuto => all_exec_tools(),
-            ModeKind::SafeGuard => {
-                // In-repo constant: `degrade_policy` is only ever the default
-                // (`AutoDegradePolicy::ReadOnly` — `GenericModeRuntime::new`),
-                // so the SafeGuard tool surface is always the read-only set.
-                // The `all_exec_tools()` arm is only reachable by out-of-tree
-                // consumers that construct a runtime with a non-default policy.
-                if matches!(self.degrade_policy, AutoDegradePolicy::ReadOnly) {
-                    read_only_tools()
-                } else {
-                    all_exec_tools()
-                }
-            }
-        };
-
-        tools.iter().map(|s| s.to_string()).collect()
+        let (allowed, _) = policy_for_kind(&self.kind);
+        // In-repo constant: `degrade_policy` is only ever the default
+        // (`AutoDegradePolicy::ReadOnly` — `GenericModeRuntime::new`), so the
+        // SafeGuard widening below is unreachable in-repo. Kept for out-of-tree
+        // consumers that construct a runtime with a non-default policy.
+        if matches!(self.kind, ModeKind::SafeGuard)
+            && !matches!(self.degrade_policy, AutoDegradePolicy::ReadOnly)
+        {
+            return all_exec_tools().into_iter().map(String::from).collect();
+        }
+        allowed
     }
 
     fn max_tool_calls(&self) -> usize {
-        match self.kind {
-            ModeKind::Ask => 0,
-            ModeKind::Plan => 3,
-            ModeKind::Edit => 20,
-            ModeKind::FullAuto => 50,
-            ModeKind::SafeGuard => 30,
-        }
+        // Single source of truth: `policy_for_kind` owns the per-mode
+        // max-call table shared with the ACP tool-execution gate.
+        policy_for_kind(&self.kind).1
     }
 
     fn is_high_risk_operation(&self, objective: &str) -> bool {
@@ -1143,8 +1131,9 @@ impl ModeRuntime for GenericModeRuntime {
 // single shared implementation.
 
 /// Resolve the tool policy for a mode kind: allowed tools + max tool calls.
-/// Mirrors `GenericModeRuntime::allowed_tools`/`max_tool_calls` with the
-/// in-repo SafeGuard default (`AutoDegradePolicy::ReadOnly`).
+/// Single source of truth for the per-mode tool surface and max-call cap,
+/// consumed by the ACP tool-execution gate (`filter_tool_calls_by_policy`)
+/// and by `GenericModeRuntime::allowed_tools`/`max_tool_calls` (the CLI path).
 pub fn policy_for_kind(kind: &ModeKind) -> (Vec<String>, usize) {
     let allowed: Vec<String> = match kind {
         ModeKind::Ask => return (Vec::new(), 0),

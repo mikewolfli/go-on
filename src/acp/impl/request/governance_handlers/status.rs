@@ -1308,6 +1308,28 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
         })
         .unwrap_or((0, 0));
 
+    // Real HarnessBus counters (governance_profile snapshot) — the e2e
+    // contract requires `governance.harness_bus` to be a metrics object, not
+    // just the boolean in `governance_modules`.
+    let harness_bus_metrics = server
+        .governance_deps
+        .harness_bus
+        .as_ref()
+        .map(|hb| serde_json::to_value(hb.governance_profile()).unwrap_or_default())
+        .unwrap_or_else(|| json!({ "active": false }));
+
+    // CapabilityBus profile snapshot (Serialize-derived, reflects the compiled
+    // sub-bus feature set).
+    let capability_bus_metrics = server
+        .governance_deps
+        .capability_bus
+        .as_ref()
+        .map(|cb| {
+            let p = cb.profile.read().map(|p| p.clone()).unwrap_or_default();
+            serde_json::to_value(p).unwrap_or_else(|_| json!({ "active": false }))
+        })
+        .unwrap_or_else(|| json!({ "active": false }));
+
     Ok(json!({
         "ok": true,
         "governance": {
@@ -1450,9 +1472,6 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
             },
             "intelligence_hub": {
                 "hub_metrics": crate::intelligence::hub::hub_metrics(),
-            },
-            "blue35_release_closure": {
-                "ready": blue35_release_closure_ready,
             },
             "dual_track": {
                 "consistency_ready": dual_track_consistency_ready,
@@ -1647,105 +1666,62 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
             "fault_injection_recovery_recheck": json!({ "ready": fault_injection_recovery_recheck_ready }),
             "blue34_release_closure": blue34_release_closure_profile,
             "blue35_release_closure": blue35_release_closure_profile,
-            "profiles": {
-                "skill_management_console": skill_management_console_profile,
-                "enterprise_skill_controls": enterprise_skill_controls_profile,
-                "core_mode_consistency": core_mode_consistency_profile,
-                "mode_scenario_adaptability": mode_scenario_adaptability_profile,
-                "cross_mode_quality_assurance": cross_mode_quality_assurance_profile,
-                "mode_issue_prevention": mode_issue_prevention_profile,
-                "subagent_architecture": subagent_architecture_profile,
-                "subagent_collaboration": subagent_collaboration_profile,
-                "communication_bus": crate::orchestration::tool_extended::spawn_agent::communication_bus()
-                    .map(|bus| {
-                        let p = bus.profile_sync();
+            // `communication_bus` and `evolution_graph` were the only keys unique
+            // to the former `"profiles"` wrapper block; every other key there
+            // duplicated the identically-named top-level profile above it. The
+            // wrapper is removed and the two unique entries live at top level.
+            "communication_bus": crate::orchestration::tool_extended::spawn_agent::communication_bus()
+                .map(|bus| {
+                    let p = bus.profile_sync();
+                    json!({
+                        "ready": p.healthy,
+                        "registered_agents": p.registered_agents,
+                        "messages_sent": p.messages_sent,
+                        "forks_created": p.forks_created,
+                    })
+                })
+                .unwrap_or_else(|| json!({"ready": false, "registered_agents": 0})),
+            "evolution_graph": {
+                "ready": true,
+                "profile": server
+                    .governance_deps
+                    .capability_bus
+                    .as_ref()
+                    .map(|cb| {
+                        let g = cb.evolution_graph.lock().unwrap_or_else(|e| e.into_inner());
+                        let p = g.profile();
                         json!({
-                            "ready": p.healthy,
-                            "registered_agents": p.registered_agents,
-                            "messages_sent": p.messages_sent,
-                            "forks_created": p.forks_created,
+                            "total": p.total_capabilities,
+                            "mature": p.mature_count,
+                            "degrading": p.degrading_count,
+                            "deprecated": p.deprecated_count,
                         })
                     })
-                    .unwrap_or_else(|| json!({"ready": false, "registered_agents": 0})),
-                "subagent_observability": subagent_observability_profile,
-                "knowledge_management": knowledge_management_profile,
-                "performance_optimization": performance_optimization_profile,
-                "enterprise_deploy_ops": enterprise_deploy_ops_profile,
-                "ecosystem_extensibility": ecosystem_extensibility_profile,
-                "shared_learning_mainchain": shared_learning_mainchain_profile,
-                "self_evolution_mainchain": self_evolution_mainchain_profile,
-                "capability_consistency_mainchain": capability_consistency_mainchain_profile,
-                "shared_learning_data_flow": shared_learning_data_flow_profile,
-                "self_evolution_flow": self_evolution_flow_profile,
-                "task_graph_persistence": task_graph_persistence_profile,
-                "evaluation_harness_baseline": evaluation_harness_baseline_profile,
-                "memory_write_policy": memory_write_policy_profile,
-                "task_routing_mainchain": task_routing_mainchain_profile,
-                "tool_budget_enforcement": tool_budget_enforcement_profile,
-                "state_store_trait": state_store_trait_profile,
-                "adversarial_verification": adversarial_verification_profile,
-                "planner_executor_separation": planner_executor_separation_profile,
-                "multi_agent_handoff": multi_agent_handoff_profile,
-                "evaluation_replay_engine": evaluation_replay_engine_profile,
-                "trace_model_agent_graph": trace_model_agent_graph_profile,
-                "dynamic_workflow_optimization": dynamic_workflow_optimization_profile,
-                "think_act_observe_loop": think_act_observe_loop_profile,
-                "model_degradation_detection": model_degradation_detection_profile,
-                "task_decomposition_pipeline": task_decomposition_pipeline_profile,
-                "omnipotent_mode_readiness": omnipotent_mode_readiness_profile,
-                "sota_gap_benchmark": sota_gap_benchmark_profile,
-                "blue27_release_closure": blue27_release_closure_profile,
-                "blue28_release_closure": blue28_release_closure_profile,
-                "blue29_release_closure": blue29_release_closure_profile,
-                "blue30_release_closure": blue30_release_closure_profile,
-                "blue31_release_closure": blue31_release_closure_profile,
-                "blue32_release_closure": blue32_release_closure_profile,
-                "blue33_release_closure": blue33_release_closure_profile,
-                "blue33_remaining_closure": blue33_remaining_closure_profile,
-                "blue34_release_closure": blue34_release_closure_profile,
-                "blue35_release_closure": blue35_release_closure_profile,
-                "evolution_graph": {
-                    "ready": true,
-                    "profile": server
-                        .governance_deps
-                        .capability_bus
-                        .as_ref()
-                        .map(|cb| {
-                            let g = cb.evolution_graph.lock().unwrap_or_else(|e| e.into_inner());
-                            let p = g.profile();
-                            json!({
-                                "total": p.total_capabilities,
-                                "mature": p.mature_count,
-                                "degrading": p.degrading_count,
-                                "deprecated": p.deprecated_count,
-                            })
-                        })
-                        .unwrap_or_else(|| json!({ "total": 0, "mature": 0, "degrading": 0, "deprecated": 0 })),
-                    "degrading_capabilities": server
-                        .governance_deps
-                        .capability_bus
-                        .as_ref()
-                        .map(|cb| {
-                            let g = cb.evolution_graph.lock().unwrap_or_else(|e| e.into_inner());
-                            g.find_degrading_capabilities()
-                                .into_iter()
-                                .map(|(a, c, s)| json!({"agent": a, "capability": c, "slope": s}))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default(),
-                    "promotion_candidates": server
-                        .governance_deps
-                        .capability_bus
-                        .as_ref()
-                        .map(|cb| {
-                            let g = cb.evolution_graph.lock().unwrap_or_else(|e| e.into_inner());
-                            g.find_candidates_for_promotion()
-                                .into_iter()
-                                .map(|(a, c)| json!({"agent": a, "capability": c}))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default(),
-                },
+                    .unwrap_or_else(|| json!({ "total": 0, "mature": 0, "degrading": 0, "deprecated": 0 })),
+                "degrading_capabilities": server
+                    .governance_deps
+                    .capability_bus
+                    .as_ref()
+                    .map(|cb| {
+                        let g = cb.evolution_graph.lock().unwrap_or_else(|e| e.into_inner());
+                        g.find_degrading_capabilities()
+                            .into_iter()
+                            .map(|(a, c, s)| json!({"agent": a, "capability": c, "slope": s}))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+                "promotion_candidates": server
+                    .governance_deps
+                    .capability_bus
+                    .as_ref()
+                    .map(|cb| {
+                        let g = cb.evolution_graph.lock().unwrap_or_else(|e| e.into_inner());
+                        g.find_candidates_for_promotion()
+                            .into_iter()
+                            .map(|(a, c)| json!({"agent": a, "capability": c}))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
             },
             "blue_gates": {
                 "blue27_release_closure": blue27_release_closure_ready,
@@ -1770,6 +1746,8 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
             "recent_failed_learning_records": recent_failed,
             "recent_audit_events": governance_audit.len(),
             "governance_modules": governance_modules,
+            "harness_bus": harness_bus_metrics,
+            "capability_bus": capability_bus_metrics,
             "governance_tracking": governance_tracking,
             "hot_failover": hot_failover_profile,
             "entry_sources_tracked": entry_sources_tracked,

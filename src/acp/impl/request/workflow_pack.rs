@@ -455,8 +455,6 @@ pub(super) async fn workflow_research_payload(server: &AcpServer, params: Value)
     let gates = build_gate_matrix(
         requirement_gate_payload.clone(),
         "passed",
-        "not_run",
-        "not_run",
         Some(("research", "passed")),
     );
     let change_bundle = build_change_bundle(
@@ -603,8 +601,6 @@ pub(super) async fn workflow_consult_payload(server: &AcpServer, params: Value) 
     let gates = build_gate_matrix(
         requirement_gate_payload.clone(),
         "passed",
-        "not_run",
-        "not_run",
         Some(("consultation", "passed")),
     );
     let change_bundle = build_change_bundle(
@@ -755,8 +751,6 @@ pub(crate) async fn workflow_generate_payload(
     let gates = build_gate_matrix(
         requirement_gate_payload.clone(),
         "passed",
-        "not_run",
-        "not_run",
         Some(("planning", "passed")),
     );
     let change_bundle = build_change_bundle(
@@ -790,7 +784,7 @@ pub(crate) async fn workflow_generate_payload(
     let knowledge_refinement =
         build_knowledge_refinement_profile("workflow.generate", task, &params, &learning_profile);
 
-    record_trace_event(
+    super::trace_pack::record_trace_event(
         server,
         trace,
         "phase.plan",
@@ -903,8 +897,6 @@ pub(super) async fn task_plan_payload(
     let gates = build_gate_matrix(
         requirement_gate_payload.clone(),
         "passed",
-        "not_run",
-        "not_run",
         Some(("planning", "passed")),
     );
     let change_bundle = build_change_bundle(
@@ -926,7 +918,7 @@ pub(super) async fn task_plan_payload(
         build_token_economy("task.plan", &params, &governance_profile, &execution_cycle);
     let knowledge_refinement =
         build_knowledge_refinement_profile("task.plan", task, &params, &learning_profile);
-    record_trace_event(
+    super::trace_pack::record_trace_event(
         server,
         trace,
         "phase.plan",

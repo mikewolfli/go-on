@@ -169,8 +169,15 @@ pub(crate) async fn execute_fallback_agents(
     );
 
     use futures_util::future::join_all;
+    // Poll candidates via FuturesUnordered so we can break out of the loop as
+    // soon as the first candidate succeeds instead of waiting for the slowest
+    // (previously `join_all` awaited every in-flight agent before the
+    // "first success wins" break could take effect — a hung secondary agent
+    // delayed the primary's already-complete answer by up to the full timeout).
+    use futures_util::stream::FuturesUnordered;
+    use futures_util::StreamExt;
     let semaphore = Arc::new(tokio::sync::Semaphore::new(5));
-    let mut futures = Vec::with_capacity(agent_list.len());
+    let mut futures = FuturesUnordered::new();
 
     for (agent_name, agent) in agent_list.into_iter() {
         // When model is specific, only try the first matching agent.
@@ -327,17 +334,16 @@ pub(crate) async fn execute_fallback_agents(
         futures.push(fut);
     }
 
-    // Collect results using JoinAll
-    let results = join_all(futures).await;
-
-    // Outcome-recording side-effects are independent per agent; defer them
-    // and run them concurrently after the sync result assembly below instead
-    // of serializing N awaited recordings on the response path.
+    // Poll results one at a time. On the first successful candidate we break
+    // out of the loop, which drops (cancels) the remaining in-flight agent
+    // futures — matching the documented "first success wins" contract. The
+    // deferred outcome-recording block below still runs for every candidate
+    // that completed before the winner.
     let mut outcome_futures: Vec<
         std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>,
     > = Vec::new();
 
-    for (agent_name, attempt_started, agent_result) in results {
+    while let Some((agent_name, attempt_started, agent_result)) = futures.next().await {
         match agent_result {
             Ok((output_text, reasoning_output, agent_selected_model)) => {
                 if output_text.trim().is_empty() {
