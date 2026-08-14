@@ -220,15 +220,17 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
         },
         "http_request" => McpTool {
             name: name.to_string(),
-            description: Some("Make an HTTP request to a URL. Supports GET, POST, PUT, DELETE, PATCH, HEAD.".to_string()),
+            description: Some("Make HTTP requests (GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS) to external APIs. Only http:// and https:// URLs are allowed. Private/internal IPs are blocked for security.".to_string()),
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"], "description": "HTTP method", "default": "GET"},
+                    "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"], "description": "HTTP method", "default": "GET"},
                     "url": {"type": "string", "description": "Request URL"},
-                    "headers": {"type": "object", "description": "Optional HTTP headers as key-value pairs"},
+                    "headers": {"type": "object", "description": "Optional HTTP headers as key-value pairs", "additionalProperties": {"type": "string"}},
                     "body": {"type": "string", "description": "Request body (for POST/PUT/PATCH)"},
-                    "timeout_ms": {"type": "integer", "description": "Timeout in milliseconds", "default": 30000}
+                    "auth": {"type": "object", "properties": {"bearer": {"type": "string", "description": "Bearer token for Authorization header"}}},
+                    "query": {"type": "object", "description": "Query parameters as key-value pairs", "additionalProperties": {"type": "string"}},
+                    "timeout_ms": {"type": "integer", "description": "Timeout in milliseconds (default: 15000)", "default": 15000}
                 },
                 "required": ["url"]
             })),
@@ -500,14 +502,15 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
         },
         "file_diff" => McpTool {
             name: name.to_string(),
-            description: Some("Compare two files and show the differences between them.".to_string()),
+            description: Some("Compare two files and return the unified diff".to_string()),
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "file1": {"type": "string", "description": "First file path"},
-                    "file2": {"type": "string", "description": "Second file path"}
+                    "file_a": {"type": "string", "description": "Path to the first (original) file"},
+                    "file_b": {"type": "string", "description": "Path to the second (modified) file"},
+                    "context_lines": {"type": "integer", "description": "Number of context lines around each change (default: 3)", "default": 3}
                 },
-                "required": ["file1", "file2"]
+                "required": ["file_a", "file_b"]
             })),
         },
         "code_index_search" => McpTool {

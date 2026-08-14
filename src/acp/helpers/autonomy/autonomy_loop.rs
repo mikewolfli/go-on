@@ -165,7 +165,6 @@ pub async fn run_autonomy_loop(
                     "round_current": iteration + 1,
                     "round_total": max_iterations,
                 }),
-                status: Some("analyzing"),
             });
         }
 
@@ -211,7 +210,6 @@ pub async fn run_autonomy_loop(
                     "token": "",
                     "thinking": true,
                 }),
-                status: Some("thinking"),
             });
         }
 
@@ -322,7 +320,6 @@ pub async fn run_autonomy_loop(
                                                 "token": "",
                                                 "reasoning": reasoning_token,
                                             }),
-                                            status: None,
                                         }).is_err() {
                                             tracing::warn!(
                                                 "autonomy_loop: progress_tx send failed: receiver dropped"
@@ -344,7 +341,6 @@ pub async fn run_autonomy_loop(
                                             payload: serde_json::json!({
                                                 "token": token,
                                             }),
-                                            status: None,
                                         });
                                     }
                                 }
@@ -501,7 +497,6 @@ pub async fn run_autonomy_loop(
                             "token": summary,
                             "tool_status": "completed",
                         }),
-                        status: Some("generating"),
                     });
                 }
             } else {
@@ -515,7 +510,6 @@ pub async fn run_autonomy_loop(
                             "token": format!("❌ **{}** failed ", item.tool_name),
                             "tool_status": "failed",
                         }),
-                        status: Some("generating"),
                     });
                 }
             }
@@ -548,7 +542,6 @@ pub async fn run_autonomy_loop(
             payload: serde_json::json!({
                 "message": "Generating final summary...",
             }),
-            status: Some("generating"),
         });
     }
 

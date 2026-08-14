@@ -23,28 +23,6 @@ impl Tool for DiffTool {
         "Compare two files and return the unified diff"
     }
 
-    fn input_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "file_a": {
-                    "type": "string",
-                    "description": "Path to the first (original) file"
-                },
-                "file_b": {
-                    "type": "string",
-                    "description": "Path to the second (modified) file"
-                },
-                "context_lines": {
-                    "type": "integer",
-                    "description": "Number of context lines around each change (default: 3)",
-                    "default": 3
-                }
-            },
-            "required": ["file_a", "file_b"]
-        })
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let file_a = input.payload["file_a"]
             .as_str()
@@ -411,6 +389,31 @@ mod tests {
     use crate::orchestration::tool::ToolInput;
 
     use tempfile::TempDir;
+
+    #[test]
+    fn schema_matches_shared_descriptor_table() {
+        // Single-source contract: the LLM-facing schema (from
+        // `shared::tool_descriptors`) and the tool's own `input_schema()` must
+        // agree, and both must use the fields the implementation reads
+        // (`file_a`/`file_b`/`context_lines`). Previously the table used
+        // `file1`/`file2` while the implementation read `file_a`/`file_b` —
+        // the model sent the former and the tool failed with missing args.
+        let tool_schema = DiffTool.input_schema();
+        // `McpTool` serializes camelCase (`inputSchema`); mirror the real
+        // consumer (`Tool::input_schema` default) which accepts both keys.
+        let desc = crate::shared::tool_descriptors::tool_descriptor_value("file_diff");
+        let table_schema = desc
+            .get("input_schema")
+            .or_else(|| desc.get("inputSchema"))
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(tool_schema, table_schema);
+        let props = tool_schema["properties"].as_object().expect("properties");
+        assert!(props.contains_key("file_a"), "schema must expose file_a");
+        assert!(props.contains_key("file_b"), "schema must expose file_b");
+        assert!(!props.contains_key("file1"), "stale file1 field must be gone");
+        assert!(!props.contains_key("file2"), "stale file2 field must be gone");
+    }
 
     #[test]
     fn diff_identical_files() {

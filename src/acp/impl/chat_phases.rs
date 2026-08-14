@@ -214,7 +214,6 @@ pub(crate) async fn observe_phase(
     emit_status_event(
         stream_observer,
         "Checking for prompt injection, safety violations...",
-        "analyzing",
     )
     .await?;
 
@@ -373,12 +372,11 @@ pub(crate) async fn observe_phase(
         emit_status_event(
             stream_observer,
             "Processing multimodal input (images, files, audio)...",
-            "analyzing",
         )
         .await?;
     }
     if !skip_expensive && !url_entries.is_empty() {
-        emit_status_event(stream_observer, "Pre-fetching URLs...", "analyzing").await?;
+        emit_status_event(stream_observer, "Pre-fetching URLs...").await?;
     }
 
     let (multimodal_context, url_inserts) = tokio::join!(
@@ -1416,7 +1414,6 @@ pub(crate) async fn act_phase(
                 emit_status_event(
                     stream_observer.as_ref(),
                     &format!("{} (verdict: {:?})", reason, outcome.verdict),
-                    "warning",
                 )
                 .await?;
                 response_text = reason;

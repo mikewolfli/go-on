@@ -148,51 +148,50 @@ pub async fn dispatch_to_client(
         },
         Ok(DispatchOutput::Stream { mut receiver }) => {
             use crate::acp::r#impl::io::{send_error, send_notification, send_result};
+            use crate::acp::r#impl::chat::stream_consumer::{
+                classify_stream_event, extract_error_message, StreamEventKind,
+            };
             while let Some(frame) = receiver.recv().await {
-                match frame.event {
-                    "chunk" => {
+                match classify_stream_event(frame.event) {
+                    StreamEventKind::Chunk => {
                         send_notification(server, "chat.stream.chunk", frame.payload).await?;
                     }
-                    "done" => {
+                    StreamEventKind::Done => {
                         send_notification(server, "chat.stream.done", frame.payload).await?;
                     }
-                    "telemetry" => {
+                    StreamEventKind::Telemetry => {
                         send_notification(server, "chat.stream.telemetry", frame.payload).await?;
                     }
-                    "result" => {
+                    StreamEventKind::Result => {
                         send_result(server, Some(id.clone()), frame.payload).await?;
                     }
-                    "error" => {
+                    StreamEventKind::Error => {
                         let err_str = crate::i18n::runtime::t("acp.error.stream_error");
-                        let msg = frame
-                            .payload
-                            .get("message")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(&err_str);
+                        let msg = extract_error_message(&frame.payload).unwrap_or(err_str);
                         send_error(
                             server,
                             Some(id.clone()),
                             crate::acp::r#impl::request::protocol::AcpErrorCode::InternalError
                                 as i32,
-                            msg.to_string(),
+                            msg,
                             None,
                         )
                         .await?;
                     }
-                    "status" => {
+                    StreamEventKind::Status => {
                         send_notification(server, "chat.stream.status", frame.payload).await?;
                     }
-                    "progress" => {
+                    StreamEventKind::Progress => {
                         send_notification(server, "chat.stream.progress", frame.payload).await?;
                     }
-                    "tool_approval" => {
+                    StreamEventKind::ToolApproval => {
                         send_notification(server, "chat.stream.tool_approval", frame.payload)
                             .await?;
                     }
-                    "phase_start" | "phase_end" => {
+                    StreamEventKind::PhaseStart | StreamEventKind::PhaseEnd => {
                         send_notification(server, "chat.stream.phase", frame.payload).await?;
                     }
-                    _ => {} // unknown events are ignored
+                    StreamEventKind::Unknown => {} // unknown events are ignored
                 }
             }
             Ok(())
@@ -345,13 +344,11 @@ mod tests {
             tx.send(StreamFrame {
                 event: "chunk",
                 payload: json!({"token": "Hello"}),
-                status: None,
             })
             .ok();
             tx.send(StreamFrame {
                 event: "done",
                 payload: json!({"response": "Hello world"}),
-                status: None,
             })
             .ok();
         });
@@ -396,7 +393,6 @@ mod tests {
             tx.send(StreamFrame {
                 event: "error",
                 payload: json!({"message": "stream failed"}),
-                status: None,
             })
             .ok();
         });
@@ -431,7 +427,6 @@ mod tests {
             tx.send(StreamFrame {
                 event: "unknown_event_type",
                 payload: json!({}),
-                status: None,
             })
             .ok();
         });

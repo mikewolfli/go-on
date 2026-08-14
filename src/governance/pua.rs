@@ -51,7 +51,9 @@ pub struct PuaExecutionReport {
 pub enum PuaViolationKind {
     RedLine,
     StageFail,
-    MissingEvidence,
+    /// The shared plan lock was poisoned — a reporting failure, not a
+    /// missing-evidence verdict (previously mislabeled as `MissingEvidence`).
+    LockPoisoned,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +79,21 @@ impl std::fmt::Display for PuaViolation {
 }
 
 impl std::error::Error for PuaViolation {}
+
+/// Shared `required ∖ completed` filter (case-insensitive) used by both
+/// `validate_stage` (which already holds the plan lock) and `collect_missing`
+/// (which locks itself). Lock-free, so callers decide the lock scope.
+fn missing_actions(required: &[String], completed: &[String]) -> Vec<String> {
+    required
+        .iter()
+        .filter(|required| {
+            !completed
+                .iter()
+                .any(|item| item.eq_ignore_ascii_case(required))
+        })
+        .cloned()
+        .collect()
+}
 
 #[derive(Debug)]
 pub struct PuaRuleEngine {
@@ -490,7 +507,7 @@ impl PuaRuleEngine {
 
     pub fn check_red_lines(&self, action: &str) -> Result<(), PuaViolation> {
         let plan = self.plan.lock().map_err(|_| PuaViolation {
-            kind: PuaViolationKind::MissingEvidence,
+            kind: PuaViolationKind::LockPoisoned,
             detail: "failed to lock PUA plan".to_string(),
         })?;
         if plan
@@ -508,7 +525,7 @@ impl PuaRuleEngine {
 
     pub fn validate_stage(&self, stage: &str, completed: &[String]) -> Result<(), PuaViolation> {
         let plan = self.plan.lock().map_err(|_| PuaViolation {
-            kind: PuaViolationKind::MissingEvidence,
+            kind: PuaViolationKind::LockPoisoned,
             detail: "failed to lock PUA plan".to_string(),
         })?;
 
@@ -535,16 +552,7 @@ impl PuaRuleEngine {
             });
         }
 
-        let missing = requirement
-            .required_actions
-            .iter()
-            .filter(|required| {
-                !completed
-                    .iter()
-                    .any(|item| item.eq_ignore_ascii_case(required))
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let missing = missing_actions(&requirement.required_actions, completed);
 
         if missing.is_empty() {
             Ok(())
@@ -574,14 +582,7 @@ impl PuaRuleEngine {
     }
 
     pub fn collect_missing(&self, stage: &str, completed: &[String]) -> Vec<String> {
-        self.collect_evidence(stage)
-            .into_iter()
-            .filter(|required| {
-                !completed
-                    .iter()
-                    .any(|item| item.eq_ignore_ascii_case(required))
-            })
-            .collect()
+        missing_actions(&self.collect_evidence(stage), completed)
     }
 
     pub fn generate_report(&self, stage: &str, completed: &[String]) -> PuaExecutionReport {
@@ -652,13 +653,19 @@ impl PuaRuleEngine {
 }
 
 pub fn quality_compass() -> Vec<String> {
-    vec![
-        "Build proof captured".to_string(),
-        "Error cases tested".to_string(),
-        "Pattern scan completed".to_string(),
+    // Single source: the first three items mirror the base_checks
+    // descriptions from `DynamicQualityCompass::default()` so the two lists
+    // cannot drift; the final two are compass-only entries.
+    let mut items: Vec<String> = DynamicQualityCompass::default()
+        .base_checks
+        .iter()
+        .map(|check| check.description.clone())
+        .collect();
+    items.extend([
         "Root cause explained".to_string(),
         "Quality delta stated".to_string(),
-    ]
+    ]);
+    items
 }
 
 pub fn build_enforcement_plan(

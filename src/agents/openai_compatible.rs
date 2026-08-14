@@ -131,10 +131,6 @@ impl Agent for OpenAiCompatibleAgent {
             capabilities: vec!["chat".to_string(), "streaming".to_string()],
         }]
     }
-
-    fn default_model(&self) -> Option<crate::agent::ModelInfo> {
-        self.available_models().into_iter().next()
-    }
 }
 
 #[cfg(test)]

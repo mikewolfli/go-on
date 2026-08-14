@@ -16,6 +16,18 @@ use crate::pua::{quality_compass, PuaExecutionReport};
 use crate::quality_models::{QualitySignal, QualitySignalType, QualityVerdict};
 use serde::{Deserialize, Serialize};
 
+/// Shared bracket-balance check (`{}`, `[]`, `()`) used by both the syntax
+/// check and the quality-compass content sanity pass. Single implementation so
+/// the two passes cannot drift.
+fn bracket_balance_ok(content: &str) -> bool {
+    for &(open, close) in &[('{', '}'), ('[', ']'), ('(', ')')] {
+        if content.matches(open).count() != content.matches(close).count() {
+            return false;
+        }
+    }
+    true
+}
+
 /// Type alias for [`QualityVerdict`].
 ///
 /// The verification pipeline uses this alias for semantic clarity — a
@@ -56,15 +68,16 @@ impl DeterministicVerifier {
         let mut issues: Vec<String> = Vec::new();
 
         // Bracket balancing checks
-        let bracket_pairs = [('{', '}'), ('[', ']'), ('(', ')')];
-        for &(open, close) in &bracket_pairs {
-            let opens = content.matches(open).count();
-            let closes = content.matches(close).count();
-            if opens != closes {
-                issues.push(format!(
-                    "unbalanced '{}' and '{}': {} opens vs {} closes",
-                    open, close, opens, closes
-                ));
+        if !bracket_balance_ok(content) {
+            for &(open, close) in &[('{', '}'), ('[', ']'), ('(', ')')] {
+                let opens = content.matches(open).count();
+                let closes = content.matches(close).count();
+                if opens != closes {
+                    issues.push(format!(
+                        "unbalanced '{}' and '{}': {} opens vs {} closes",
+                        open, close, opens, closes
+                    ));
+                }
             }
         }
 
@@ -189,16 +202,7 @@ impl DeterministicVerifier {
     /// as failed.
     pub fn run_quality_compass_checks(content: &str) -> Vec<VerificationSignal> {
         // Basic content sanity: detect unclosed brackets / suspicious patterns.
-        let content_has_issues = {
-            let open_curly = content.matches('{').count();
-            let close_curly = content.matches('}').count();
-            let open_paren = content.matches('(').count();
-            let close_paren = content.matches(')').count();
-            let open_bracket = content.matches('[').count();
-            let close_bracket = content.matches(']').count();
-
-            open_curly != close_curly || open_paren != close_paren || open_bracket != close_bracket
-        };
+        let content_has_issues = !bracket_balance_ok(content);
 
         quality_compass()
             .into_iter()

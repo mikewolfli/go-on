@@ -244,7 +244,10 @@ impl Tool for ShellExecTool {
             }
             Err(e) => return Err(e.into()),
         };
-        if wrapped.applied && is_bwrap_setup_failure(&result.0) {
+        if wrapped.applied && crate::security::sandbox::is_bwrap_setup_failure(
+            result.0.status.code(),
+            &String::from_utf8_lossy(&result.0.stderr),
+        ) {
             crate::security::sandbox::record_sandbox_degraded();
             sandbox_effective = false;
             warn!(
@@ -314,17 +317,10 @@ impl Tool for ShellExecTool {
     }
 }
 
-/// bwrap "spawned fine but could not set up the namespace" signature: exit
-/// status 1 with a `bwrap:` stderr prefix. In that case the inner command
-/// never ran, so it is safe (and necessary) to retry without the sandbox.
-fn is_bwrap_setup_failure(out: &std::process::Output) -> bool {
-    out.status.code() == Some(1)
-        && String::from_utf8_lossy(&out.stderr)
-            .lines()
-            .next()
-            .is_some_and(|l| l.starts_with("bwrap:"))
-}
-
+/// bwrap "spawned fine but could not set up the namespace" detection lives in
+/// `crate::security::sandbox::is_bwrap_setup_failure` — the local copy was
+/// removed so the signature cannot drift between shell_exec and the
+/// exec_common runners.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,13 +371,22 @@ mod tests {
         }
 
         let setup = sh_output("echo \"bwrap: Can't make progress\" >&2; exit 1");
-        assert!(is_bwrap_setup_failure(&setup));
+        assert!(crate::security::sandbox::is_bwrap_setup_failure(
+            setup.status.code(),
+            &String::from_utf8_lossy(&setup.stderr)
+        ));
 
         let normal = sh_output("echo compile error >&2; exit 1");
-        assert!(!is_bwrap_setup_failure(&normal));
+        assert!(!crate::security::sandbox::is_bwrap_setup_failure(
+            normal.status.code(),
+            &String::from_utf8_lossy(&normal.stderr)
+        ));
 
         let success = sh_output("echo ok >&2; exit 0");
-        assert!(!is_bwrap_setup_failure(&success));
+        assert!(!crate::security::sandbox::is_bwrap_setup_failure(
+            success.status.code(),
+            &String::from_utf8_lossy(&success.stderr)
+        ));
     }
 
     /// End-to-end wiring check: ShellExecTool runs model-issued commands

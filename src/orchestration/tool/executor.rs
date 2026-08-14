@@ -226,7 +226,6 @@ async fn execute_single_tool(
             payload: serde_json::json!({
                 "message": format!("executing tool {}...", tool_name),
             }),
-            status: Some("analyzing"),
         });
     }
 
@@ -505,7 +504,6 @@ async fn execute_single_tool(
                     "token": summary,
                     "tool_status": status,
                 }),
-                status: Some("generating"),
             });
         }
 

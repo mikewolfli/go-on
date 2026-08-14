@@ -153,6 +153,17 @@ impl BaiduErnieAgent {
         if let Some(value) = option_f64(options, "top_p") {
             payload["top_p"] = Value::from(value);
         }
+        // ERNIE supports OpenAI-format function calling; the model capabilities
+        // list `function_calling`, so the tool schemas must actually be sent.
+        // Only `tools`/`tool_choice` are forwarded (not the full
+        // `apply_openai_common_options` key set — ERNIE rejects unknown fields
+        // such as `response_format` or `parallel_tool_calls`).
+        if let Some(tools) = options.as_ref().and_then(|o| o.get("tools")).cloned() {
+            payload["tools"] = tools;
+        }
+        if let Some(tool_choice) = options.as_ref().and_then(|o| o.get("tool_choice")).cloned() {
+            payload["tool_choice"] = tool_choice;
+        }
 
         payload
     }
@@ -375,6 +386,35 @@ mod tests {
             .expect("messages[0] content should be a string");
         assert!(system.contains("Check safety"));
         assert!(!system.contains(STRICT_STAGE_NOTE));
+    }
+
+    #[test]
+    fn build_payload_forwards_tools_and_tool_choice() {
+        let tools = json!([{"type": "function", "function": {"name": "read_file"}}]);
+        let payload = wenxin_agent().build_payload(
+            &[message("user", "use a tool")],
+            &None,
+            &Some(HashMap::from([
+                ("tools".to_string(), tools.clone()),
+                ("tool_choice".to_string(), json!("auto")),
+                ("response_format".to_string(), json!("json")),
+            ])),
+        );
+        assert_eq!(payload["tools"], tools, "tools schema must reach the payload");
+        assert_eq!(payload["tool_choice"], "auto");
+        // Unsupported options must NOT leak into the ERNIE payload.
+        assert!(payload.get("response_format").is_none());
+    }
+
+    #[test]
+    fn build_payload_omits_tools_when_absent() {
+        let payload = wenxin_agent().build_payload(
+            &[message("user", "hi")],
+            &None,
+            &Some(HashMap::from([("temperature".to_string(), json!(0.2))])),
+        );
+        assert!(payload.get("tools").is_none());
+        assert!(payload.get("tool_choice").is_none());
     }
 
     #[test]

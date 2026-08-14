@@ -358,7 +358,8 @@ impl VideoProcessor {
             .await
             .map_err(|e| VideoProcessorError::FrameExtractionFailed(format!("read_dir: {e}")))?;
 
-        // Use blocking reads for frame files
+        // Read each frame file asynchronously; order is preserved by the
+        // sorted `paths` iteration and the progress report below.
         let mut paths = Vec::new();
         loop {
             match entries.next_entry().await {

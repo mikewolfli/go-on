@@ -781,22 +781,6 @@ impl Agent for CopilotAgent {
             },
         ]
     }
-
-    fn default_model(&self) -> Option<ModelInfo> {
-        Some(ModelInfo {
-            id: "copilot/auto".to_string(),
-            name: "Auto (best model)".to_string(),
-            description: "GitHub Copilot auto model selection".to_string(),
-            is_default: true,
-            context_window: Some(128_000),
-            capabilities: vec![
-                "chat".to_string(),
-                "code".to_string(),
-                "streaming".to_string(),
-                "tools".to_string(),
-            ],
-        })
-    }
 }
 
 #[cfg(test)]

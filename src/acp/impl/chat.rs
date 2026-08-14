@@ -60,6 +60,7 @@ pub mod knowledge;
 pub mod params;
 pub mod pipeline;
 pub mod session;
+pub mod stream_consumer;
 pub mod streaming;
 pub mod tool_extraction;
 pub mod vector_context;
@@ -702,10 +703,14 @@ pub(crate) async fn process_chat_request(
             observer.send_sse(crate::acp::r#impl::chat::streaming::StreamFrame {
                 event: "error",
                 payload: serde_json::json!({
+                    // Both fields carry the RESOLVED text: dispatch and GUI
+                    // read `message` (preferring it), the bridge reads `error`,
+                    // and the unified `extract_error_message` prefers `error`.
+                    // Previously `message` held the raw i18n key and leaked it
+                    // to JSON-RPC clients and the GUI.
                     "error": no_response_msg,
-                    "message": "error.chat.no_response_from_pipeline",
+                    "message": no_response_msg,
                 }),
-                status: None,
             });
         } else {
             // Agent produced no response text (e.g. the autonomy loop ended
@@ -726,7 +731,6 @@ pub(crate) async fn process_chat_request(
             observer.send_sse(crate::acp::r#impl::chat::streaming::StreamFrame {
                 event: "result",
                 payload,
-                status: None,
             });
         }
     }

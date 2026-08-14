@@ -212,7 +212,6 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             model_suggestions: vec![
                 "deepseek-v4-flash".to_string(),
                 "deepseek-v4-pro".to_string(),
-                "deepseek-r1".to_string(),
             ],
             api_key_env: Some("keyring://go-on/deepseek_api_key".to_string()),
             secret_key_env: None,

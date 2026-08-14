@@ -120,16 +120,10 @@ pub(crate) async fn emit_stream_chunk(
         payload.insert("mode".to_string(), json!(meta.mode));
         payload.insert("risk_score".to_string(), json!(meta.risk_score));
         payload.insert("degrade_policy".to_string(), json!(meta.degrade_policy));
-        let status = if reasoning_token.is_empty() && display_token.is_empty() {
-            Some("thinking")
-        } else {
-            None
-        };
         // Send failure is expected when client disconnects — non-critical.
         let _ = sender.send(StreamFrame {
             event: STREAM_EVENT_CHUNK,
             payload: Value::Object(payload),
-            status,
         });
     }
 
@@ -205,7 +199,6 @@ pub(crate) async fn emit_stream_done(
         let _ = sender.send(StreamFrame {
             event: STREAM_EVENT_DONE,
             payload: Value::Object(payload),
-            status: None,
         });
     }
 
@@ -251,7 +244,6 @@ pub(crate) async fn emit_stream_token_economy(
                 "degrade_policy": meta.degrade_policy,
                 "token_economy": token_economy,
             }),
-            status: None,
         });
     }
 
@@ -287,7 +279,6 @@ pub(crate) async fn emit_phase_event(
         let _ = sender.send(StreamFrame {
             event: event_type,
             payload,
-            status: Some("idle"),
         });
     }
 
@@ -299,7 +290,6 @@ pub(crate) async fn emit_phase_event(
 pub(crate) async fn emit_status_event(
     observer: Option<&StreamObserver>,
     message: &str,
-    status: &'static str,
 ) -> Result<()> {
     let Some(observer) = observer else {
         return Ok(());
@@ -307,8 +297,7 @@ pub(crate) async fn emit_status_event(
     if let Some(sender) = &observer.sse_sender {
         let _ = sender.send(StreamFrame {
             event: STREAM_EVENT_STATUS,
-            payload: json!({"message": message}),
-            status: Some(status),
+            payload: json!({ "message": message }),
         });
     }
     Ok(())
@@ -335,7 +324,6 @@ pub(crate) async fn emit_tool_approval_event(
             "risk_score": risk_score,
             "message": crate::i18n::runtime::tf("acp.error.tool_approval_required", &[("tool_name", tool_name), ("mode", mode), ("risk", &format!("{:.2}", risk_score))]),
         }),
-        status: None,
     });
     Ok(())
 }
@@ -374,10 +362,6 @@ pub(crate) struct StreamEventMeta<'a> {
 pub(crate) struct StreamFrame {
     pub event: &'static str,
     pub payload: Value,
-    /// Optional status hint: "thinking" | "analyzing" | "scanning" | "generating" | "idle"
-    /// When set, the client may display a status indicator instead of the raw token.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<&'static str>,
 }
 
 /// Observer pattern for streaming responses.

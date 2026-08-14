@@ -109,6 +109,20 @@ fn injection_detector() -> &'static crate::security::prompt_injection::Injection
 /// Type alias for the safeguard approval return type to satisfy clippy::type_complexity.
 type SafeguardApprovalResult<'a> = Result<(&'a [(String, String)], bool)>;
 
+/// Canonical mode string for a [`ModeKind`] — single source used by the
+/// banner, session serialization, and mode/agent switching so the displayed
+/// and persisted names cannot drift (previously three copies of this match,
+/// and `serialize_session` used a `Debug`-derived "fullauto" spelling).
+fn mode_kind_str(kind: ModeKind) -> &'static str {
+    match kind {
+        ModeKind::Ask => "ask",
+        ModeKind::Plan => "plan",
+        ModeKind::Edit => "edit",
+        ModeKind::FullAuto => "full_auto",
+        ModeKind::SafeGuard => "safeguard",
+    }
+}
+
 /// Returns the global ToolRegistry reference (shared process-wide singleton).
 fn tool_registry() -> &'static ToolRegistry {
     static REGISTRY: OnceLock<&'static ToolRegistry> = OnceLock::new();
@@ -191,6 +205,29 @@ macro_rules! ansi {
     }};
 }
 
+/// Record a completed turn's token usage and print the turn-complete summary.
+/// Shared by the main request path and the `/retry` path (previously the
+/// same 8-line block in both).
+fn record_turn_usage(
+    token_tracker: &mut TokenTracker,
+    prompt_tokens: usize,
+    completion_tokens: usize,
+    resp: &str,
+) {
+    token_tracker.record_usage(prompt_tokens, completion_tokens);
+    if !resp.trim().is_empty() {
+        eprintln!(
+            "{}{}{}",
+            ansi!("90"),
+            tf(
+                "cli.chat.turn_complete",
+                &[("tokens", &(prompt_tokens + completion_tokens).to_string())]
+            ),
+            ansi!("0")
+        );
+    }
+}
+
 /// Session data for persistence.
 #[derive(Serialize, Deserialize)]
 struct ChatSession {
@@ -215,7 +252,7 @@ fn serialize_session(
     ChatSession {
         messages: messages.to_vec(),
         agent_name: current_agent_name.to_string(),
-        mode: format!("{:?}", current_mode.kind()).to_lowercase(),
+        mode: mode_kind_str(current_mode.kind()).to_string(),
     }
 }
 
@@ -579,13 +616,7 @@ async fn setup_chat_environment(
 
 /// Print the startup banner for the terminal chat session.
 fn print_chat_banner(current_agent_name: &str, mode: ModeKind) {
-    let mode_name = match mode {
-        ModeKind::Ask => "ask",
-        ModeKind::Plan => "plan",
-        ModeKind::Edit => "edit",
-        ModeKind::FullAuto => "full_auto",
-        ModeKind::SafeGuard => "safeguard",
-    };
+    let mode_name = mode_kind_str(mode);
     let version = env!("CARGO_PKG_VERSION");
     eprintln!("╔════════════════════════════════════════════════════════════════╗");
     eprintln!("║            go-on terminal chat v{:<46} ║", version);
@@ -899,18 +930,7 @@ async fn process_user_message_and_run_agent(
     .await
     {
         Ok((resp, prompt_tokens, completion_tokens)) => {
-            token_tracker.record_usage(prompt_tokens, completion_tokens);
-            if !resp.trim().is_empty() {
-                eprintln!(
-                    "{}{}{}",
-                    ansi!("90"),
-                    tf(
-                        "cli.chat.turn_complete",
-                        &[("tokens", &(prompt_tokens + completion_tokens).to_string())]
-                    ),
-                    ansi!("0")
-                );
-            }
+            record_turn_usage(token_tracker, prompt_tokens, completion_tokens, &resp);
         }
         Err(e) => {
             let err_msg = tf("error.generation_failed", &[("reason", &e.to_string())]);
@@ -1005,13 +1025,7 @@ async fn handle_load_command(
                     if let Some(new_agent) = registry.get(&session.agent_name) {
                         *current_agent = new_agent;
                         *current_agent_name = session.agent_name.clone();
-                        let mode_str = match current_mode.kind() {
-                            ModeKind::Ask => "ask",
-                            ModeKind::Plan => "plan",
-                            ModeKind::Edit => "edit",
-                            ModeKind::FullAuto => "full_auto",
-                            ModeKind::SafeGuard => "safeguard",
-                        };
+                        let mode_str = mode_kind_str(current_mode.kind());
                         if let Ok(runtime) = resolve_mode_runtime(
                             mode_str,
                             Some(registry.clone()),
@@ -1307,14 +1321,8 @@ async fn execute_compact_command(messages: &mut Vec<Message>, current_agent: &Ar
     let mut summarize_msgs = to_compact;
     summarize_msgs.push(summarize_prompt);
 
-    let (summary_tx, mut summary_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let summary_sender = crate::agents::agent::StreamingSender::from(summary_tx);
-    let agent_for_summary = Arc::clone(current_agent);
-    let summarize_task = tokio::spawn(async move {
-        agent_for_summary
-            .chat(summarize_msgs, None, None, summary_sender)
-            .await
-    });
+    let (summarize_task, mut summary_rx) =
+        spawn_agent_chat(Arc::clone(current_agent), summarize_msgs, None);
 
     // Bounded collection: the summary is inserted back into the session and
     // re-sent to the model on subsequent requests, so an unbounded stream
@@ -1408,14 +1416,36 @@ async fn execute_commit_command(
     stage_and_commit(&final_msg).await;
 }
 
+/// Spawn `agent.chat` on a background task with a fresh unbounded token
+/// channel, returning the task handle and the token receiver the caller
+/// drains. Single copy of the channel + `StreamingSender` + `tokio::spawn`
+/// scaffolding (previously duplicated across four call sites).
+fn spawn_agent_chat(
+    agent: Arc<dyn Agent>,
+    messages: Vec<Message>,
+    principles: Option<Vec<String>>,
+) -> (
+    tokio::task::JoinHandle<crate::core::error::Result<()>>,
+    mpsc::UnboundedReceiver<String>,
+) {
+    let (tx, rx) = mpsc::unbounded_channel::<String>();
+    let sender = StreamingSender::from(tx);
+    let handle = tokio::spawn(async move { agent.chat(messages, principles, None, sender).await });
+    (handle, rx)
+}
+
 /// Run `git diff --stat` and `git diff` to collect change information.
 /// Returns `None` if the diff failed or there is nothing to commit.
+/// The two git commands are independent and run concurrently.
 async fn collect_git_diffs() -> Option<(String, String)> {
-    let diff_output = match tokio::process::Command::new("git")
-        .args(["diff", "--stat"])
-        .output()
-        .await
-    {
+    let (stat_result, full_result) = tokio::join!(
+        tokio::process::Command::new("git")
+            .args(["diff", "--stat"])
+            .output(),
+        tokio::process::Command::new("git").arg("diff").output()
+    );
+
+    let diff_output = match stat_result {
         Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
         Err(e) => {
             eprintln!(
@@ -1432,11 +1462,7 @@ async fn collect_git_diffs() -> Option<(String, String)> {
         return None;
     }
 
-    let full_diff = match tokio::process::Command::new("git")
-        .arg("diff")
-        .output()
-        .await
-    {
+    let full_diff = match full_result {
         Ok(out) => {
             let s = String::from_utf8_lossy(&out.stdout).to_string();
             if s.len() > 8000 {
@@ -1896,18 +1922,7 @@ async fn execute_retry_command(
             .await
             {
                 Ok((resp, prompt_tokens, completion_tokens)) => {
-                    token_tracker.record_usage(prompt_tokens, completion_tokens);
-                    if !resp.trim().is_empty() {
-                        eprintln!(
-                            "{}{}{}",
-                            ansi!("90"),
-                            tf(
-                                "cli.chat.turn_complete",
-                                &[("tokens", &(prompt_tokens + completion_tokens).to_string())]
-                            ),
-                            ansi!("0")
-                        );
-                    }
+                    record_turn_usage(token_tracker, prompt_tokens, completion_tokens, &resp);
                 }
                 Err(e) => eprintln!(
                     "\n{}{}{}",
@@ -1953,13 +1968,7 @@ async fn execute_switch_agent(
     } else if let Some(new_agent) = registry.get(name) {
         *current_agent = new_agent;
         *current_agent_name = name.to_string();
-        let mode_str = match current_mode.kind() {
-            ModeKind::Ask => "ask",
-            ModeKind::Plan => "plan",
-            ModeKind::Edit => "edit",
-            ModeKind::FullAuto => "full_auto",
-            ModeKind::SafeGuard => "safeguard",
-        };
+        let mode_str = mode_kind_str(current_mode.kind());
         if let Ok(runtime) = resolve_mode_runtime(
             mode_str,
             Some(registry.clone()),
@@ -2270,19 +2279,13 @@ async fn run_agent_streaming_phase(
     messages: &[Message],
     principles: &[String],
 ) -> Result<(String, Vec<(String, String)>)> {
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let sender = StreamingSender::from(tx);
-    let msgs = messages.to_vec();
     let initial_principles = if principles.is_empty() {
         None
     } else {
         Some(principles.to_vec())
     };
-
-    // ── Cancellation support for Ctrl+C ──
-    let agent_ref = Arc::clone(agent);
-    let chat_task =
-        tokio::spawn(async move { agent_ref.chat(msgs, initial_principles, None, sender).await });
+    let (chat_task, mut rx) =
+        spawn_agent_chat(Arc::clone(agent), messages.to_vec(), initial_principles);
 
     // Use a forwarding channel: progressive display loop sends all tokens
     // to the shared `collect_agent_responses` for final classification.
@@ -2541,14 +2544,9 @@ async fn run_tool_execution_phase(
                 .unwrap_or_else(|| format!("{:?}", item.output));
 
             let display = if raw_text.len() > 500 {
-                let end = raw_text
-                    .char_indices()
-                    .nth(500)
-                    .map(|(i, _)| i)
-                    .unwrap_or(raw_text.len());
                 format!(
                     "{}...\n[{} chars truncated]  ({:.1}s)",
-                    &raw_text[..end],
+                    crate::shared::truncate::truncate_chars(&raw_text, 500, ""),
                     raw_text.len(),
                     item.duration_ms as f32 / 1000.0
                 )
@@ -2564,14 +2562,9 @@ async fn run_tool_execution_phase(
                     max_chars = MAX_TOOL_RESULT_CHARS,
                     "Tool result truncated for LLM"
                 );
-                let trunc_end = raw_text
-                    .char_indices()
-                    .nth(MAX_TOOL_RESULT_CHARS)
-                    .map(|(i, _)| i)
-                    .unwrap_or(raw_text.len());
                 format!(
                     "{}...\n[truncated: {} total chars, showing first {}]",
-                    &raw_text[..trunc_end],
+                    crate::shared::truncate::truncate_chars(&raw_text, MAX_TOOL_RESULT_CHARS, ""),
                     raw_text.len(),
                     MAX_TOOL_RESULT_CHARS
                 )
@@ -2648,21 +2641,12 @@ async fn run_followup_phase(
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
     // ── Set up streaming channel and timeout ──
-    let (tx2, mut rx2) = mpsc::unbounded_channel::<String>();
-    let sender2 = StreamingSender::from(tx2);
-    let msgs2 = messages.clone();
-    let agent_ref2 = Arc::clone(agent);
     let followup_principles = if principles.is_empty() {
         None
     } else {
         Some(principles.to_vec())
     };
-
-    let followup_task = tokio::spawn(async move {
-        agent_ref2
-            .chat(msgs2, followup_principles, None, sender2)
-            .await
-    });
+    let (followup_task, mut rx2) = spawn_agent_chat(Arc::clone(agent), messages.clone(), followup_principles);
 
     // ── Collect streaming tokens with timeout ──
     let timeout_duration = Duration::from_secs(DEFAULT_FOLLOWUP_TIMEOUT_SECS);
@@ -3139,16 +3123,12 @@ async fn chat_simple(
     prompt: Vec<Message>,
     principles: Vec<String>,
 ) -> Result<String> {
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let sender = StreamingSender::from(tx);
     let principles_opt = if principles.is_empty() {
         None
     } else {
         Some(principles)
     };
-
-    let agent_ref = Arc::clone(agent);
-    tokio::spawn(async move { agent_ref.chat(prompt, principles_opt, None, sender).await });
+    let (_chat_task, mut rx) = spawn_agent_chat(Arc::clone(agent), prompt, principles_opt);
 
     let mut response = String::new();
     let mut chunks = 0usize;

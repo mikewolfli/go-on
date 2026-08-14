@@ -32,6 +32,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "src" / "core" / "providers.rs"
+HTTP_CLIENT = ROOT / "src" / "shared" / "http_client.rs"
 GUI_OUTPUT = ROOT / "gui" / "src" / "views" / "providers" / "generated_catalog.rs"
 VSCODE_OUTPUT = (
     ROOT / "vscode-addon" / "src" / "settings" / "providerCatalog.generated.ts"
@@ -40,9 +41,15 @@ VSCODE_OUTPUT = (
 BLOCK_RE = re.compile(r"ProviderSpec \{(?P<body>.*?)\n\s*\},", re.DOTALL)
 FIELD_PLAIN = re.compile(r'^\s*(\w+): "((?:[^"\\]|\\.)*)"\.to_string\(\),?\s*$')
 FIELD_STR = re.compile(r'^\s*(\w+): Some\("((?:[^"\\]|\\.)*)"\.to_string\(\)\),?\s*$')
+# Constant-backed value: `url: Some(DEFAULT_DEEPSEEK_BASE.to_string())` or
+# `url: Some(crate::shared::http_client::OPENAI_DEFAULT_BASE_URL.to_string())`.
+FIELD_CONST = re.compile(
+    r'^\s*(\w+): (?:Some\()?([A-Za-z_][A-Za-z0-9_:]*)\.to_string\(\)\)?,?\s*$'
+)
 FIELD_NONE = re.compile(r"^\s*(\w+): None,?\s*$")
 FIELD_BOOL = re.compile(r"^\s*(\w+): Some\((true|false)\),?\s*$")
 FIELD_INT = re.compile(r"^\s*(\w+): Some\((\d+)\),?\s*$")
+CONST_RE = re.compile(r'pub const (\w+): &str = "((?:[^"\\]|\\.)*)";')
 
 # VS Code settings-UI grouping. The OpenAI-compatible core group is an explicit
 # override; everything else follows the backend `region` field.
@@ -52,7 +59,16 @@ OPENAI_GROUP = {"openai", "openai_compatible", "anthropic", "cohere"}
 CHINESE_GROUP_OVERRIDES = {"deepseek"}
 
 
-def parse_specs(src: str) -> list[dict]:
+def parse_consts(*paths: Path) -> dict[str, str]:
+    """Resolve `pub const NAME: &str = "value";` definitions across files."""
+    consts: dict[str, str] = {}
+    for p in paths:
+        for m in CONST_RE.finditer(p.read_text()):
+            consts[m.group(1)] = m.group(2)
+    return consts
+
+
+def parse_specs(src: str, consts: dict[str, str]) -> list[dict]:
     specs = []
     for block in BLOCK_RE.finditer(src):
         body = block.group("body")
@@ -65,6 +81,17 @@ def parse_specs(src: str) -> list[dict]:
             m = FIELD_STR.match(line)
             if m:
                 spec[m.group(1)] = m.group(2)
+                continue
+            m = FIELD_CONST.match(line)
+            if m:
+                # `Some(DEFAULT_DEEPSEEK_BASE.to_string())` — resolve the
+                # constant so the generated catalog carries the real value
+                # (previously these fell back to None/"auto", breaking the
+                # GUI's offline defaults for openai/anthropic/deepseek).
+                name, expr = m.group(1), m.group(2)
+                value = consts.get(expr.rsplit("::", 1)[-1])
+                if value is not None:
+                    spec[name] = value
                 continue
             m = FIELD_BOOL.match(line)
             if m:
@@ -231,7 +258,10 @@ def main() -> int:
     # Only the built_in_provider_specs() fn body.
     fn_start = src.index("fn built_in_provider_specs()")
     fn_body = src[fn_start:]
-    specs = parse_specs(fn_body)
+    # Resolve `DEFAULT_*` constants used by spec url/model fields so the
+    # generated catalog carries real values instead of None/"auto".
+    consts = parse_consts(BACKEND, HTTP_CLIENT)
+    specs = parse_specs(fn_body, consts)
     if not specs:
         print("error: no ProviderSpec blocks parsed from backend")
         return 1

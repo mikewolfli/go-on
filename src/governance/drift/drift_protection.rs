@@ -188,6 +188,15 @@ impl DriftProtectionEngine {
         }
     }
 
+    /// The configured automatic drift-check interval (milliseconds).
+    ///
+    /// Consumed by `HarnessBus::start_drift_monitor` so a programmatic
+    /// `DriftProtectionConfig::check_interval_ms` is honored instead of the
+    /// monitor being hardcoded to 60s (previously the field was write-only).
+    pub fn check_interval_ms(&self) -> u64 {
+        self.config.check_interval_ms
+    }
+
     /// Registers a drift policy. Returns an error if a policy with the same name already exists.
     pub fn register_policy(&self, policy: DriftPolicy) -> Result<()> {
         let mut inner = self

@@ -299,6 +299,20 @@ impl Tool for EditFileTool {
 
         let validated = sanitize_path_for_write(input, path)?;
 
+        // Acquire the write lock for the whole read-modify-write so a
+        // concurrent write_file/edit_file on the same path cannot interleave
+        // between the read and the write below (lost-update). Same
+        // try_acquire(Write) semantics as write_file; a contended lock is a
+        // transient error the caller can retry.
+        let _lock = crate::orchestration::tool::tool_lock_manager()
+            .try_acquire(&validated.to_string_lossy(), crate::orchestration::tool::lock::LockMode::Write)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "write lock contended for '{}' — another tool is modifying this file",
+                    validated.display()
+                )
+            })?;
+
         if !validated.exists() {
             anyhow::bail!("{}", tf("error.path_not_found", &[("path", path)]));
         }

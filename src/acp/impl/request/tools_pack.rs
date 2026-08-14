@@ -627,7 +627,12 @@ pub(crate) async fn execute_tool_call(
         }
     }
 
-    // BLUE56-C05: ChaosEngine fault injection check (only when chaos-testing feature enabled)
+    // BLUE56-C05: ChaosEngine fault injection (only when chaos-testing feature
+    // enabled). `check_fault` decides whether a configured injection fires for
+    // this tool; the injection itself is REAL (previously this logged "would
+    // inject" and did nothing — a perpetual no-op): a latency spike sleeps,
+    // every other fault type fails the tool call with a chaos-marker error so
+    // the retry / fault-tolerance chain is actually exercised.
     #[cfg(feature = "chaos-testing")]
     {
         static CHAOS: std::sync::LazyLock<crate::resilience::chaos::ChaosEngine> =
@@ -641,8 +646,17 @@ pub(crate) async fn execute_tool_call(
                 target: "chaos",
                 tool = %name,
                 fault = ?fault_type,
-                "chaos engine would inject fault"
+                "chaos engine injecting fault"
             );
+            if let crate::fault_tolerance::FaultType::LatencySpike { delay_ms } = fault_type {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            } else {
+                anyhow::bail!(
+                    "chaos injection: tool '{}' failed with injected fault {:?}",
+                    name,
+                    fault_type
+                );
+            }
         }
     }
 

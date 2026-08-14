@@ -18,9 +18,6 @@ use tokio::net::TcpStream;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-#[cfg(feature = "chaos-testing")]
-use super::chaos::ChaosEngine;
-
 // ---------------------------------------------------------------------------
 // Tool-execution reporting hook (cross-layer bridge)
 // ---------------------------------------------------------------------------
@@ -410,9 +407,6 @@ pub struct HyperResilienceEngine {
     cancel_tx: watch::Sender<bool>,
     /// Handle for the background health check task, used to detect panics.
     health_check_handle: Mutex<Option<JoinHandle<()>>>,
-    /// Optional ChaosEngine for fault injection testing.
-    #[cfg(feature = "chaos-testing")]
-    chaos_engine: Option<Arc<ChaosEngine>>,
 }
 
 impl std::fmt::Debug for HyperResilienceEngine {
@@ -450,8 +444,6 @@ impl HyperResilienceEngine {
             }),
             cancel_tx,
             health_check_handle: Mutex::new(None),
-            #[cfg(feature = "chaos-testing")]
-            chaos_engine: None,
         }
     }
 
@@ -461,13 +453,6 @@ impl HyperResilienceEngine {
     /// the engine via `ServerBuilder` or other shared-state patterns.
     pub fn new_shared(config: ResilienceConfig) -> Arc<Self> {
         Arc::new(Self::new(config))
-    }
-
-    /// Attach a ChaosEngine for fault injection testing (P3-1).
-    #[cfg(feature = "chaos-testing")]
-    pub fn with_chaos_engine(mut self, chaos: Arc<crate::resilience::chaos::ChaosEngine>) -> Self {
-        self.chaos_engine = Some(chaos);
-        self
     }
 
     /// Register a circuit breaker with the given name, threshold, and recovery timeout.
@@ -1410,12 +1395,6 @@ impl HyperResilienceEngine {
         }) = Some(handle);
     }
 
-    /// Stop background health checks by signalling the cancellation token.
-    /// This is safe to call even if health checks were never started.
-    pub fn stop_health_checks(&self) {
-        let _ = self.cancel_tx.send(true);
-    }
-
     /// Run a single health-check cycle.
     ///
     /// 1. Probes all circuit breakers — transitions those past their recovery
@@ -1541,28 +1520,6 @@ impl HyperResilienceEngine {
     /// need explicit registration. For retry / recovery orchestration,
     /// prefer the pair of `is_available()` → `record_failure()` / `record_success()`.
     pub async fn record_execution(&self, breaker_name: &str, success: bool) {
-        // ── Chaos engine fault injection (P3-1) ────────────────────────────
-        #[cfg(feature = "chaos-testing")]
-        if let Some(ref chaos) = self.chaos_engine {
-            if let Some(crate::resilience::chaos::FaultType::NetworkTimeout) =
-                chaos.check_fault(breaker_name)
-            {
-                tracing::info!(
-                    target: "resilience",
-                    "[CHAOS] Injecting NetworkTimeout fault in execution '{}'",
-                    breaker_name
-                );
-                if let Err(e) = self.record_failure(breaker_name).await {
-                    tracing::warn!(
-                        target: "resilience",
-                        "[CHAOS] record_failure in injection failed: {}",
-                        e
-                    );
-                }
-                return;
-            }
-        }
-
         // Phase 1: Read config for auto-register defaults (read lock, fast path).
         let threshold: u64;
         let recovery_timeout_ms: u64;

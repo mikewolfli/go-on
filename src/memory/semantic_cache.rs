@@ -104,6 +104,46 @@ fn request_embedding(request: &str) -> Vec<f32> {
     crate::memory::embedding_provider::local_hash_embed(request, 128)
 }
 
+/// Exact-match position within a bucket (request text equal AND unexpired).
+fn find_exact_index(bucket: &[CacheEntry], request: &str, now: Instant) -> Option<usize> {
+    bucket.iter().position(|entry| {
+        entry.request == request && now.duration_since(entry.created_at) < entry.ttl
+    })
+}
+
+/// Similarity-match position within a bucket (unexpired AND cosine >= threshold).
+fn find_similar_index(
+    bucket: &[CacheEntry],
+    query_vec: &[f32],
+    threshold: f32,
+    now: Instant,
+) -> Option<usize> {
+    bucket.iter().position(|entry| {
+        now.duration_since(entry.created_at) < entry.ttl
+            && entry
+                .embedding
+                .as_ref()
+                .map(|stored| crate::shared::math::cosine_similarity_f32(query_vec, stored))
+                .map(|s| s >= threshold)
+                .unwrap_or(false)
+    })
+}
+
+/// Exact → similarity matching shared by the main lookup and the write-lock
+/// contended fallback, so both paths make the same decision (previously the
+/// fallback only re-verified exact matches and turned a similarity hit into a
+/// miss).
+fn find_matching_index(
+    bucket: &[CacheEntry],
+    request: &str,
+    query_vec: &[f32],
+    threshold: f32,
+    now: Instant,
+) -> Option<usize> {
+    find_exact_index(bucket, request, now)
+        .or_else(|| find_similar_index(bucket, query_vec, threshold, now))
+}
+
 /// Semantic response cache
 #[derive(Debug)]
 pub struct SemanticResponseCache {
@@ -139,36 +179,23 @@ impl SemanticResponseCache {
         let match_idx = {
             let guard = self.entries.read().expect("SemanticCache entries poisoned");
             guard.get(&hash).and_then(|bucket| {
-                // Find matching entry index — try exact match first, then
-                // similarity. Exact match requires the full request text to
-                // be equal (the bucket hash alone is not enough: it is
-                // truncated to max_request_hash_len, so distinct requests
-                // sharing a long prefix would collide). Expired entry removal
-                // is handled by the background cleanup task.
-                bucket
-                    .iter()
-                    .position(|entry| {
-                        entry.request == request && now.duration_since(entry.created_at) < entry.ttl
-                    })
-                    .or_else(|| {
-                        // Similarity lookup must respect TTL. Uses the same
-                        // canonical embedding + cosine similarity as every
-                        // other similarity consumer.
-                        let query_vec = request_embedding(request);
-                        bucket.iter().position(|entry| {
-                            now.duration_since(entry.created_at) < entry.ttl
-                                && entry
-                                    .embedding
-                                    .as_ref()
-                                    .map(|stored| {
-                                        crate::shared::math::cosine_similarity_f32(
-                                            &query_vec, stored,
-                                        )
-                                    })
-                                    .map(|s| s >= self.config.similarity_threshold as f32)
-                                    .unwrap_or(false)
-                        })
-                    })
+                // Exact match first, then similarity. Exact match requires the
+                // full request text to be equal (the bucket hash alone is not
+                // enough: it is truncated to max_request_hash_len, so distinct
+                // requests sharing a long prefix would collide). Expired entry
+                // removal is handled by the background cleanup task.
+                find_exact_index(bucket, request, now).or_else(|| {
+                    // Similarity lookup must respect TTL. Uses the same
+                    // canonical embedding + cosine similarity as every
+                    // other similarity consumer.
+                    let query_vec = request_embedding(request);
+                    find_similar_index(
+                        bucket,
+                        &query_vec,
+                        self.config.similarity_threshold as f32,
+                        now,
+                    )
+                })
             })
         };
 
@@ -189,16 +216,19 @@ impl SemanticResponseCache {
                     hit
                 } else {
                     // Write lock contended — fall back to a fresh read that
-                    // re-verifies by request text (not index).
+                    // re-runs the SAME exact → similarity decision (not just
+                    // an exact re-check) against the current bucket state.
                     let guard = self.entries.read().expect("SemanticCache entries poisoned");
+                    let query_vec = request_embedding(request);
                     guard.get(&hash).and_then(|bucket| {
-                        bucket
-                            .iter()
-                            .find(|entry| {
-                                entry.request == request
-                                    && now.duration_since(entry.created_at) < entry.ttl
-                            })
-                            .map(|e| e.response.clone())
+                        find_matching_index(
+                            bucket,
+                            request,
+                            &query_vec,
+                            self.config.similarity_threshold as f32,
+                            now,
+                        )
+                        .map(|i| bucket[i].response.clone())
                     })
                 }
             }

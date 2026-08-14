@@ -10,6 +10,35 @@ use crate::fault_tolerance::{
     FaultType, IsolationLevel, NodeStatus, RecoveryState, MAX_FAULTS, MAX_GROUPS, MAX_HEARTBEATS,
 };
 
+/// Insert a new fault event under the engine's monotonic counter, returning
+/// the generated fault id. Shared by `report_fault` and the heartbeat liveness
+/// check so the counter increment and id format cannot drift.
+fn insert_fault(
+    inner: &mut crate::fault_tolerance::Inner,
+    node_id: &str,
+    fault_type: FaultType,
+    severity: u8,
+    description: String,
+    now: u64,
+) -> String {
+    inner.fault_counter += 1;
+    let fault_id = format!("fault-{}", inner.fault_counter);
+    inner.faults.insert(
+        fault_id.clone(),
+        FaultEvent {
+            id: fault_id.clone(),
+            node_id: node_id.to_string(),
+            fault_type,
+            severity,
+            description,
+            detected_ms: now,
+            resolved_ms: None,
+            recovered: false,
+        },
+    );
+    fault_id
+}
+
 impl FaultToleranceEngine {
     /// Register a node for heartbeat monitoring.
     pub async fn register_node(&self, node_id: &str) -> Result<()> {
@@ -117,19 +146,14 @@ impl FaultToleranceEngine {
             return Err(anyhow!("node '{}' is not registered", node_id));
         }
         let now = crate::shared::timestamps::now_ts_ms_u64();
-        inner.fault_counter += 1;
-        let fault_id = format!("fault-{}", inner.fault_counter);
-        let event = FaultEvent {
-            id: fault_id.clone(),
-            node_id: node_id.clone(),
+        let fault_id = insert_fault(
+            &mut inner,
+            &node_id,
             fault_type,
             severity,
-            description: description.to_string(),
-            detected_ms: now,
-            resolved_ms: None,
-            recovered: false,
-        };
-        inner.faults.insert(fault_id.clone(), event);
+            description.to_string(),
+            now,
+        );
 
         // Evict oldest resolved faults when the map grows too large.
         if inner.faults.len() > MAX_FAULTS {
@@ -271,23 +295,16 @@ impl FaultToleranceEngine {
                         .values()
                         .any(|f| f.node_id == node_id && !f.recovered);
                     if !has_active_fault {
-                        inner.fault_counter += 1;
-                        let fault_id = format!("fault-{}", inner.fault_counter);
-                        inner.faults.insert(
-                            fault_id.clone(),
-                            crate::fault_tolerance::FaultEvent {
-                                id: fault_id,
-                                node_id: node_id.clone(),
-                                fault_type: crate::fault_tolerance::FaultType::NetworkTimeout,
-                                severity: 8,
-                                description: format!(
-                                    "node '{}' missed {} consecutive heartbeats",
-                                    node_id, max_missed
-                                ),
-                                detected_ms: now,
-                                resolved_ms: None,
-                                recovered: false,
-                            },
+                        insert_fault(
+                            &mut inner,
+                            &node_id,
+                            crate::fault_tolerance::FaultType::NetworkTimeout,
+                            8,
+                            format!(
+                                "node '{}' missed {} consecutive heartbeats",
+                                node_id, max_missed
+                            ),
+                            now,
                         );
                     }
                     offenders.push(node_id.clone());

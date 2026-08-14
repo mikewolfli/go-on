@@ -590,8 +590,13 @@ impl HarnessBus {
     }
 
     /// Start a background tokio task that periodically checks for drift.
-    pub fn start_drift_monitor(&self, interval_secs: u64) {
-        let interval = std::time::Duration::from_secs(interval_secs);
+    ///
+    /// The interval comes from the engine's configured
+    /// `DriftProtectionConfig::check_interval_ms` (default 60s); previously the
+    /// caller passed a hardcoded 60 and the config field was write-only.
+    pub fn start_drift_monitor(&self) {
+        let interval_ms = self.drift_engine.check_interval_ms().max(1);
+        let interval = std::time::Duration::from_millis(interval_ms);
         let engine = self.drift_engine.clone();
         let profile = self.profile.clone();
         tokio::spawn(async move {

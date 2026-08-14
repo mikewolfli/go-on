@@ -61,20 +61,8 @@ pub enum RepoAnalyzerError {
     #[error("repository path not found: {0}")]
     PathNotFound(String),
 
-    #[error("failed to build repo map: {0}")]
-    BuildMapFailed(String),
-
-    #[error("failed to extract type index: {0}")]
-    TypeExtractionFailed(String),
-
-    #[error("failed to answer question: {0}")]
-    AnswerFailed(String),
-
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-
-    #[error("internal error: {0}")]
-    Internal(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -613,8 +601,7 @@ impl RepoAnalyzer {
             for (line_num, line) in content.lines().enumerate() {
                 let trimmed = line.trim();
                 // Detect `pub struct Name`, `pub enum Name`, `pub trait Name`, `pub fn name`, etc.
-                if let Some(name) = self.extract_definition(trimmed) {
-                    let kind = self.infer_kind(trimmed);
+                if let Some((name, kind)) = self.parse_definition(trimmed) {
                     let qualified = format!(
                         "{}::{}",
                         rel_path.replace('/', "::").replace(".rs", ""),
@@ -642,10 +629,21 @@ impl RepoAnalyzer {
         Ok(index)
     }
 
-    /// Simple heuristic: extract an identifier after `struct`, `enum`, `trait`, `fn`, etc.
-    fn extract_definition(&self, line: &str) -> Option<String> {
-        let keywords = ["struct ", "enum ", "trait ", "fn ", "type ", "impl "];
-        for kw in &keywords {
+    /// Single-pass heuristic: extract an identifier after `struct`, `enum`,
+    /// `trait`, `fn`, `type`, `impl`, plus the symbol kind. Merges the former
+    /// `extract_definition` + `infer_kind` (two scans of the same line with the
+    /// same keyword list); `impl` keeps the historical "unknown" kind because
+    /// the old `infer_kind` had no `impl` branch.
+    fn parse_definition(&self, line: &str) -> Option<(String, SymbolKind)> {
+        let keywords: &[(&str, SymbolKind)] = &[
+            ("struct ", SymbolKind::Struct),
+            ("enum ", SymbolKind::Enum),
+            ("trait ", SymbolKind::Trait),
+            ("fn ", SymbolKind::Function),
+            ("type ", SymbolKind::TypeAlias),
+            ("impl ", SymbolKind::Other("unknown".into())),
+        ];
+        for (kw, kind) in keywords {
             // Check for `pub struct Name`, `pub(crate) struct Name`, or just `struct Name`.
             if let Some(pos) = line.find(kw) {
                 let after_kw = &line[pos + kw.len()..];
@@ -657,27 +655,11 @@ impl RepoAnalyzer {
                     .unwrap_or("")
                     .to_string();
                 if !name.is_empty() && name.starts_with(|c: char| c.is_alphabetic() || c == '_') {
-                    return Some(name);
+                    return Some((name, kind.clone()));
                 }
             }
         }
         None
-    }
-
-    fn infer_kind(&self, line: &str) -> SymbolKind {
-        if line.contains("struct ") {
-            SymbolKind::Struct
-        } else if line.contains("enum ") {
-            SymbolKind::Enum
-        } else if line.contains("trait ") {
-            SymbolKind::Trait
-        } else if line.contains("fn ") {
-            SymbolKind::Function
-        } else if line.contains("type ") {
-            SymbolKind::TypeAlias
-        } else {
-            SymbolKind::Other("unknown".into())
-        }
     }
 
     // ── Code QA ─────────────────────────────────────────────────────────
@@ -1299,29 +1281,44 @@ mod tests {
     fn test_extract_definition() {
         let analyzer = RepoAnalyzer::default();
         assert_eq!(
-            analyzer.extract_definition("pub struct Foo {").as_deref(),
-            Some("Foo")
+            analyzer.parse_definition("pub struct Foo {"),
+            Some(("Foo".to_string(), SymbolKind::Struct))
         );
         assert_eq!(
-            analyzer.extract_definition("fn bar() -> bool").as_deref(),
-            Some("bar")
+            analyzer.parse_definition("fn bar() -> bool"),
+            Some(("bar".to_string(), SymbolKind::Function))
         );
         assert_eq!(
-            analyzer
-                .extract_definition("pub(crate) enum Color {")
-                .as_deref(),
-            Some("Color")
+            analyzer.parse_definition("pub(crate) enum Color {"),
+            Some(("Color".to_string(), SymbolKind::Enum))
         );
-        assert_eq!(analyzer.extract_definition("let x = 5;"), None);
+        assert_eq!(analyzer.parse_definition("let x = 5;"), None);
     }
 
     #[test]
     fn test_infer_kind() {
         let analyzer = RepoAnalyzer::default();
-        assert_eq!(analyzer.infer_kind("struct Foo"), SymbolKind::Struct);
-        assert_eq!(analyzer.infer_kind("enum Bar"), SymbolKind::Enum);
-        assert_eq!(analyzer.infer_kind("trait Baz"), SymbolKind::Trait);
-        assert_eq!(analyzer.infer_kind("fn qux"), SymbolKind::Function);
+        assert_eq!(
+            analyzer.parse_definition("struct Foo"),
+            Some(("Foo".to_string(), SymbolKind::Struct))
+        );
+        assert_eq!(
+            analyzer.parse_definition("enum Bar"),
+            Some(("Bar".to_string(), SymbolKind::Enum))
+        );
+        assert_eq!(
+            analyzer.parse_definition("trait Baz"),
+            Some(("Baz".to_string(), SymbolKind::Trait))
+        );
+        assert_eq!(
+            analyzer.parse_definition("fn qux"),
+            Some(("qux".to_string(), SymbolKind::Function))
+        );
+        // `impl` historically had no kind mapping → "unknown".
+        assert_eq!(
+            analyzer.parse_definition("impl Foo for Bar"),
+            Some(("Foo".to_string(), SymbolKind::Other("unknown".into())))
+        );
     }
 
     #[tokio::test]

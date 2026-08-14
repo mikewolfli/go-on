@@ -48,8 +48,8 @@ fn all_exec_tools() -> Vec<&'static str> {
         "write_file",
         "edit_file",
         "apply_patch",
-        "file_move",
-        "file_delete",
+        "move_path",
+        "delete_path",
         "copy_path",
         "create_directory",
         "format_code",
@@ -1206,5 +1206,45 @@ mod tests {
         let (kept, blocked) = filter_tool_calls_by_policy(&calls, &ModeKind::Ask);
         assert!(kept.is_empty());
         assert_eq!(blocked.len(), 3);
+    }
+
+    #[test]
+    fn test_policy_lists_use_registered_canonical_names() {
+        // Every tool named in the per-mode policy lists must resolve in a fresh
+        // ToolRegistry (canonical name or alias). Stale entries (e.g. old alias
+        // names that were replaced by canonical ones) silently break Edit /
+        // FullAuto filtering: the model sees the canonical name, the policy
+        // allows the alias, and the call is dropped. Regression test for the
+        // `file_move`/`file_delete` → `move_path`/`delete_path` rename.
+        let registry = crate::orchestration::tool::ToolRegistry::new();
+        let known: std::collections::HashSet<&str> = registry.all_names().into_iter().collect();
+        // Tools that are legitimately registered only under a non-default
+        // feature (document-excel, drawing-svg, …). The policy lists name them
+        // because the tools exist when that feature is enabled.
+        let feature_gated: std::collections::HashSet<&str> = [
+            "svg_export",
+            "cad_convert",
+            "cad_draw",
+            "read_excel",
+            "read_ppt",
+            "read_docx",
+            "read_pdf",
+            "read_gltf",
+        ]
+        .into_iter()
+        .collect();
+        for list in [
+            plan_tools(),
+            all_exec_tools(),
+            read_only_tools(),
+            low_risk_tool_names().to_vec(),
+        ] {
+            for name in list {
+                assert!(
+                    known.contains(name) || feature_gated.contains(name),
+                    "policy list references unregistered tool name `{name}`"
+                );
+            }
+        }
     }
 }

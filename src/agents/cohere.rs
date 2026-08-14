@@ -39,6 +39,21 @@ impl CohereAgent {
         }
     }
 
+    /// Chat endpoint for the configured base URL.
+    ///
+    /// The spec's default base URL already ends with `/v1`
+    /// (`https://api.cohere.ai/v1`), so joining a hardcoded `v1/chat` produced
+    /// a double `/v1` (`…/v1/v1/chat`). The path is derived from the base
+    /// instead: `/v1`-suffixed bases get `chat`, bare origins get `v1/chat`.
+    fn chat_endpoint(&self) -> String {
+        let chat_path = if self.base_url.trim_end_matches('/').ends_with("/v1") {
+            "chat"
+        } else {
+            "v1/chat"
+        };
+        crate::shared::url_join::join_url(&self.base_url, chat_path)
+    }
+
     /// Build the Cohere-native request payload.
     ///
     /// Cohere's chat API uses:
@@ -175,7 +190,7 @@ impl Agent for CohereAgent {
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "cohere.api_key_env")?;
-        let endpoint = crate::shared::url_join::join_url(&self.base_url, "v1/chat");
+        let endpoint = self.chat_endpoint();
         let payload = self.build_payload(messages, principles, options);
 
         let response = self
@@ -235,5 +250,30 @@ impl Agent for CohereAgent {
                 context_window: Some(131072),
             },
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_endpoint_avoids_double_v1() {
+        // Spec default base already ends with /v1 → path is `chat`.
+        let agent = CohereAgent::new(
+            "COHERE_API_KEY".to_string(),
+            "https://api.cohere.ai/v1".to_string(),
+            "command-a-03-2025".to_string(),
+            reqwest::Client::new(),
+        );
+        assert_eq!(agent.chat_endpoint(), "https://api.cohere.ai/v1/chat");
+        // Bare origin → the full v1 path.
+        let bare = CohereAgent::new(
+            "COHERE_API_KEY".to_string(),
+            "https://api.cohere.ai".to_string(),
+            "command-a-03-2025".to_string(),
+            reqwest::Client::new(),
+        );
+        assert_eq!(bare.chat_endpoint(), "https://api.cohere.ai/v1/chat");
     }
 }

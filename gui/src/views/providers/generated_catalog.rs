@@ -296,7 +296,7 @@ pub fn default_models(name: &str) -> &'static [&'static str] {
         "openai_compatible" => &[],
         "anthropic" => &["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-3-5-sonnet", "claude-3-opus", "claude-3-haiku"],
         "cohere" => &["command-a-03-2025", "command-a-reasoning-08-2025", "command-r7b-12-2024", "command-r-plus-08-2024", "command-r-08-2024"],
-        "deepseek" => &["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-r1"],
+        "deepseek" => &["deepseek-v4-flash", "deepseek-v4-pro"],
         "wenxin" => &["ERNIE-4.5-8K", "ernie-4.0-turbo-8k", "ernie-3.5-turbo"],
         "qianfan" => &["ERNIE-4.5-8K", "ernie-4.0-8k", "ernie-3.5-8k", "ernie-speed", "ernie-lite"],
         "qwen" => &["qwen-max", "qwen-plus", "qwen-turbo", "qwen2.5-72b-instruct"],

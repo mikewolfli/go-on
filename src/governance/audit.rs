@@ -32,8 +32,6 @@ pub enum AuditError {
     Storage(String),
     #[error("Serialization error: {0}")]
     Serialization(String),
-    #[error("Integrity error: {0}")]
-    Integrity(String),
 }
 
 impl From<std::io::Error> for AuditError {
@@ -45,12 +43,6 @@ impl From<std::io::Error> for AuditError {
 impl From<serde_json::Error> for AuditError {
     fn from(e: serde_json::Error) -> Self {
         AuditError::Serialization(e.to_string())
-    }
-}
-
-impl From<crate::security::audit_integrity::AuditError> for AuditError {
-    fn from(e: crate::security::audit_integrity::AuditError) -> Self {
-        AuditError::Integrity(e.to_string())
     }
 }
 

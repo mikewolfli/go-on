@@ -314,6 +314,14 @@ impl CapabilityBus {
                 .into_iter()
                 .map(|m| (m.model_id, m.score))
                 .collect();
+        // Historical solution knowledge: DiscoveryCenter entries written by
+        // `evolve_discovery` use `problem_pattern = "state_{agent}"`, so a
+        // per-agent lookup surfaces that agent's past success rate for the
+        // same task type. Computed for all candidates in ONE lock acquisition
+        // and ONE pass (previously this was an N× full scan via `search`).
+        let discovery_patterns: Vec<String> =
+            candidates.iter().map(|name| format!("state_{}", name)).collect();
+        let discovery_rates = self.discovery.best_success_rates(&discovery_patterns, 0.5);
         let mut scored: Vec<CandidateScoreBreakdown> = candidates
             .iter()
             .map(|name| {
@@ -346,20 +354,10 @@ impl CapabilityBus {
                 // per-agent lookup surfaces that agent's past success rate for the
                 // same task type. High-rate agents get a real score boost instead of
                 // the knowledge being recorded-and-discarded.
-                let discovery_score = {
-                    let query = crate::intelligence::discovery::DiscoveryQuery {
-                        problem_pattern: Some(format!("state_{}", name)),
-                        tags: None,
-                        category: None,
-                        min_success_rate: Some(0.5),
-                        limit: Some(1),
-                    };
-                    self.discovery
-                        .search(&query)
-                        .best_match
-                        .map(|m| m.success_rate)
-                        .unwrap_or(0.0)
-                };
+                let discovery_score = discovery_rates
+                    .get(&format!("state_{}", name))
+                    .copied()
+                    .unwrap_or(0.0);
                 let total_score = (reputation_score * weights.reputation)
                     + (recency_score * weights.recency)
                     + (task_fit_score * weights.task_fit)

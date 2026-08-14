@@ -254,43 +254,43 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
         const FLUSH_THRESHOLD: usize = 20;
 
         while let Some(frame) = sse_rx.recv().await {
-            match frame.event {
-                "chunk" => {
+            use crate::acp::r#impl::chat::stream_consumer::{
+                classify_stream_event, extract_chunk_fields, extract_error_message,
+                extract_result_fields, extract_tool_approval_fields, StreamEventKind,
+            };
+            match classify_stream_event(frame.event) {
+                StreamEventKind::Chunk => {
+                    let chunk_fields = extract_chunk_fields(&frame.payload);
                     // Reasoning token — accumulate into thinking buffer
-                    if let Some(reasoning) = frame.payload.get("reasoning").and_then(|v| v.as_str())
-                    {
-                        if !reasoning.is_empty() {
-                            // Flush any pending message text before starting thought block
-                            if !message_buf.is_empty() {
-                                send_chunk(&sid, "agent_message_chunk", &message_buf).await;
-                                message_buf.clear();
-                            }
-                            thinking_buf.push_str(reasoning);
-                            if thinking_buf.len() >= FLUSH_THRESHOLD {
-                                send_chunk(&sid, "agent_thought_chunk", &thinking_buf).await;
-                                thinking_buf.clear();
-                            }
+                    if !chunk_fields.reasoning.is_empty() {
+                        // Flush any pending message text before starting thought block
+                        if !message_buf.is_empty() {
+                            send_chunk(&sid, "agent_message_chunk", &message_buf).await;
+                            message_buf.clear();
+                        }
+                        thinking_buf.push_str(&chunk_fields.reasoning);
+                        if thinking_buf.len() >= FLUSH_THRESHOLD {
+                            send_chunk(&sid, "agent_thought_chunk", &thinking_buf).await;
+                            thinking_buf.clear();
                         }
                     }
                     // Regular token — accumulate into message buffer
-                    if let Some(token) = frame.payload.get("token").and_then(|v| v.as_str()) {
-                        if !token.is_empty() {
-                            // Flush any pending thinking before starting message
-                            if !thinking_buf.is_empty() {
-                                send_chunk(&sid, "agent_thought_chunk", &thinking_buf).await;
-                                thinking_buf.clear();
-                            }
-                            message_buf.push_str(token);
-                            message_streamed = true;
-                            if message_buf.len() >= FLUSH_THRESHOLD {
-                                send_chunk(&sid, "agent_message_chunk", &message_buf).await;
-                                message_buf.clear();
-                            }
+                    if !chunk_fields.token.is_empty() {
+                        // Flush any pending thinking before starting message
+                        if !thinking_buf.is_empty() {
+                            send_chunk(&sid, "agent_thought_chunk", &thinking_buf).await;
+                            thinking_buf.clear();
+                        }
+                        message_buf.push_str(&chunk_fields.token);
+                        message_streamed = true;
+                        if message_buf.len() >= FLUSH_THRESHOLD {
+                            send_chunk(&sid, "agent_message_chunk", &message_buf).await;
+                            message_buf.clear();
                         }
                     }
                 }
 
-                "tool_approval" => {
+                StreamEventKind::ToolApproval => {
                     if !thinking_buf.is_empty() {
                         send_session_update(
                             &sid,
@@ -314,28 +314,11 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                         .await;
                     }
 
-                    let tool_name = frame
-                        .payload
-                        .get("tool_name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let tool_args = frame
-                        .payload
-                        .get("tool_args")
-                        .cloned()
-                        .unwrap_or(Value::Null);
-                    let mode = frame
-                        .payload
-                        .get("mode")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let risk_score = frame
-                        .payload
-                        .get("risk_score")
-                        .and_then(Value::as_f64)
-                        .unwrap_or_default();
+                    let approval = extract_tool_approval_fields(&frame.payload);
+                    let tool_name = approval.tool_name;
+                    let tool_args = approval.tool_args;
+                    let mode = approval.mode;
+                    let risk_score = approval.risk_score;
 
                     // Register pending permission request for the inbound
                     // session/request_permission handler to consume.
@@ -364,7 +347,7 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                     // This eliminates the double-send that occurred when both
                     // the bridge and the autonomy loop emitted permission requests.
                 }
-                "result" | "done" => {
+                StreamEventKind::Result | StreamEventKind::Done => {
                     // Stream ending — flush remaining buffers
                     if !thinking_buf.is_empty() {
                         send_chunk(&sid, "agent_thought_chunk", &thinking_buf).await;
@@ -384,18 +367,13 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                     // (forwarding would duplicate it) and only forward once,
                     // since "done" and "result" carry the same text.
                     if !completion_forwarded && !message_streamed && !message_flushed {
-                        if let Some(response) = frame
-                            .payload
-                            .get("response")
-                            .and_then(|v| v.as_str())
-                            .filter(|s| !s.is_empty())
-                        {
-                            send_chunk(&sid, "agent_message_chunk", response).await;
+                        if let Some(response) = extract_result_fields(&frame.payload).response {
+                            send_chunk(&sid, "agent_message_chunk", &response).await;
                             completion_forwarded = true;
                         }
                     }
                 }
-                "error" => {
+                StreamEventKind::Error => {
                     // A stream-level error (e.g. pipeline completed with empty
                     // response and empty agent) terminates the stream without a
                     // "result" — flush pending content and surface the message
@@ -408,13 +386,8 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                         send_chunk(&sid, "agent_message_chunk", &message_buf).await;
                         message_buf.clear();
                     }
-                    if let Some(msg) = frame
-                        .payload
-                        .get("error")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty())
-                    {
-                        send_chunk(&sid, "agent_message_chunk", msg).await;
+                    if let Some(msg) = extract_error_message(&frame.payload) {
+                        send_chunk(&sid, "agent_message_chunk", &msg).await;
                     }
                 }
                 _ => {}

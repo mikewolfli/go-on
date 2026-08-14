@@ -30,12 +30,6 @@ use tracing::debug;
 
 #[derive(Debug, Error)]
 pub enum AuditError {
-    #[error("chain file not found: {0}")]
-    ChainFileNotFound(String),
-
-    #[error("integrity violation at entry {entry_id}: {reason}")]
-    IntegrityViolation { entry_id: String, reason: String },
-
     #[error("serialization error: {0}")]
     SerializationError(String),
 

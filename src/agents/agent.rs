@@ -18,6 +18,20 @@ const DEFAULT_OPENAI_CHAT_PATH: &str = "/v1/chat/completions";
 /// the endpoint at the root (DeepSeek, Doubao, Qwen, Groq family, …).
 const DEFAULT_ROOT_CHAT_PATH: &str = "/chat/completions";
 
+/// Pick the default chat path for a base URL that may already include a `/v1`
+/// prefix (e.g. `https://api.openai.com/v1`, `https://api.siliconflow.cn/v1`).
+/// Joining a fixed `/v1/chat/completions` onto such a base produced a double
+/// `/v1` (`…/v1/v1/chat/completions`); providers that expose the endpoint at
+/// the root must use `/chat/completions` instead. Explicit `chat_path` config
+/// always wins (it bypasses this helper).
+fn default_openai_chat_path(base_url: &str) -> &'static str {
+    if base_url.trim_end_matches('/').ends_with("/v1") {
+        DEFAULT_ROOT_CHAT_PATH
+    } else {
+        DEFAULT_OPENAI_CHAT_PATH
+    }
+}
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -1060,11 +1074,22 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             )))
         }
         "openai_compatible" => {
-            let url = required_field("openai_compatible", &config.url, "url")?;
+            // Default base URL comes from the provider spec (single source);
+            // the required-field error is only for configs that have neither.
+            // The GUI's generated config may omit `url` for this type (the
+            // offline catalog carries no literal), so the spec default keeps
+            // the server starting.
+            let spec_url = crate::core::providers::provider_spec_by_name("openai_compatible")
+                .and_then(|spec| spec.url.clone());
+            let url = config
+                .url
+                .clone()
+                .or(spec_url)
+                .ok_or_else(|| anyhow::anyhow!("openai_compatible requires a url"))?;
             let chat_path = config
                 .chat_path
                 .clone()
-                .unwrap_or_else(|| DEFAULT_OPENAI_CHAT_PATH.to_string());
+                .unwrap_or_else(|| default_openai_chat_path(&url).to_string());
             let api_key_env =
                 required_field("openai_compatible", &config.api_key_env, "api_key_env")?;
             let model = required_field("openai_compatible", &config.model, "model")?;
@@ -1136,12 +1161,21 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
         }
         "openai" => {
             let api_key_env = required_field("openai", &config.api_key_env, "api_key_env")?;
-            let url = required_field("openai", &config.url, "url")?;
+            // Spec default base URL (single source) — the GUI-generated config
+            // may omit `url` because the offline catalog has no literal for
+            // the OPENAI_DEFAULT_BASE_URL constant.
+            let spec_url = crate::core::providers::provider_spec_by_name("openai")
+                .and_then(|spec| spec.url.clone());
+            let url = config
+                .url
+                .clone()
+                .or(spec_url)
+                .ok_or_else(|| anyhow::anyhow!("openai requires a url"))?;
             let model = required_field("openai", &config.model, "model")?;
             let chat_path = config
                 .chat_path
                 .clone()
-                .unwrap_or_else(|| DEFAULT_OPENAI_CHAT_PATH.to_string());
+                .unwrap_or_else(|| default_openai_chat_path(&url).to_string());
             let supports_system = config.supports_system.unwrap_or(true);
             Ok(Arc::new(OpenAiCompatibleAgent::new_with_compression(
                 url,
@@ -1320,6 +1354,50 @@ mod tests {
     use crate::intelligence::capability_graph::CapabilityGraph;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn default_chat_path_derives_from_base_url() {
+        // Base URL already carries `/v1` → endpoint lives at the root.
+        assert_eq!(
+            default_openai_chat_path("https://api.openai.com/v1"),
+            DEFAULT_ROOT_CHAT_PATH
+        );
+        assert_eq!(
+            default_openai_chat_path("https://api.siliconflow.cn/v1/"),
+            DEFAULT_ROOT_CHAT_PATH
+        );
+        // Bare origin (no `/v1`) → the full `/v1/chat/completions` path.
+        assert_eq!(
+            default_openai_chat_path("https://api.example.com"),
+            DEFAULT_OPENAI_CHAT_PATH
+        );
+        assert_eq!(
+            default_openai_chat_path("https://api.example.com/v2"),
+            DEFAULT_OPENAI_CHAT_PATH
+        );
+    }
+
+    #[test]
+    fn openai_agent_falls_back_to_spec_url() {
+        // The GUI's generated config may omit `url` for openai/
+        // openai_compatible (the offline catalog carries no literal for the
+        // DEFAULT_* constants). The agent must fall back to the spec default
+        // or the server fails to start (required_field).
+        let client = reqwest::Client::new();
+        let mut cfg = build_agent_config("openai");
+        cfg.url = None;
+        let agent = build_agent(&cfg, client)
+            .expect("openai without url must fall back to the spec default");
+        // `available_models().description` embeds the resolved base URL
+        // (spec default `https://api.openai.com/v1`), which combined with the
+        // derived root chat path must not produce a double `/v1`.
+        let models = agent.available_models();
+        let desc = models.first().map(|m| m.description.as_str()).unwrap_or("");
+        assert!(
+            desc.contains("https://api.openai.com/v1"),
+            "expected spec default base URL, got: {desc}"
+        );
+    }
 
     fn build_agent_config(agent_type: &str) -> AgentConfig {
         AgentConfig {

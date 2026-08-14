@@ -569,6 +569,37 @@ fn build_sandboxed_base_cmd(
     cmd
 }
 
+/// Decision shared by every sandboxed runner: a bwrap setup failure means the
+/// inner command never ran, so it is safe (and necessary) to retry without the
+/// sandbox. Records the degrade + logs once, returns whether to retry.
+fn should_degrade_after_bwrap(prep_applied: bool, status: Option<i32>, stderr: &str, mode: &str) -> bool {
+    if prep_applied && crate::security::sandbox::is_bwrap_setup_failure(status, stderr) {
+        crate::security::sandbox::record_sandbox_degraded();
+        tracing::warn!(
+            mode = mode,
+            "sandboxed command failed at setup (bwrap error) — retrying without sandbox"
+        );
+        true
+    } else {
+        false
+    }
+}
+
+/// Decision shared by every sandboxed runner: a spawn failure degrades to
+/// direct execution. Records the degrade + logs once, returns whether to retry.
+fn should_degrade_after_spawn_failure(prep_applied: bool, mode: &str) -> bool {
+    if prep_applied {
+        crate::security::sandbox::record_sandbox_degraded();
+        tracing::warn!(
+            mode = mode,
+            "sandboxed command spawn failed — falling back to direct execution"
+        );
+        true
+    } else {
+        false
+    }
+}
+
 /// Sandbox-aware [`run_command_capped`] for sync tool code.
 pub fn run_sandboxed_capped(
     workspace: &std::path::Path,
@@ -590,25 +621,16 @@ pub fn run_sandboxed_capped(
         };
     match attempt(&prep.program, &prep.args, prep.scrub_env) {
         Ok(capped)
-            if prep.applied
-                && crate::security::sandbox::is_bwrap_setup_failure(
-                    capped.status,
-                    &capped.stderr_lossy(),
-                ) =>
+            if should_degrade_after_bwrap(
+                prep.applied,
+                capped.status,
+                &capped.stderr_lossy(),
+                prep.mode.as_str(),
+            ) =>
         {
-            crate::security::sandbox::record_sandbox_degraded();
-            tracing::warn!(
-                mode = prep.mode.as_str(),
-                "sandboxed command failed at setup (bwrap error) — retrying without sandbox"
-            );
             attempt(program, args, prep.scrub_env)
         }
-        Err(_) if prep.applied => {
-            crate::security::sandbox::record_sandbox_degraded();
-            tracing::warn!(
-                mode = prep.mode.as_str(),
-                "sandboxed command spawn failed — falling back to direct execution"
-            );
+        Err(_) if should_degrade_after_spawn_failure(prep.applied, prep.mode.as_str()) => {
             attempt(program, args, prep.scrub_env)
         }
         other => other,
@@ -647,25 +669,16 @@ pub async fn run_sandboxed_capped_async(
     };
     match attempt(&prep.program, &prep.args, prep.scrub_env).await {
         Ok(capped)
-            if prep.applied
-                && crate::security::sandbox::is_bwrap_setup_failure(
-                    capped.status,
-                    &capped.stderr_lossy(),
-                ) =>
+            if should_degrade_after_bwrap(
+                prep.applied,
+                capped.status,
+                &capped.stderr_lossy(),
+                prep.mode.as_str(),
+            ) =>
         {
-            crate::security::sandbox::record_sandbox_degraded();
-            tracing::warn!(
-                mode = prep.mode.as_str(),
-                "sandboxed command failed at setup (bwrap error) — retrying without sandbox"
-            );
             attempt(program, args, prep.scrub_env).await
         }
-        Err(_) if prep.applied => {
-            crate::security::sandbox::record_sandbox_degraded();
-            tracing::warn!(
-                mode = prep.mode.as_str(),
-                "sandboxed command spawn failed — falling back to direct execution"
-            );
+        Err(_) if should_degrade_after_spawn_failure(prep.applied, prep.mode.as_str()) => {
             attempt(program, args, prep.scrub_env).await
         }
         other => other,
@@ -694,27 +707,17 @@ pub fn run_sandboxed_output(
         };
     let first = match attempt(&prep.program, &prep.args, prep.scrub_env) {
         Ok(out) => out,
-        Err(_) if prep.applied => {
-            crate::security::sandbox::record_sandbox_degraded();
-            tracing::warn!(
-                mode = prep.mode.as_str(),
-                "sandboxed command spawn failed — falling back to direct execution"
-            );
+        Err(_) if should_degrade_after_spawn_failure(prep.applied, prep.mode.as_str()) => {
             return Ok((attempt(program, args, prep.scrub_env)?, false));
         }
         Err(e) => return Err(e),
     };
-    if prep.applied
-        && crate::security::sandbox::is_bwrap_setup_failure(
-            first.status.code(),
-            &String::from_utf8_lossy(&first.stderr),
-        )
-    {
-        crate::security::sandbox::record_sandbox_degraded();
-        tracing::warn!(
-            mode = prep.mode.as_str(),
-            "sandboxed command failed at setup (bwrap error) — retrying without sandbox"
-        );
+    if should_degrade_after_bwrap(
+        prep.applied,
+        first.status.code(),
+        &String::from_utf8_lossy(&first.stderr),
+        prep.mode.as_str(),
+    ) {
         return Ok((attempt(program, args, prep.scrub_env)?, false));
     }
     Ok((first, prep.applied))
@@ -751,27 +754,17 @@ pub fn run_sandboxed_stdin_output(
         };
     let first = match attempt(&prep.program, &prep.args, prep.scrub_env) {
         Ok(out) => out,
-        Err(_) if prep.applied => {
-            crate::security::sandbox::record_sandbox_degraded();
-            tracing::warn!(
-                mode = prep.mode.as_str(),
-                "sandboxed command spawn failed — falling back to direct execution"
-            );
+        Err(_) if should_degrade_after_spawn_failure(prep.applied, prep.mode.as_str()) => {
             return Ok((attempt(program, args, prep.scrub_env)?, false));
         }
         Err(e) => return Err(e),
     };
-    if prep.applied
-        && crate::security::sandbox::is_bwrap_setup_failure(
-            first.status.code(),
-            &String::from_utf8_lossy(&first.stderr),
-        )
-    {
-        crate::security::sandbox::record_sandbox_degraded();
-        tracing::warn!(
-            mode = prep.mode.as_str(),
-            "sandboxed command failed at setup (bwrap error) — retrying without sandbox"
-        );
+    if should_degrade_after_bwrap(
+        prep.applied,
+        first.status.code(),
+        &String::from_utf8_lossy(&first.stderr),
+        prep.mode.as_str(),
+    ) {
         return Ok((attempt(program, args, prep.scrub_env)?, false));
     }
     Ok((first, prep.applied))
@@ -817,27 +810,17 @@ pub async fn run_sandboxed_stdin_output_async(
     };
     let first = match attempt(&prep.program, &prep.args, prep.scrub_env).await {
         Ok(out) => out,
-        Err(_) if prep.applied => {
-            crate::security::sandbox::record_sandbox_degraded();
-            tracing::warn!(
-                mode = prep.mode.as_str(),
-                "sandboxed command spawn failed — falling back to direct execution"
-            );
+        Err(_) if should_degrade_after_spawn_failure(prep.applied, prep.mode.as_str()) => {
             return Ok((attempt(program, args, prep.scrub_env).await?, false));
         }
         Err(e) => return Err(e.into()),
     };
-    if prep.applied
-        && crate::security::sandbox::is_bwrap_setup_failure(
-            first.status.code(),
-            &String::from_utf8_lossy(&first.stderr),
-        )
-    {
-        crate::security::sandbox::record_sandbox_degraded();
-        tracing::warn!(
-            mode = prep.mode.as_str(),
-            "sandboxed command failed at setup (bwrap error) — retrying without sandbox"
-        );
+    if should_degrade_after_bwrap(
+        prep.applied,
+        first.status.code(),
+        &String::from_utf8_lossy(&first.stderr),
+        prep.mode.as_str(),
+    ) {
         return Ok((attempt(program, args, prep.scrub_env).await?, false));
     }
     Ok((first, prep.applied))

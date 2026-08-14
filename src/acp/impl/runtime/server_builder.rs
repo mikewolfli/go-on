@@ -116,7 +116,7 @@ pub async fn new_acp_server(
     // Start the drift monitor once at server startup (checks for metric drift
     // every 60 seconds). Deferred out of `HarnessBus::new` so synchronous
     // constructions outside a tokio runtime do not spawn background tasks.
-    harness_bus.start_drift_monitor(60);
+    harness_bus.start_drift_monitor();
 
     // Inject RBAC enforcer into the harness bus and create HTTP-level enforcer (GAP-B58-D05)
     use crate::governance::rbac::{Permission, RbacEnforcer};

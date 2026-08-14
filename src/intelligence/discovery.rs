@@ -241,6 +241,50 @@ impl DiscoveryCenter {
             best_match,
         }
     }
+
+    /// Best success rate per problem pattern, computed with a single lock
+    /// acquisition and a single pass over the entries.
+    ///
+    /// Equivalent to calling [`search`](Self::search) once per pattern with
+    /// `min_success_rate` and taking `best_match.success_rate`, but avoids the
+    /// N× full scans (each with its own lock, per-entry `to_lowercase`
+    /// allocations, and O(n·m) touch loop) that the capability bus previously
+    /// performed per candidate. Matching semantics are identical: the entry
+    /// pattern (case-insensitive) must contain the query pattern, and the
+    /// entry's success rate must be at least `min_success_rate`.
+    pub fn best_success_rates(
+        &self,
+        patterns: &[String],
+        min_success_rate: f64,
+    ) -> std::collections::HashMap<String, f64> {
+        let entries_guard = match self.entries.lock() {
+            Ok(e) => e,
+            Err(poisoned) => {
+                tracing::warn!(
+                    target: "discovery",
+                    "entries Mutex poisoned – recovering in best_success_rates"
+                );
+                poisoned.into_inner()
+            }
+        };
+        let lowered: Vec<String> = patterns.iter().map(|p| p.to_lowercase()).collect();
+        let mut best: std::collections::HashMap<String, f64> =
+            std::collections::HashMap::with_capacity(patterns.len());
+        for entry in entries_guard.iter() {
+            if entry.success_rate < min_success_rate {
+                continue;
+            }
+            let entry_pattern = entry.problem_pattern.to_lowercase();
+            for (i, pat) in lowered.iter().enumerate() {
+                if entry_pattern.contains(pat) {
+                    best.entry(patterns[i].clone())
+                        .and_modify(|b| *b = b.max(entry.success_rate))
+                        .or_insert(entry.success_rate);
+                }
+            }
+        }
+        best
+    }
 }
 
 impl Default for DiscoveryCenter {
@@ -344,6 +388,48 @@ mod tests {
         let result = c.search(&query);
         assert_eq!(result.entries.len(), 3);
         assert_eq!(result.total_matches, 10);
+    }
+
+    #[test]
+    fn test_best_success_rates_matches_search_semantics() {
+        let c = DiscoveryCenter::new();
+        let mut low = sample_entry(1);
+        low.problem_pattern = "state_alpha".to_string();
+        low.success_rate = 0.4; // below the 0.5 cutoff
+        c.record_solution(low).expect("record low");
+        let mut good = sample_entry(2);
+        good.problem_pattern = "state_alpha".to_string();
+        good.success_rate = 0.9;
+        c.record_solution(good).expect("record good");
+        let mut beta = sample_entry(3);
+        beta.problem_pattern = "state_beta".to_string();
+        beta.success_rate = 0.7;
+        c.record_solution(beta).expect("record beta");
+
+        let patterns = vec![
+            "state_alpha".to_string(),
+            "state_beta".to_string(),
+            "state_gamma".to_string(),
+        ];
+        let rates = c.best_success_rates(&patterns, 0.5);
+        // alpha takes the MAX (0.9), the 0.4 entry is filtered out.
+        assert_eq!(rates.get("state_alpha"), Some(&0.9));
+        assert_eq!(rates.get("state_beta"), Some(&0.7));
+        assert!(!rates.contains_key("state_gamma"));
+
+        // Parity: the per-pattern result equals `search().best_match.success_rate`.
+        for pat in &patterns {
+            let query = DiscoveryQuery {
+                problem_pattern: Some(pat.clone()),
+                tags: None,
+                category: None,
+                min_success_rate: Some(0.5),
+                limit: Some(1),
+            };
+            let expected = c.search(&query).best_match.map(|m| m.success_rate);
+            let actual = rates.get(pat).copied();
+            assert_eq!(actual, expected, "mismatch for pattern {pat}");
+        }
     }
 
     #[test]
