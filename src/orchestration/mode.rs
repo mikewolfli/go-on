@@ -121,6 +121,13 @@ fn all_exec_tools() -> Vec<&'static str> {
     ]
 }
 
+/// Core tools available to a task that is awaiting approval or has no agent
+/// (pending/unavailable state). Shared by `pre_execute` and `fallback_result`
+/// to keep the emitted `tools_available` payload identical across modes.
+static PENDING_TASK_TOOLS: &[&str] = &[
+    "read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff",
+];
+
 /// Read-only inspection tools — the SafeGuard ReadOnly degraded set.
 static READ_ONLY_TOOL_NAMES: &[&str] = &[
     "read_file",
@@ -868,7 +875,7 @@ impl ModeStrategy for GenericModeRuntime {
                             "task_id": task_id.to_string(),
                             "status": "pending_approval",
                             "is_high_risk": true,
-                            "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                            "tools_available": PENDING_TASK_TOOLS,
                             "max_tool_calls": 20,
                             "message": format!("Edit task '{}' requires approval for high-risk operation", objective)
                         })),
@@ -904,7 +911,7 @@ impl ModeStrategy for GenericModeRuntime {
                                 "risk_score": risk_score,
                                 "degrade_policy": "Block",
                                 "safety_level": "enhanced",
-                                "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                                "tools_available": PENDING_TASK_TOOLS,
                                 "max_tool_calls": 30,
                                 "message": format!("SafeGuard task '{}' blocked: extreme risk ({:.2})", objective, risk_score)
                             })),
@@ -948,7 +955,7 @@ impl ModeStrategy for GenericModeRuntime {
                                 "risk_score": risk_score,
                                 "degrade_policy": "ConfirmRequired",
                                 "safety_level": "enhanced",
-                                "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                                "tools_available": PENDING_TASK_TOOLS,
                                 "max_tool_calls": 30,
                                 "message": format!("SafeGuard task '{}' awaiting safety approval (risk: {:.2})", objective, risk_score)
                             })),
@@ -999,7 +1006,7 @@ impl ModeStrategy for GenericModeRuntime {
                     "task_id": task_id.to_string(),
                     "status": "unavailable",
                     "note": "No suitable Edit mode agent was available in the registry",
-                    "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                    "tools_available": PENDING_TASK_TOOLS,
                     "max_tool_calls": 20,
                     "message": format!("Edit task '{}' ready for execution", objective)
                 })),
@@ -1018,7 +1025,7 @@ impl ModeStrategy for GenericModeRuntime {
                     "status": "unavailable",
                     "note": "No suitable FullAuto mode agent was available in the registry",
                     "execution_level": "full_autonomy",
-                    "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                    "tools_available": PENDING_TASK_TOOLS,
                     "max_tool_calls": 50,
                     "message": format!("FullAuto task '{}' executed autonomously", objective)
                 })),
@@ -1058,7 +1065,7 @@ impl ModeStrategy for GenericModeRuntime {
                         "risk_score": risk_score,
                         "degrade_policy": format!("{:?}", policy),
                         "safety_level": "enhanced",
-                        "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                        "tools_available": PENDING_TASK_TOOLS,
                         "max_tool_calls": 30,
                         "message": format!("SafeGuard task '{}' completed with enhanced safety (risk: {:.2})", objective, risk_score)
                     })),
@@ -1224,12 +1231,11 @@ mod tests {
         let feature_gated: std::collections::HashSet<&str> = [
             "svg_export",
             "cad_convert",
-            "cad_draw",
             "read_excel",
             "read_ppt",
             "read_docx",
             "read_pdf",
-            "read_gltf",
+            "gltf_read",
         ]
         .into_iter()
         .collect();

@@ -58,6 +58,7 @@ pub mod agent_selection;
 pub mod fallback;
 pub mod knowledge;
 pub mod params;
+pub mod phases;
 pub mod pipeline;
 pub mod session;
 pub mod stream_consumer;

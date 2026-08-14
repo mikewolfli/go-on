@@ -3,44 +3,6 @@ use crate::views::chat::types::{CommandRecord, SubAgentRecord};
 use std::sync::mpsc::TrySendError;
 use std::time::Duration;
 
-/// The `__thinking__` token prefix emitted by the agent runtime to mark
-/// reasoning/thinking content in streaming output.  The GUI strips these
-/// markers from the display text and moves the reasoning into a dedicated
-/// thinking panel (collapsible), matching Zed's chat UX.
-const THINKING_MARKER: &str = "__thinking__";
-
-/// Split content on `__thinking__` markers, returning (cleaned_content, thinking_text).
-/// When markers are nested or repeated, thinking segments are concatenated.
-fn split_thinking_from_content(raw: &str) -> (String, String) {
-    if !raw.contains(THINKING_MARKER) {
-        return (raw.to_string(), String::new());
-    }
-    let mut content = String::with_capacity(raw.len());
-    let mut thinking = String::new();
-    let mut in_thinking = false;
-    let mut cursor = 0;
-    for (end, marker) in raw.match_indices(THINKING_MARKER) {
-        // Text before the marker
-        let segment = &raw[cursor..end];
-        if in_thinking {
-            // Everything since last marker is thinking content
-            thinking.push_str(segment);
-        } else {
-            content.push_str(segment);
-        }
-        in_thinking = !in_thinking;
-        cursor = end + marker.len();
-    }
-    // Remaining text after last marker
-    let remaining = &raw[cursor..];
-    if in_thinking {
-        thinking.push_str(remaining);
-    } else {
-        content.push_str(remaining);
-    }
-    (content, thinking)
-}
-
 /// Retry `tx.try_send(msg)` with exponential backoff when the channel is full.
 /// Gives up immediately if the channel has been closed.
 /// Backoff: 5ms, 10ms, 20ms, … capped at 200ms (shared `exp_backoff_ms`).
@@ -1413,31 +1375,18 @@ impl ChatView {
                         {
                             if let Some(m) = session.messages.get_mut(idx) {
                                 if !token.is_empty() {
-                                    // Strip __thinking__ markers from stream tokens
-                                    let (clean_token, extra_thinking) =
-                                        split_thinking_from_content(&token);
-                                    if !clean_token.is_empty() {
-                                        m.content.push_str(&clean_token);
-                                        // Zed-style: append to last Content segment or add new
-                                        Self::append_segment(
-                                            &mut m.segments,
-                                            crate::views::chat::types::MessageSegment::Content(
-                                                clean_token,
-                                            ),
-                                        );
-                                    }
-                                    if !extra_thinking.is_empty() {
-                                        if m.thinking.is_empty() {
-                                            self.show_thinking_idx = Some(idx);
-                                        }
-                                        m.thinking.push_str(&extra_thinking);
-                                        Self::append_segment(
-                                            &mut m.segments,
-                                            crate::views::chat::types::MessageSegment::Thinking(
-                                                extra_thinking,
-                                            ),
-                                        );
-                                    }
+                                    // SSE `reasoning` is the single thinking
+                                    // channel (M0.5); the raw `__thinking__`
+                                    // marker protocol never reaches SSE, so
+                                    // stream tokens are pure content.
+                                    m.content.push_str(&token);
+                                    // Zed-style: append to last Content segment or add new
+                                    Self::append_segment(
+                                        &mut m.segments,
+                                        crate::views::chat::types::MessageSegment::Content(
+                                            token,
+                                        ),
+                                    );
                                 }
                                 if !reasoning.is_empty() {
                                     if m.thinking.is_empty() {
@@ -1528,18 +1477,12 @@ impl ChatView {
                         {
                             if let Some(m) = session.messages.get_mut(idx) {
                                 if !content.is_empty() {
-                                    // Strip any remaining __thinking__ markers from the final content
-                                    let (clean_content, extra_thinking) =
-                                        split_thinking_from_content(&content);
-                                    m.content = clean_content;
-                                    // Merge extra_thinking (from __thinking__ markers in final content)
-                                    // with the authoritative thinking from the SSE done event.
-                                    // If the done event has thinking, it takes precedence;
-                                    // otherwise use the extracted extra_thinking.
+                                    m.content = content;
+                                    // Thinking comes exclusively from the SSE
+                                    // done-event `thinking` field (M0.5); no
+                                    // marker stripping is applied to content.
                                     if !thinking.is_empty() {
                                         m.thinking.clone_from(&thinking);
-                                    } else if !extra_thinking.is_empty() {
-                                        m.thinking = extra_thinking;
                                     }
                                     if !m.thinking.is_empty() && self.show_thinking_idx.is_none() {
                                         self.show_thinking_idx = Some(idx);

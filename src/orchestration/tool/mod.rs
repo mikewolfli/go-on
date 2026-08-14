@@ -1968,9 +1968,10 @@ impl Default for ToolRegistry {
 }
 
 pub use builtin_tools::{
-    enforce_write_sandbox, record_tool_execution, sanitize_path, sanitize_path_for_write,
-    ApplyPatchTool, InspectGitDiffTool, ReadFileTool, RunTestsTool, SearchFilesTool,
-    SkillCreateTool, SkillExecuteTool, SkillListTool, SkillReloadTool, WriteFileTool,
+    acquire_tool_write_lock, enforce_write_payload_size, enforce_write_sandbox,
+    record_tool_execution, sanitize_path, sanitize_path_for_write, ApplyPatchTool,
+    InspectGitDiffTool, ReadFileTool, RunTestsTool, SearchFilesTool, SkillCreateTool,
+    SkillExecuteTool, SkillListTool, SkillReloadTool, WriteFileTool,
 };
 
 #[cfg(test)]

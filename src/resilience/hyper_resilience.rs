@@ -77,20 +77,16 @@ fn read_lock<T>(rw: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResilienceLevel {
     Standard,
-    Enhanced,
     High,
     Critical,
 }
 
 /// Failure mode classification used by the engine to categorise events.
+/// Production currently constructs only `ResourceExhaustion` (fallback.rs and
+/// the `record_failure` default); the enum is the diagnostic vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureMode {
-    NodeFailure,
-    NetworkPartition,
     ResourceExhaustion,
-    CascadingDegradation,
-    DataCorruption,
-    TimeoutStorm,
 }
 
 /// Circuit breaker state (single source of truth — previously defined in

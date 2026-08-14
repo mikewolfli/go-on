@@ -304,14 +304,7 @@ impl Tool for EditFileTool {
         // between the read and the write below (lost-update). Same
         // try_acquire(Write) semantics as write_file; a contended lock is a
         // transient error the caller can retry.
-        let _lock = crate::orchestration::tool::tool_lock_manager()
-            .try_acquire(&validated.to_string_lossy(), crate::orchestration::tool::lock::LockMode::Write)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "write lock contended for '{}' — another tool is modifying this file",
-                    validated.display()
-                )
-            })?;
+        let _lock = crate::orchestration::tool::acquire_tool_write_lock(&validated)?;
 
         if !validated.exists() {
             anyhow::bail!("{}", tf("error.path_not_found", &[("path", path)]));

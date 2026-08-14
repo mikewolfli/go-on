@@ -1,6 +1,9 @@
-//! openai_compatible.rs
-//! Auto-generated English doc: module overview.
+//! OpenAI-compatible chat completions agent.
 //!
+//! Shared implementation for the 30+ OpenAI-compatible providers: base URL /
+//! chat path / model / API key come from the agent config (with provider-spec
+//! defaults), and streaming is delegated to the shared
+//! `execute_chat_stream_openai`.
 use std::collections::HashMap;
 
 use async_trait::async_trait;

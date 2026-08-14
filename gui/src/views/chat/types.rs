@@ -318,6 +318,7 @@ impl ModePolicy {
                 "read_file".into(),
                 "read_file_lines".into(),
                 "write_file".into(),
+                "edit_file".into(),
                 "apply_patch".into(),
                 "move_path".into(),
                 "delete_path".into(),
@@ -334,14 +335,14 @@ impl ModePolicy {
                 "find_references".into(),
                 // Git / Diff
                 "inspect_git_diff".into(),
-                "diff".into(),
+                "file_diff".into(),
                 "git".into(),
                 // Build / Test / Lint
                 "cargo_check".into(),
                 "cargo_test".into(),
                 "run_tests".into(),
-                "run_build".into(),
-                "lint_code".into(),
+                "build_run".into(),
+                "lint_run".into(),
                 "diagnostics".into(),
                 // Shell / Execution
                 "shell_exec".into(),
@@ -382,7 +383,7 @@ impl ModePolicy {
                 "code_metrics".into(),
                 "security_scan".into(),
                 "search_packages".into(),
-                "add_dependency".into(),
+                "dependency_add".into(),
                 // Agent tools
                 "spawn_agent".into(),
                 "apply_code_action".into(),
@@ -406,7 +407,7 @@ impl ModePolicy {
                 "code_index_search".into(),
                 "go_to_definition".into(),
                 "find_references".into(),
-                "diff".into(),
+                "file_diff".into(),
                 "date_time".into(),
                 "environment_info".into(),
                 "json_query".into(),
@@ -529,4 +530,44 @@ impl ModePolicy {
 fn word_boundary_match(text: &str, word: &str) -> bool {
     text.split(|c: char| !c.is_alphanumeric())
         .any(|w| w == word)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The GUI mode-policy tool lists must use the backend's registered
+    /// canonical tool names: the lists drive the `allowed_tools` filter in
+    /// `process_pending`, so a stale alias would silently drop tool calls the
+    /// backend accepts (and vice versa). Regression test for the
+    /// `diff`→`file_diff`, `run_build`→`build_run`, `lint_code`→`lint_run`,
+    /// `add_dependency`→`dependency_add`, and missing-`edit_file` drift.
+    #[test]
+    fn mode_policy_uses_backend_canonical_tool_names() {
+        for mode in ["edit", "safeguard", "full_auto"] {
+            let policy = ModePolicy::new(mode);
+            let allowed: std::collections::HashSet<&str> =
+                policy.allowed_tools.iter().map(|s| s.as_str()).collect();
+            // Canonical names must be listed.
+            for canonical in [
+                "file_diff", "build_run", "lint_run", "dependency_add", "edit_file",
+            ] {
+                assert!(
+                    allowed.contains(canonical),
+                    "mode {mode}: missing canonical tool `{canonical}`"
+                );
+            }
+            // Stale pre-rename names must be gone.
+            for stale in ["diff", "run_build", "lint_code", "add_dependency"] {
+                assert!(
+                    !allowed.contains(stale),
+                    "mode {mode}: stale tool name `{stale}` still listed"
+                );
+            }
+        }
+        // Plan mode uses the read-only set, which also uses `file_diff`.
+        let plan = ModePolicy::new("plan");
+        assert!(plan.allowed_tools.iter().any(|t| t == "file_diff"));
+        assert!(!plan.allowed_tools.iter().any(|t| t == "diff"));
+    }
 }

@@ -192,141 +192,10 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
             }
         }),
         json!({
-            "name": "skill-creator",
-            "description": "Create or update prompt skills from structured definitions.",
-            "input_schema": {
-                "type": "object"
-            }
-        }),
-        json!({
             "name": "builtin.echo",
             "description": "Echo tool payload for connectivity and contract diagnostics.",
             "input_schema": {
                 "type": "object"
-            }
-        }),
-        json!({
-            "name": "http_request",
-            "description": "Make HTTP requests (GET/POST/PUT/DELETE) to external APIs. Only http:// and https:// URLs are allowed. Private/internal IPs are blocked for security.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "The full HTTP/HTTPS URL to request"
-                    },
-                    "method": {
-                        "type": "string",
-                        "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
-                        "description": "HTTP method (default: GET)"
-                    },
-                    "headers": {
-                        "type": "object",
-                        "description": "Optional HTTP headers as key-value pairs",
-                        "additionalProperties": {"type": "string"}
-                    },
-                    "body": {
-                        "type": "string",
-                        "description": "Request body for POST/PUT/PATCH"
-                    },
-                    "auth": {
-                        "type": "object",
-                        "properties": {
-                            "bearer": {
-                                "type": "string",
-                                "description": "Bearer token for Authorization header"
-                            }
-                        }
-                    },
-                    "timeout_ms": {
-                        "type": "integer",
-                        "description": "Request timeout in milliseconds (default: 15000)"
-                    }
-                },
-                "required": ["url"]
-            }
-        }),
-        json!({
-            "name": "workflow_execute",
-            "description": "Execute a workflow task with optional phase. The AI creates and runs an autonomous multi-step plan using available skills to accomplish the given task.",
-            "input_schema": {
-                "type": "object",
-                "required": ["task"],
-                "properties": {
-                    "task": {
-                        "type": "string",
-                        "description": "The task to execute as a workflow"
-                    },
-                    "phase": {
-                        "type": "string",
-                        "description": "Optional phase for multi-phase workflows"
-                    }
-                }
-            }
-        }),
-        json!({
-            "name": "workflow_ask",
-            "description": "Ask the AI to complete a task using its full reasoning and available skills. The AI will autonomously determine the best approach using workflow orchestration.",
-            "input_schema": {
-                "type": "object",
-                "required": ["task"],
-                "properties": {
-                    "task": {
-                        "type": "string",
-                        "description": "The task or question to process"
-                    },
-                    "auto_create_skills": {
-                        "type": "boolean",
-                        "description": "Whether to auto-create skills if needed (default: true)"
-                    }
-                }
-            }
-        }),
-        json!({
-            "name": "workflow_generate",
-            "description": "Generate a workflow plan for a given task without executing it. Returns the structured plan for review.",
-            "input_schema": {
-                "type": "object",
-                "required": ["task"],
-                "properties": {
-                    "task": {
-                        "type": "string",
-                        "description": "The task to generate a workflow plan for"
-                    }
-                }
-            }
-        }),
-        json!({
-            "name": "import_skill",
-            "description": "Import a skill from a remote source (GitHub, URL, etc.). Returns the imported skill record with name, version, and metadata.",
-            "input_schema": {
-                "type": "object",
-                "required": ["source"],
-                "properties": {
-                    "source": {
-                        "type": "object",
-                        "description": "Source configuration for the skill import"
-                    }
-                }
-            }
-        }),
-        json!({
-            "name": "github_search_skills",
-            "description": "Search GitHub for go-on compatible skills by query. Returns matching repositories with stars, description, and topics.",
-            "input_schema": {
-                "type": "object",
-                "required": ["query"],
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query to find skills on GitHub"
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Maximum number of results to return (1-20, default 10)",
-                        "default": 10
-                    }
-                }
             }
         }),
     ];
@@ -439,6 +308,39 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
             }
         }
     }
+
+    // Bridge-only special tools whose canonical description + schema live in
+    // the shared `tool_descriptors.rs` table (the same table the LLM
+    // function-calling channel reads), plus `skill-creator` — a registered
+    // skill when a server is present (added above); the table entry is the
+    // fallback for the server-less path. The MCP and LLM channels now show
+    // the same text/schema for these tools (previously the MCP baseline
+    // carried hand-written copies that had already drifted).
+    const BRIDGE_TABLE_TOOLS: &[&str] = &[
+        "workflow_execute",
+        "workflow_ask",
+        "workflow_generate",
+        "import_skill",
+        "github_search_skills",
+        "skill-creator",
+    ];
+    tools.extend(BRIDGE_TABLE_TOOLS.iter().map(|name| {
+        let v = crate::shared::tool_descriptors::tool_descriptor_value(name);
+        let description = v
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("Registered MCP tool");
+        let input_schema = v
+            .get("input_schema")
+            .or_else(|| v.get("inputSchema"))
+            .cloned()
+            .unwrap_or_else(|| json!({ "type": "object" }));
+        json!({
+            "name": name,
+            "description": description,
+            "input_schema": input_schema,
+        })
+    }));
 
     // Keep descriptor names unique across baseline/runtime/imported sources.
     // This avoids count drift between ACP and MCP routes when the same skill
@@ -1260,6 +1162,34 @@ mod tests {
                 "duplicate tool name: {}",
                 name
             );
+        }
+    }
+
+    #[test]
+    fn bridge_table_tools_match_shared_descriptor_text() {
+        // MCP channel must show the same description as the LLM channel for
+        // the bridge-only special tools (single source = tool_descriptors
+        // table). Regression: the hand-written MCP baseline had drifted.
+        let tools = build_mcp_tool_descriptors(None);
+        for name in [
+            "workflow_execute",
+            "workflow_ask",
+            "workflow_generate",
+            "import_skill",
+            "github_search_skills",
+            "skill-creator",
+        ] {
+            let entry = tools
+                .iter()
+                .find(|t| t.get("name").and_then(Value::as_str) == Some(name))
+                .unwrap_or_else(|| panic!("{name} missing from MCP descriptors"));
+            let desc = entry.get("description").and_then(Value::as_str).unwrap_or("");
+            let table_value = crate::shared::tool_descriptors::tool_descriptor_value(name);
+            let table_desc = table_value
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            assert_eq!(desc, table_desc, "{name} description drifted from the table");
         }
     }
 

@@ -1508,4 +1508,63 @@ mod tests {
         assert_eq!(two, "beta-key");
         assert_eq!(three, "gamma-key");
     }
+
+    /// M0.2 drift guard: every model ID a provider spec suggests for
+    /// configuration (`model_suggestions`) must exist in that provider's
+    /// runtime `available_models()`. The spec table
+    /// (`src/core/providers.rs`) and the native agent implementations are the
+    /// two faces of the same model catalog; when they disagree, the GUI's
+    /// suggestions can offer models the runtime rejects (or vice versa). The
+    /// generic OpenAI-compatible providers are excluded on purpose: their
+    /// `available_models()` is config-driven (the configured model) rather
+    /// than a static catalog, so a subset check would always fail.
+    #[test]
+    fn spec_model_suggestions_exist_in_native_available_models() {
+        use crate::core::providers::provider_spec_by_name;
+        use std::collections::HashSet;
+
+        let client = reqwest::Client::new();
+        let mut checked = 0usize;
+
+        // deepseek → DeepSeekAgent (spec url/model defaults).
+        let spec = provider_spec_by_name("deepseek").expect("deepseek spec");
+        let agent = std::sync::Arc::new(DeepSeekAgent::new(
+            spec.url.clone().unwrap_or_default(),
+            spec.api_key_env.clone().unwrap_or_default(),
+            spec.model.clone().unwrap_or_default(),
+            client.clone(),
+        ));
+        let available: HashSet<String> =
+            agent.available_models().into_iter().map(|m| m.id).collect();
+        for suggestion in &spec.model_suggestions {
+            assert!(
+                available.contains(suggestion),
+                "deepseek spec suggests `{suggestion}` but available_models() does not list it"
+            );
+        }
+        checked += 1;
+
+        // wenxin / qianfan → BaiduErnieAgent (native catalogs per API).
+        for (spec_name, api) in [("wenxin", ErnieApi::Wenxin), ("qianfan", ErnieApi::Qianfan)] {
+            let spec = provider_spec_by_name(spec_name).expect("spec exists");
+            let agent = std::sync::Arc::new(BaiduErnieAgent::new(
+                api,
+                spec.model.clone().unwrap_or_default(),
+                spec.api_key_env.clone().unwrap_or_default(),
+                spec.secret_key_env.clone().unwrap_or_default(),
+                client.clone(),
+            ));
+            let available: HashSet<String> =
+                agent.available_models().into_iter().map(|m| m.id).collect();
+            for suggestion in &spec.model_suggestions {
+                assert!(
+                    available.contains(suggestion),
+                    "{spec_name} spec suggests `{suggestion}` but available_models() does not list it"
+                );
+            }
+            checked += 1;
+        }
+
+        assert_eq!(checked, 3, "guard must cover the three native catalogs");
+    }
 }

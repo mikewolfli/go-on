@@ -23,7 +23,7 @@
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
 [![Providers](https://img.shields.io/badge/providers-37-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
-[![LOC](https://img.shields.io/badge/code-252K-blue)]()
+[![LOC](https://img.shields.io/badge/code-260K-blue)]()
 
 ## What is go-on?
 
@@ -104,7 +104,7 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **Cross-entry parity** — consistent stop_reason and round count across ACP/CLI/MCP
 
 ### Tool System
-- **60+ built-in tools** — read/write/search/apply_patch/run_tests/inspect_git_diff/shell_exec/http_request/grep/search_files/git/cargo_check/cargo_test/list_directory/file_move/file_delete/compress/decompress/date_time/dns_lookup/ping/port_scan/skill_list/skill_execute + CAD/3D/GIS/barcode/SVG/office/image processing + document parsers (PDF/DOCX/PPT/HTML/Markdown/Excel)
+- **108 built-in tools** — read/write/search/apply_patch/run_tests/inspect_git_diff/shell_exec/http_request/grep/search_files/git/cargo_check/cargo_test/list_directory/file_move/file_delete/compress/decompress/date_time/dns_lookup/ping/port_scan/skill_list/skill_execute + CAD/3D/GIS/barcode/SVG/office/image processing + document parsers (PDF/DOCX/PPT/HTML/Markdown/Excel)
 - **Tool pipeline** — serial/parallel/conditional execution with error handling
 - **Dynamic tool recommendation** — pattern + recency + co-occurrence based suggestions
 - **Mode-based tool restrictions** — allowed_tools and max_tool_calls enforced per mode
@@ -280,14 +280,14 @@ npm run compile
 
 | Metric | Value |
 |:-------|:------|
-| Rust backend LOC | ~202K (444 modules) |
+| Rust backend LOC | ~213K (450 modules) |
 | GUI (EGUI) LOC | ~24K |
 | VS Code addon (TypeScript) LOC | ~17K |
-| SDK (Rust + Python + TypeScript) LOC | ~6.9K |
-| Built-in tools | 60+ |
+| SDK (Rust + Python + TypeScript) LOC | ~6K |
+| Built-in tools | 108 registered in ToolRegistry (+ feature-gated) |
 | AI providers | 37 |
-| Skills in marketplace | 34 |
-| Unit tests | ~1.6K (1,554 lib executed via `cargo test --lib` + 152 non-chaos integration declarations; see Verification below) |
+| Skills in marketplace | 35 |
+| Unit tests | 1659 executed via `cargo test --lib` (+ integration suites; see Verification below) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 
 ## Build Profiles
@@ -318,7 +318,9 @@ cargo build --no-default-features --features full
 
 All 4 build profiles compile with zero clippy warnings. The latest full `cargo test --all-targets` run passes every suite with zero failures (see the latest section of `CHANGELOG.md` for the current counts). The GUI and VS Code addon also compile cleanly with zero errors.
 
-The lib figure in the statistics table is the **executed** count measured on 2026-08-11: `cargo test --lib` → **1555 passed / 0 failed**. For reference, the `#[test]` / `#[tokio::test...]` attribute declaration counts are 1,625 in `src/` (lib) and 152 in `tests/` including the `tests/structural/` submodule (integration, excluding the `chaos-testing`-feature-gated `chaos_drill` suite of 6); the executed count is lower because some declarations sit behind feature gates not enabled in the default (local) profile. (Naive string greps for `#[test]` / `#[tokio::test` report 1,628 in `src/` — three of those hits are prose mentions of the attributes inside comments — and 158 in `tests/` including the `chaos_drill` suite.)
+The lib figure in the statistics table is the **executed** count measured via `cargo test --lib` (latest: **1,659 passed / 0 failed**). Declaration counts (`#[test]` / `#[tokio::test(...)]`) are **1,737 in `src/`** and **160 in `tests/`** (integration, excluding the `chaos-testing`-feature-gated `chaos_drill` suite of 6); the executed count is lower than the declaration count because some declarations sit behind feature gates not enabled in the default (local) profile.
+
+Refresh these numbers with `scripts/stats.sh` (add `--check` as a CI gate: it exits non-zero when README.md has drifted).
 
 ---
 

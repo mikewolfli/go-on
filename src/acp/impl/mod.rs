@@ -17,8 +17,6 @@ pub mod io;
 pub mod cors;
 // User session management
 pub mod session;
-// Extracted chat phases (BLUE62 ARCH-1)
-pub mod chat_phases;
 
 // Re-export for convenience — retained for ACP consumer API surface.
 #[allow(unused_imports)]

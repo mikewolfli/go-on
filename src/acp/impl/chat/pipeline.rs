@@ -14,7 +14,7 @@ use tracing::info;
 
 use crate::acp::r#impl::chat::params::{ChatParams, ChatRequestContext};
 use crate::acp::r#impl::chat::streaming::{emit_phase_event, StreamObserver};
-use crate::acp::r#impl::chat_phases::{act_phase, observe_phase, reflect_phase, think_phase};
+use crate::acp::r#impl::chat::phases::{act_phase, observe_phase, reflect_phase, think_phase};
 use crate::acp::server::AcpServer;
 use crate::rpc_protocol::RequestTraceContext;
 use std::future::Future;

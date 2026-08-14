@@ -257,7 +257,7 @@ impl DiscoveryCenter {
         patterns: &[String],
         min_success_rate: f64,
     ) -> std::collections::HashMap<String, f64> {
-        let entries_guard = match self.entries.lock() {
+        let mut entries_guard = match self.entries.lock() {
             Ok(e) => e,
             Err(poisoned) => {
                 tracing::warn!(
@@ -270,13 +270,19 @@ impl DiscoveryCenter {
         let lowered: Vec<String> = patterns.iter().map(|p| p.to_lowercase()).collect();
         let mut best: std::collections::HashMap<String, f64> =
             std::collections::HashMap::with_capacity(patterns.len());
-        for entry in entries_guard.iter() {
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
+        for entry in entries_guard.iter_mut() {
             if entry.success_rate < min_success_rate {
                 continue;
             }
             let entry_pattern = entry.problem_pattern.to_lowercase();
             for (i, pat) in lowered.iter().enumerate() {
                 if entry_pattern.contains(pat) {
+                    // Consuming knowledge counts as use: touch `last_used_ms`
+                    // exactly like `search` does, so eviction stays true LRU
+                    // (previously the read path never touched it and eviction
+                    // silently degraded to insertion-order FIFO).
+                    entry.last_used_ms = now;
                     best.entry(patterns[i].clone())
                         .and_modify(|b| *b = b.max(entry.success_rate))
                         .or_insert(entry.success_rate);

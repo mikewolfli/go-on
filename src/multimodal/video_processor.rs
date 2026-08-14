@@ -353,7 +353,6 @@ impl VideoProcessor {
             ));
         }
 
-        let mut frames = Vec::new();
         let mut entries = tokio::fs::read_dir(tmp_dir.path())
             .await
             .map_err(|e| VideoProcessorError::FrameExtractionFailed(format!("read_dir: {e}")))?;
@@ -370,23 +369,33 @@ impl VideoProcessor {
         }
         paths.sort();
 
-        for (i, path) in paths.iter().enumerate() {
-            let data = tokio::fs::read(path).await.unwrap_or_default();
-            let timestamp = i as f64 * interval_secs;
-            frames.push(Frame {
-                timestamp_secs: timestamp,
+        // Read every frame file concurrently (join_all preserves order), then
+        // assemble frames. Progress is reported once at completion (100%) —
+        // per-frame progress was dropped because production never sets
+        // `progress_tx` (it is a no-op) and concurrent reads would arrive out
+        // of order, breaking the monotonic percentage.
+        let data_list: Vec<Vec<u8>> = futures_util::future::join_all(
+            paths
+                .iter()
+                .map(|p| async move { tokio::fs::read(p).await.unwrap_or_default() }),
+        )
+        .await;
+        let frames: Vec<Frame> = data_list
+            .into_iter()
+            .enumerate()
+            .map(|(i, data)| Frame {
+                timestamp_secs: i as f64 * interval_secs,
                 data,
                 width: None,
                 height: None,
-            });
-            let pct = ((i + 1) as f64 / paths.len() as f64) * 100.0;
-            self.report_progress(
-                "extract_frames",
-                pct,
-                Some(format!("Extracted frame {}/{}", i + 1, paths.len())),
-            )
-            .await;
-        }
+            })
+            .collect();
+        self.report_progress(
+            "extract_frames",
+            100.0,
+            Some(format!("Extracted {} frame(s)", frames.len())),
+        )
+        .await;
 
         Ok(frames)
     }

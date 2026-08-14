@@ -97,7 +97,7 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 - **跨入口一致性** — 同一任务在 ACP/CLI/MCP 下产生一致的 stop_reason 与回合数
 
 ### 工具系统
-- **60+ 内置工具** — 读写文件/代码搜索/补丁应用/测试运行/Git Diff/Shell 执行/HTTP 请求/grep/search_files/git/cargo_check/cargo_test/目录列表/文件移动/文件删除/压缩解压/日期时间/DNS/Ping/端口扫描 + CAD/3D/GIS/条码/SVG/Office/图像处理 + 文档解析(PDF/DOCX/PPT/HTML/Markdown/Excel)
+- **108 个内置工具** — 读写文件/代码搜索/补丁应用/测试运行/Git Diff/Shell 执行/HTTP 请求/grep/search_files/git/cargo_check/cargo_test/目录列表/文件移动/文件删除/压缩解压/日期时间/DNS/Ping/端口扫描 + CAD/3D/GIS/条码/SVG/Office/图像处理 + 文档解析(PDF/DOCX/PPT/HTML/Markdown/Excel)
 - **工具流水线** — 串行/并行/条件执行，可配置的错误处理策略
 - **动态工具推荐** — 基于模式+近因+共现的工具推荐引擎
 - **基于模式的工具限制** — 各模式强制执行 allowed_tools 与 max_tool_calls
@@ -268,14 +268,14 @@ npm run compile
 
 | 指标 | 数值 |
 |:-----|:-----|
-| Rust 后端代码行数 | ~202K（444 个模块）|
+| Rust 后端代码行数 | ~213K（450 个模块）|
 | GUI（EGUI）代码行数 | ~24K |
 | VS Code 插件（TypeScript）代码行数 | ~17K |
-| SDK（Rust + Python + TypeScript）代码行数 | ~6.9K |
-| 内置工具数量 | 60+ |
+| SDK（Rust + Python + TypeScript）代码行数 | ~6K |
+| 内置工具数量 | ToolRegistry 注册 108 个（含特性门控）|
 | AI 供应商数量 | 37 |
-| 技能市场数量 | 34 |
-| 单元测试数量 | ~1.6K（`cargo test --lib` 实测 1555 通过 + 152 非 chaos 集成声明，见下方验证状态）|
+| 技能市场数量 | 35 |
+| 单元测试数量 | `cargo test --lib` 实测 1659 通过（+ 集成套件，见下方验证状态）|
 | 三语国际化覆盖 | en / zh-CN / zh-TW（约 95%）|
 
 ## 构建配置
@@ -306,7 +306,9 @@ cargo build --no-default-features --features full
 
 所有 4 种构建配置零 clippy 警告通过。最近一次完整 `cargo test --all-targets` 运行全部通过、零失败（最新计数见 `CHANGELOG.md` 最新一节）。GUI 和 VS Code 插件同样零错误编译通过。
 
-统计表中的 lib 数字为**实测执行数**：2026-08-11 运行 `cargo test --lib` → **1555 通过 / 0 失败**。作为参考，`src/` 下 `#[test]` / `#[tokio::test...]` 属性声明数为 1625；`tests/` 下（含 `tests/structural/` 子模块）为 152（不含 `chaos-testing` 特性门控的 `chaos_drill` 套件 6 个）。实测数低于声明数，因部分声明位于默认（local）profile 未启用的特性门控之后。（按朴素字符串 grep 统计，`src/` 为 1628——其中 3 处是注释中对属性的文字提及；`tests/` 含 `chaos_drill` 共 158。）
+统计表中的 lib 数字为**实测执行数**：`cargo test --lib` → **1659 通过 / 0 失败**。作为参考，`src/` 下 `#[test]` / `#[tokio::test...]` 属性声明数为 1737；`tests/` 下为 160（不含 `chaos-testing` 特性门控的 `chaos_drill` 套件 6 个）。实测数低于声明数，因部分声明位于默认（local）profile 未启用的特性门控之后。
+
+用 `scripts/stats.sh` 刷新这些数字（加 `--check` 作为 CI 门禁：README 漂移时非零退出）。
 
 ---
 

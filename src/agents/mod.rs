@@ -656,9 +656,7 @@ where
     Ok(())
 }
 
-/// Process a single SSE event through the sender.
-/// Returns `true` when the stream should stop (sender dropped or [DONE]).
-/// Process one SSE event and send token(s) through the sender.
+/// Process a single SSE event and send token(s) through the sender.
 /// Returns `true` when the stream should stop (`[DONE]` or sender dropped).
 ///
 /// Matches Zed's approach: for a single SSE chunk, extracts ALL fields from

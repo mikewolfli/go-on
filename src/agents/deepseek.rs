@@ -1,6 +1,8 @@
-//! deepseek.rs
-//! Auto-generated English doc: module overview.
+//! DeepSeek agent implementation.
 //!
+//! Native adapter for the DeepSeek Chat Completions API: payload
+//! post-processing (user_id mapping, thinking type, deprecated penalty
+//! removal) on top of the shared OpenAI-compatible streaming path.
 use std::collections::HashMap;
 
 use async_trait::async_trait;

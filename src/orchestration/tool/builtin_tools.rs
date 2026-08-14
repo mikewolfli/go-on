@@ -99,13 +99,7 @@ pub const MAX_WRITE_PAYLOAD_BYTES: usize = 50 * 1024 * 1024;
 /// through this gate so the model cannot bypass the sandbox via the async path.
 pub fn enforce_write_sandbox(path: &std::path::Path, content: &str) -> Result<()> {
     // Limit file size to prevent disk exhaustion (default 50MB).
-    if content.len() > MAX_WRITE_PAYLOAD_BYTES {
-        anyhow::bail!(
-            "write_file BLOCKED: content {} bytes exceeds maximum {} bytes",
-            content.len(),
-            MAX_WRITE_PAYLOAD_BYTES
-        );
-    }
+    enforce_write_payload_size("write_file", "content", content.len())?;
 
     // Block writing to sensitive system paths.
     let path_str = path.to_string_lossy().to_lowercase();
@@ -131,6 +125,33 @@ pub fn enforce_write_sandbox(path: &std::path::Path, content: &str) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Shared write-payload size cap (disk-exhaustion guard) used by every write
+/// entry point (write_file via [`enforce_write_sandbox`], apply_patch). The
+/// tool name prefixes the message so the block reason stays attributable.
+pub fn enforce_write_payload_size(tool: &str, label: &str, len: usize) -> Result<()> {
+    if len > MAX_WRITE_PAYLOAD_BYTES {
+        anyhow::bail!(
+            "{tool} BLOCKED: {label} {len} bytes exceeds maximum {} bytes",
+            MAX_WRITE_PAYLOAD_BYTES
+        );
+    }
+    Ok(())
+}
+
+/// Acquire the exclusive write lock for a file path, returning a transient
+/// error when the lock is held by another operation (the caller can retry).
+/// Shared by write_file and edit_file so the lock semantics cannot drift.
+pub fn acquire_tool_write_lock(path: &std::path::Path) -> Result<crate::orchestration::tool::lock::LockHandle> {
+    crate::orchestration::tool::tool_lock_manager()
+        .try_acquire(&path.to_string_lossy(), crate::orchestration::tool::lock::LockMode::Write)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "write lock contended for '{}' — another tool is modifying this file",
+                path.display()
+            )
+        })
 }
 
 /// Sanitize and validate a path that may not exist yet (e.g. destination for
@@ -347,14 +368,7 @@ impl Tool for WriteFileTool {
         // Non-blocking try_acquire write lock.
         // If lock is already held by another operation, return a transient
         // error so the TAO loop can retry.
-        let _lock = tool_lock_manager()
-            .try_acquire(&path_buf.to_string_lossy(), LockMode::Write)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "write lock contended for '{}' — another tool is modifying this file",
-                    path_buf.display()
-                )
-            })?;
+        let _lock = acquire_tool_write_lock(&path_buf)?;
 
         if let Some(parent) = path_buf.parent() {
             if !parent.as_os_str().is_empty() {
@@ -408,14 +422,7 @@ impl Tool for WriteFileTool {
             // ── LAYER 2: Runtime sandbox (shared with run) ────────────────
             enforce_write_sandbox(&path_buf, content)?;
 
-            let _lock = tool_lock_manager()
-                .try_acquire(&path_buf.to_string_lossy(), LockMode::Write)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "write lock contended for '{}' — another tool is modifying this file",
-                        path_buf.display()
-                    )
-                })?;
+            let _lock = acquire_tool_write_lock(&path_buf)?;
 
             if let Some(parent) = path_buf.parent() {
                 if !parent.as_os_str().is_empty() {
@@ -589,13 +596,7 @@ impl Tool for ApplyPatchTool {
         // write_file) so the model cannot pipe unbounded data to git apply.
         // (Path safety is git apply's own concern: it rejects absolute and
         // `..` paths by default.)
-        if patch.len() > MAX_WRITE_PAYLOAD_BYTES {
-            anyhow::bail!(
-                "apply_patch BLOCKED: patch {} bytes exceeds maximum {} bytes",
-                patch.len(),
-                MAX_WRITE_PAYLOAD_BYTES
-            );
-        }
+        enforce_write_payload_size("apply_patch", "patch", patch.len())?;
         let check_only = input.payload["check"].as_bool().unwrap_or(false);
         let current_dir = input.payload["directory"].as_str().unwrap_or(".");
         let sanitized_dir = sanitize_path(input, current_dir)?;
@@ -669,13 +670,7 @@ impl Tool for ApplyPatchTool {
                 .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_patch")))?;
             // ── LAYER 2: runtime sandbox — bound the patch size (same cap as
             // the sync path / write_file).
-            if patch.len() > MAX_WRITE_PAYLOAD_BYTES {
-                anyhow::bail!(
-                    "apply_patch BLOCKED: patch {} bytes exceeds maximum {} bytes",
-                    patch.len(),
-                    MAX_WRITE_PAYLOAD_BYTES
-                );
-            }
+            enforce_write_payload_size("apply_patch", "patch", patch.len())?;
             let check_only = input.payload["check"].as_bool().unwrap_or(false);
             let current_dir = input.payload["directory"].as_str().unwrap_or(".");
             let sanitized_dir = sanitize_path(&input, current_dir)?;

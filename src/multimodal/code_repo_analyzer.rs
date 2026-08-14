@@ -27,6 +27,8 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::info;
 
+use futures_util::StreamExt;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -431,10 +433,11 @@ impl RepoAnalyzer {
             (local, None)
         };
 
-        // Build repo map and type index (single scan — the map is reused
-        // for type extraction instead of walking the tree twice).
-        let repo_map = self.build_repo_map(&root_path).await?;
-        let type_index = self.extract_types(&root_path, &repo_map).await?;
+        // Build repo map and type index from a single pass over the tree: the
+        // walk reads each file's content once, and the type index reuses those
+        // contents instead of re-reading every file from disk.
+        let (repo_map, contents) = self.build_repo_map_with_contents(&root_path).await?;
+        let type_index = self.extract_types(&repo_map, &contents).await?;
 
         // Language statistics.
         let mut language_stats: HashMap<String, usize> = HashMap::new();
@@ -491,12 +494,45 @@ impl RepoAnalyzer {
     /// extensions), records line counts, and attempts to parse import
     /// statements for dependency edges.
     pub async fn build_repo_map(&self, path: &Path) -> Result<RepoMap, RepoAnalyzerError> {
+        Ok(self.build_repo_map_with_contents(path).await?.0)
+    }
+
+    /// Build the repo map and return the per-file contents read during the
+    /// walk, so callers (e.g. [`Self::extract_types`]) do not re-read every
+    /// file from disk.
+    async fn build_repo_map_with_contents(
+        &self,
+        path: &Path,
+    ) -> Result<(RepoMap, Vec<Option<String>>), RepoAnalyzerError> {
         info!("RepoAnalyzer::build_repo_map: scanning {:?}", path);
         let mut repo_map = RepoMap::empty();
-        let mut contents: Vec<Option<String>> = Vec::new();
+        // (file_id, absolute path) collected during the walk; contents are read
+        // in parallel afterwards (bounded) so a large tree is not serialized on
+        // one fs read at a time.
+        let mut pending_reads: Vec<(usize, PathBuf)> = Vec::new();
 
-        self.walk_and_collect(path, path, &mut repo_map, &mut contents)
+        self.walk_and_collect(path, path, &mut repo_map, &mut pending_reads)
             .await?;
+
+        let read_results: Vec<(usize, Option<String>)> = futures_util::stream::iter(
+            pending_reads.iter().cloned(),
+        )
+        .map(|(id, p)| async move {
+            let content = tokio::fs::read_to_string(&p).await.ok();
+            (id, content)
+        })
+        .buffer_unordered(64)
+        .collect()
+        .await;
+        let mut contents: Vec<Option<String>> = vec![None; repo_map.files.len()];
+        for (file_id, content) in read_results {
+            repo_map.loc.insert(
+                file_id,
+                content.as_deref().map(|c| c.lines().count()).unwrap_or(0),
+            );
+            contents[file_id] = content;
+        }
+
         // Resolve import statements between same-repo files into dependency
         // edges. Targets that cannot be mapped to a repo file (external
         // crates, npm packages, stdlib, ...) are skipped without error.
@@ -511,7 +547,7 @@ impl RepoAnalyzer {
                 .map(|s| s.len())
                 .sum::<usize>()
         );
-        Ok(repo_map)
+        Ok((repo_map, contents))
     }
 
     async fn walk_and_collect(
@@ -519,7 +555,7 @@ impl RepoAnalyzer {
         root: &Path,
         dir: &Path,
         repo_map: &mut RepoMap,
-        contents: &mut Vec<Option<String>>,
+        pending_reads: &mut Vec<(usize, PathBuf)>,
     ) -> Result<(), RepoAnalyzerError> {
         // Bound the total walk: without a cap, `repo:/` on a large tree (or a
         // symlinked system dir) would scan unbounded numbers of files.
@@ -534,7 +570,8 @@ impl RepoAnalyzer {
 
             if ft.is_dir() {
                 if !self.excluded_dirs.contains(&name) {
-                    Box::pin(self.walk_and_collect(root, &abs_path, repo_map, contents)).await?;
+                    Box::pin(self.walk_and_collect(root, &abs_path, repo_map, pending_reads))
+                        .await?;
                 }
             } else if ft.is_file() {
                 let rel_path = abs_path
@@ -558,13 +595,9 @@ impl RepoAnalyzer {
 
                 let file_id = repo_map.files.len();
                 repo_map.files.push(rel_path.clone());
-                // Read the content once: it is used both for the line count
-                // (best effort; non-UTF8 or unreadable files count as 0 lines)
-                // and later for import-based dependency edge detection.
-                let content = tokio::fs::read_to_string(&abs_path).await.ok();
-                let line_count = content.as_deref().map(|c| c.lines().count()).unwrap_or(0);
-                repo_map.loc.insert(file_id, line_count);
-                contents.push(content);
+                // Defer the content read to the parallel pass in
+                // `build_repo_map_with_contents`; here only the path is kept.
+                pending_reads.push((file_id, abs_path));
 
                 // Every file starts with an empty edge set; import resolution
                 // in `resolve_dependencies` fills them in afterwards.
@@ -577,24 +610,27 @@ impl RepoAnalyzer {
 
     // ── Type index ──────────────────────────────────────────────────────
 
-    /// Extract type definitions / symbol index from the repository at `path`.
+    /// Extract type definitions / symbol index from the already-read file
+    /// contents.
     ///
-    /// Reuses the already-built [`RepoMap`] so the file tree is scanned only
-    /// once per `clone()` call. Heuristic extraction covers common language
-    /// constructs (struct/enum/trait/fn definitions).
+    /// Reuses the contents read during [`Self::build_repo_map_with_contents`]
+    /// so files are read from disk only once per `clone()` call. Heuristic
+    /// extraction covers common language constructs (struct/enum/trait/fn
+    /// definitions).
     pub async fn extract_types(
         &self,
-        path: &Path,
         repo_map: &RepoMap,
+        contents: &[Option<String>],
     ) -> Result<TypeIndex, RepoAnalyzerError> {
-        info!("RepoAnalyzer::extract_types: scanning {:?}", path);
+        info!(
+            "RepoAnalyzer::extract_types: {} files",
+            repo_map.files.len()
+        );
         let mut index = TypeIndex::empty();
 
         for (file_id, rel_path) in repo_map.files.iter().enumerate() {
-            let abs_path = path.join(rel_path);
-            let content = match tokio::fs::read_to_string(&abs_path).await {
-                Ok(c) => c,
-                Err(_) => continue, // binary or non-utf8 file
+            let Some(Some(content)) = contents.get(file_id) else {
+                continue; // binary or unreadable file
             };
 
             // Simple line-by-line heuristic for Rust-style definitions.

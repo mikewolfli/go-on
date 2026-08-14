@@ -83,16 +83,10 @@ pub(crate) fn extract_chunk_fields(payload: &Value) -> ChunkFields {
 pub(crate) struct ResultFields {
     /// Final response text (`response`, falling back to `content`).
     pub response: Option<String>,
-    /// Agent name (`agent`, falling back to `selected_agent`).
-    pub agent: Option<String>,
-    /// Actual model name reported by the provider.
-    pub model: Option<String>,
-    /// Thinking text attached to the completion, when present.
-    pub thinking: Option<String>,
 }
 
-/// Extract `result`/`done` completion fields with the same fallbacks the GUI
-/// consumer uses.
+/// Extract the final response text of a `result`/`done` completion event
+/// (`response`, falling back to `content`).
 pub(crate) fn extract_result_fields(payload: &Value) -> ResultFields {
     let response = payload
         .get("response")
@@ -100,28 +94,7 @@ pub(crate) fn extract_result_fields(payload: &Value) -> ResultFields {
         .or_else(|| payload.get("content").and_then(Value::as_str))
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let agent = payload
-        .get("agent")
-        .and_then(Value::as_str)
-        .or_else(|| payload.get("selected_agent").and_then(Value::as_str))
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let model = payload
-        .get("selected_model")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let thinking = payload
-        .get("thinking")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    ResultFields {
-        response,
-        agent,
-        model,
-        thinking,
-    }
+    ResultFields { response }
 }
 
 /// Stream error message with `error` → `message` dual-field fallback.
@@ -221,16 +194,12 @@ mod tests {
 
     #[test]
     fn extract_result_fields_falls_back_across_keys() {
-        let payload = serde_json::json!({
-            "content": "fallback",
-            "agent": "coder",
-            "selected_model": "gpt-4o",
-        });
+        let payload = serde_json::json!({ "content": "fallback", "agent": "coder" });
         let fields = extract_result_fields(&payload);
         assert_eq!(fields.response.as_deref(), Some("fallback"));
-        assert_eq!(fields.agent.as_deref(), Some("coder"));
-        assert_eq!(fields.model.as_deref(), Some("gpt-4o"));
-        assert_eq!(fields.thinking, None);
+        // Missing response/content → None (the extra payload keys are ignored).
+        let empty = serde_json::json!({ "agent": "coder", "selected_model": "gpt-4o" });
+        assert_eq!(extract_result_fields(&empty).response, None);
     }
 
     #[test]
