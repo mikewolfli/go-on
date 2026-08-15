@@ -2069,23 +2069,6 @@ fn list_mods_in_dir(dir: &std::path::Path) -> Vec<serde_json::Value> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Public helper for querying whether any game feature is enabled
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/// Returns true if any game-related feature is compiled in.
-pub fn has_game_features() -> bool {
-    cfg!(any(
-        feature = "game-online",
-        feature = "game-process",
-        feature = "game-screen",
-        feature = "game-input",
-        feature = "game-agent",
-        feature = "game-state",
-        feature = "game-modding"
-    ))
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // Registration
 // ═══════════════════════════════════════════════════════════════════════════════
 

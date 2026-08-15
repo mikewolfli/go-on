@@ -317,7 +317,7 @@ impl DocumentParser {
     /// Truncation is byte-budgeted but char-safe: `String::truncate` panics
     /// when the boundary falls inside a multi-byte UTF-8 code point (likely
     /// with CJK/emoji-heavy documents), so we step back to the nearest char
-    /// boundary — same class of bug already fixed in chat_phases.rs.
+    /// boundary — same class of bug already fixed in `chat/phases/observe.rs`.
     fn truncate_content(&self, content: &mut ParsedContent) {
         if content.text_content.len() > self.max_text_length {
             let original_len = content.text_content.len();

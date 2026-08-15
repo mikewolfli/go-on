@@ -170,33 +170,55 @@ impl SemanticResponseCache {
 
     /// Get a cached response if available
     pub fn get(&self, request: &str) -> Option<Value> {
+        self.probe_with_embedding(request, None).0
+    }
+
+    /// Lookup with an optional pre-computed query embedding.
+    ///
+    /// The minhash embedding is the dominant lookup cost (up to 4k SHA-256
+    /// hashes for a long message). The observe-phase probe and the act-phase
+    /// lookup run on the SAME key in one request, so the probe returns the
+    /// embedding it computed and [`probe_with_embedding`] reuses it instead of
+    /// recomputing — while still re-verifying the bucket state (the probe and
+    /// the lookup are separated by the think phase). Returns the cached value
+    /// together with the embedding used for the similarity scan (if any), so
+    /// callers can thread it to a follow-up lookup on the same request.
+    ///
+    /// The embedding is computed OUTSIDE the read lock: it does not depend on
+    /// bucket state, and holding the shared lock through it would serialize
+    /// every cache reader behind the most expensive step.
+    pub fn probe_with_embedding(
+        &self,
+        request: &str,
+        precomputed: Option<Vec<f32>>,
+    ) -> (Option<Value>, Option<Vec<f32>>) {
         let hash = simple_request_hash(request, self.config.max_request_hash_len);
         let now = Instant::now();
 
-        // Find the matching entry index under a read lock; the lock is dropped
-        // before the best-effort LRU touch below. The query embedding is
-        // computed lazily — only when a similarity scan is actually needed.
-        let match_idx = {
+        // (entry index, embedding used). Exact matches skip the embedding
+        // entirely; similarity scans compute it once, outside the lock.
+        let (match_idx, embedding) = {
             let guard = self.entries.read().expect("SemanticCache entries poisoned");
-            guard.get(&hash).and_then(|bucket| {
-                // Exact match first, then similarity. Exact match requires the
-                // full request text to be equal (the bucket hash alone is not
-                // enough: it is truncated to max_request_hash_len, so distinct
-                // requests sharing a long prefix would collide). Expired entry
-                // removal is handled by the background cleanup task.
-                find_exact_index(bucket, request, now).or_else(|| {
-                    // Similarity lookup must respect TTL. Uses the same
-                    // canonical embedding + cosine similarity as every
-                    // other similarity consumer.
-                    let query_vec = request_embedding(request);
-                    find_similar_index(
-                        bucket,
-                        &query_vec,
-                        self.config.similarity_threshold as f32,
-                        now,
-                    )
-                })
-            })
+            match guard
+                .get(&hash)
+                .and_then(|b| find_exact_index(b, request, now))
+            {
+                Some(idx) => (Some(idx), None),
+                None => {
+                    drop(guard);
+                    let query_vec = precomputed.unwrap_or_else(|| request_embedding(request));
+                    let guard = self.entries.read().expect("SemanticCache entries poisoned");
+                    let idx = guard.get(&hash).and_then(|b| {
+                        find_similar_index(
+                            b,
+                            &query_vec,
+                            self.config.similarity_threshold as f32,
+                            now,
+                        )
+                    });
+                    (idx, Some(query_vec))
+                }
+            }
         };
 
         match match_idx {
@@ -206,20 +228,22 @@ impl SemanticResponseCache {
                 // returned entry matches the one found above (a read-after-
                 // read could otherwise read a shifted bucket index if a
                 // concurrent put evicted an earlier entry in the same bucket).
-                if let Ok(mut guard) = self.entries.try_write() {
-                    let hit = guard.get_mut(&hash).and_then(|bucket| {
+                let hit = if let Ok(mut guard) = self.entries.try_write() {
+                    guard.get_mut(&hash).and_then(|bucket| {
                         bucket.get_mut(idx).map(|entry| {
                             entry.last_accessed = Instant::now();
                             entry.response.clone()
                         })
-                    });
-                    hit
+                    })
                 } else {
                     // Write lock contended — fall back to a fresh read that
                     // re-runs the SAME exact → similarity decision (not just
                     // an exact re-check) against the current bucket state.
                     let guard = self.entries.read().expect("SemanticCache entries poisoned");
-                    let query_vec = request_embedding(request);
+                    let query_vec = match embedding {
+                        Some(ref v) => v.clone(),
+                        None => request_embedding(request),
+                    };
                     guard.get(&hash).and_then(|bucket| {
                         find_matching_index(
                             bucket,
@@ -230,11 +254,12 @@ impl SemanticResponseCache {
                         )
                         .map(|i| bucket[i].response.clone())
                     })
-                }
+                };
+                (hit, embedding)
             }
             None => {
                 self.total_misses.fetch_add(1, Ordering::Relaxed);
-                None
+                (None, embedding)
             }
         }
     }
@@ -538,5 +563,38 @@ mod tests {
         assert_eq!(stats.total_hits, 1);
         assert_eq!(stats.total_misses, 1);
         assert!((stats.hit_ratio - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_probe_with_embedding_reuses_precomputed_and_matches_get() {
+        // Regression for the observe-probe → act-lookup handoff: the probe
+        // must return the same value `get` would, the embedding it computed
+        // on a similarity scan must be reusable by a follow-up lookup (same
+        // decision), and the exact-match fast path must skip the embedding.
+        let cache = SemanticResponseCache::new(SemanticCacheConfig::default());
+        let mut turn1 = "system: you are a coding assistant\nuser: explain closures".to_string();
+        while turn1.len() < 2048 {
+            turn1.push_str("\nuser: more context padding");
+        }
+        cache.put(&turn1, json!("turn-1 answer"));
+
+        // A different text sharing the truncated 1024-char prefix lands in the
+        // same bucket with no exact match → the similarity scan runs and
+        // computes an embedding (regardless of whether it hits).
+        let followup = format!("{}\nassistant: ok.\nuser: now explain traits", turn1);
+        let (v1, e1) = cache.probe_with_embedding(&followup, None);
+        let e1 = e1.expect("bucket collision without exact match must compute an embedding");
+        // A follow-up lookup reusing the embedding returns the same decision.
+        let (v2, _) = cache.probe_with_embedding(&followup, Some(e1));
+        assert_eq!(v1, v2);
+        assert_eq!(v1, cache.get(&followup));
+
+        // Exact-match path: no embedding is computed (fast path preserved).
+        let (exact_value, exact_embedding) = cache.probe_with_embedding(&turn1, None);
+        assert_eq!(exact_value, Some(json!("turn-1 answer")));
+        assert!(
+            exact_embedding.is_none(),
+            "exact match must skip the embedding"
+        );
     }
 }

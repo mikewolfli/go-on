@@ -2,7 +2,7 @@
 //!
 //! Despite living at `src/orchestration/orchestrator.rs`, this module is NOT
 //! the orchestration pipeline driver — the main chat orchestration chain lives
-//! in `acp/impl/chat_phases.rs` / `orchestration/flow.rs`. This module's real
+//! in `acp/impl/chat/phases/` / `orchestration/flow.rs`. This module's real
 //! responsibility is the model-selection layer: task-driven model selection
 //! (`select_model_for_task`), semantic model matching
 //! (`select_model_semantic`), and the cost / latency / capability estimates

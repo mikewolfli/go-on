@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::acp::r#impl::chat::{RiskAssessment, RiskVotePolicy, VectorContext};
-use crate::agent::Message;
+use crate::agents::agent::Message;
 use crate::orchestration::flow::ResolvedPhase;
 
 pub(crate) struct ObserveOutput {
@@ -21,6 +21,10 @@ pub(crate) struct ObserveOutput {
     pub routing_provenance: Vec<String>,
     pub reputation_scores: HashMap<String, f64>,
     pub multimodal_context: Option<String>,
+    /// Minhash embedding computed by the observe-phase semantic-cache probe,
+    /// reused by the act-phase lookup to avoid recomputing it (the dominant
+    /// cost of a similarity scan).
+    pub semantic_embedding: Option<Vec<f32>>,
 }
 
 /// Collected output from the think phase.

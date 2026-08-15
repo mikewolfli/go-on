@@ -62,7 +62,7 @@ const EVOLUTION_TRIGGER_MIN_INTERVAL_MS: u64 = 10 * 60 * 1000; // 10 minutes
 /// # Locking notes
 ///
 /// Uses `tokio::sync::Mutex` (not `std::sync::Mutex`) because the singleton
-/// is accessed from async contexts (`tokio::spawn` in `chat_phases.rs`,
+/// is accessed from async contexts (`tokio::spawn` in `chat/phases/`,
 /// `EvolutionLoop::run` in `evolution_loop/mod.rs`).  A `std::sync::Mutex`
 /// held across an `.await` point would be a runtime error.
 ///

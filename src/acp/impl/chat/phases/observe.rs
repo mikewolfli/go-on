@@ -17,11 +17,6 @@
 //!      knowledge persistence, metacognitive updates, threshold learning,
 //!      capability bus feedback, BrainLoop reflection
 
-use std::collections::HashMap;
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
-use std::time::Instant;
-
 // ── observe_phase constants ─────────────────────────────────────────────
 /// Timeout for the pre-fetch GET request (3s).
 const PREFETCH_GET_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
@@ -38,30 +33,18 @@ const SPA_API_BODY_LIMIT: usize = 4096;
 
 use anyhow::Result;
 use futures_util::future::join_all;
-use opentelemetry::Context as OtelContext;
 use serde_json::{json, Value};
-use tracing::{debug, info};
+use tracing::info;
 
-use crate::acp::helpers::autonomy_metrics::{
-    record_cache_bypass_for_execution, record_cache_shortcircuit_refused,
-};
-use crate::acp::helpers::cache_strategy::{
-    should_bypass_for_execution, CacheDecision, CacheStrategy,
-};
-use crate::acp::helpers::context::request_timeout;
-use crate::acp::helpers::response_assembler::CapabilityRoutingInfo;
-use crate::acp::helpers::review_gate::run_review_gate;
-use crate::acp::helpers::vote_executor::{execute_high_risk_vote, HighRiskVoteExecutionResult};
+use crate::acp::helpers::cache_strategy::should_bypass_for_execution;
 use crate::acp::r#impl::chat::{
-    agent_switch_state, apply_review_gate_assemble, auto_create_skills_from_conversation,
-    auto_generate_workflow_from_conversation, emit_status_event, emit_stream_chunk,
-    emit_stream_done, emit_stream_token_economy, estimate_token_economy,
-    evaluate_pre_route_policies, execute_autonomy_round, execute_fallback_agents,
-    extract_task_description, persist_chat_knowledge, persist_session_distillation,
-    persist_vector_memory, resolve_request_phase, routing_handles, select_and_score_agents,
-    AutonomyOutcome, ChatParams, ChatRequestContext, FallbackExecutionResult, RiskAssessment,
-    RiskVotePolicy, StreamEventMeta, StreamObserver, VectorContext,
+    emit_status_event, evaluate_pre_route_policies, resolve_request_phase, routing_handles,
+    ChatParams, ChatRequestContext, StreamObserver,
 };
+use crate::acp::server::AcpServer;
+use crate::agents::agent::Message;
+
+use super::types::ObserveOutput;
 
 /// Classify whether the user's last message is a "simple chat" (e.g. "你好", "hello").
 /// Simple messages skip expensive pre-processing steps (URL prefetch, multimodal,
@@ -105,21 +88,7 @@ pub(crate) fn is_simple_chat(params: &ChatParams) -> bool {
 
     true
 }
-use crate::acp::r#impl::request;
-use crate::acp::server::{AcpServer, OutcomeEvent};
-use crate::agent::Message;
-use crate::evaluation::TraceEvent;
-use crate::i18n::runtime::tf;
-use crate::intelligence::token_cache::{
-    estimate_messages_token_count, messages_to_text, ContextLengthClass,
-};
-
-use crate::orchestration::flow::ResolvedPhase;
-use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};
-use crate::orchestration::multi_agent_pipeline::MultiAgentPipeline;
-use crate::rpc_protocol::{child_trace_context, RequestTraceContext};
-
-use super::act::try_semantic_cache;
+use super::act::try_semantic_cache_probe;
 pub(crate) async fn observe_phase(
     server: &AcpServer,
     params: &mut ChatParams,
@@ -260,7 +229,11 @@ pub(crate) async fn observe_phase(
         .and_then(|p| p.options.as_ref())
         .and_then(|opts| opts.cache_enabled)
         .unwrap_or(true);
-    let skip_expensive = observe_cache_enabled && semantic_prefetch_should_skip(server, params);
+    let (skip_expensive, semantic_embedding) = if observe_cache_enabled {
+        semantic_prefetch_probe(server, params)
+    } else {
+        (false, None)
+    };
     if skip_expensive {
         tracing::debug!(
             target = "chat_pipeline",
@@ -660,6 +633,7 @@ pub(crate) async fn observe_phase(
         routing_provenance: phase_res.routing_provenance,
         reputation_scores: phase_res.reputation_scores,
         multimodal_context,
+        semantic_embedding,
     })
 }
 
@@ -681,18 +655,30 @@ pub(crate) async fn observe_phase(
 /// remove the entry between the probe and act's lookup, in which case act
 /// falls through to a fresh agent run WITHOUT the prefetched URL context — a
 /// graceful, bounded degradation (the URL text is still visible to the model).
-fn semantic_prefetch_should_skip(server: &AcpServer, params: &ChatParams) -> bool {
-    let semantic_hit = match params
+/// Probe the semantic cache for the last user message and report whether the
+/// expensive observe sub-steps (multimodal + URL prefetch) can be skipped
+/// because the answer is already cached.
+///
+/// Returns `(skip, embedding)`: `skip` is the decision (same semantics as the
+/// former `semantic_prefetch_should_skip`); `embedding` is the minhash query
+/// embedding the probe computed for the similarity scan, if any — handed to
+/// the act-phase lookup (via [`ObserveOutput::semantic_embedding`]) so the
+/// expensive embedding is computed at most once per request.
+fn semantic_prefetch_probe(server: &AcpServer, params: &ChatParams) -> (bool, Option<Vec<f32>>) {
+    let probe = match params
         .messages
         .iter()
         .rev()
         .find(|m| m.role == "user")
         .map(|m| m.content.as_str())
     {
-        Some(key) => try_semantic_cache(server, key).is_some(),
-        None => false,
+        Some(key) => try_semantic_cache_probe(server, key),
+        None => (None, None),
     };
-    semantic_prefetch_should_skip_condition(&params.mode, &params.messages, semantic_hit)
+    let semantic_hit = probe.0.is_some();
+    let skip =
+        semantic_prefetch_should_skip_condition(&params.mode, &params.messages, semantic_hit);
+    (skip, probe.1)
 }
 
 /// Pure gate for [`semantic_prefetch_should_skip`] (testable without a server):

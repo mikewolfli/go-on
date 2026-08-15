@@ -22,9 +22,7 @@ use super::super::http::{
     clone_tcp_stream, http_trace_context, write_http_json_response,
     write_http_json_response_with_context, HttpStream,
 };
-use super::super::sse::{
-    write_openai_sse_data, write_openai_sse_done, write_sse_headers,
-};
+use super::super::sse::{write_openai_sse_data, write_openai_sse_done, write_sse_headers};
 
 // ---------------------------------------------------------------------------
 // OpenAI Chat Request / Message types
@@ -656,12 +654,6 @@ async fn stream_openai_sse(
     stream_result?;
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Responses API — Input Conversion
-// ---------------------------------------------------------------------------
-
-/// Convert Responses API `input` field to internal agent messages.
 
 #[cfg(test)]
 mod tests {

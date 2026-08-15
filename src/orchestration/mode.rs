@@ -2,7 +2,7 @@
 //!
 //! Mode runtimes define orchestration policies per mode and are wired into the
 //! execution flow: `resolve_mode_runtime_with_posture` / `resolve_mode_runtime`
-//! are consumed by the chat pipeline (`src/acp/impl/chat_phases.rs`) and the
+//! are consumed by the chat pipeline (`src/acp/impl/chat/phases/`) and the
 //! CLI chat loop (`src/cli/chat.rs`).
 
 use crate::agent::{
@@ -125,7 +125,11 @@ fn all_exec_tools() -> Vec<&'static str> {
 /// (pending/unavailable state). Shared by `pre_execute` and `fallback_result`
 /// to keep the emitted `tools_available` payload identical across modes.
 static PENDING_TASK_TOOLS: &[&str] = &[
-    "read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff",
+    "read_file",
+    "search_files",
+    "apply_patch",
+    "run_tests",
+    "inspect_git_diff",
 ];
 
 /// Read-only inspection tools — the SafeGuard ReadOnly degraded set.

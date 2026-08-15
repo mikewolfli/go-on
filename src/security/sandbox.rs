@@ -752,7 +752,15 @@ mod tests {
                 "true".to_string(),
             ],
         );
-        assert!(wrapped.applied);
+        // bwrap only exists on Linux; on hosts where the probe fails the
+        // wrapper must honestly degrade to direct execution (asserted by
+        // `wrap_command_none_mode_never_applies` for None mode). The argv
+        // ordering regression below is only observable when the sandbox is
+        // actually applied.
+        if !wrapped.applied {
+            assert!(!bwrap_probe_works());
+            return;
+        }
         assert_eq!(wrapped.program, "bwrap");
         let chdir_idx = wrapped
             .args

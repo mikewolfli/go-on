@@ -62,18 +62,6 @@ impl RateLimitMiddleware {
         }
     }
 
-    /// Set the idle timeout for tenant eviction.
-    pub fn with_idle_timeout(mut self, idle_timeout_seconds: u64) -> Self {
-        self.idle_timeout = Duration::from_secs(idle_timeout_seconds);
-        self
-    }
-
-    /// Set the maximum number of tenant entries.
-    pub fn with_max_tenants(mut self, max: usize) -> Self {
-        self.max_tenants = max;
-        self
-    }
-
     /// Perform lazy eviction: remove idle tenant entries.
     fn lazy_evict(&self) {
         self.buckets.with_lock(|buckets| {

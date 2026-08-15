@@ -134,7 +134,7 @@ pub fn extract_url(text: &str) -> Option<String> {
 /// Check if a hostname resolves to a private/internal IP address.
 ///
 /// `pub(crate)` — shared with the observe-phase URL pre-fetch guard in
-/// `acp/impl/chat_phases.rs` so both SSRF surfaces use the same definition
+/// `acp/impl/chat/phases/` so both SSRF surfaces use the same definition
 /// (loopback / private / link-local / multicast / unspecified / IPv6 variants).
 pub(crate) fn is_private_host(host: &str) -> bool {
     if host.eq_ignore_ascii_case("localhost")

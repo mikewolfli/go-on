@@ -1,9 +1,10 @@
 //! Chat handling implementation functions for ACP server
 //!
 //! This module contains standalone functions that implement chat handling
-//! functionality, organized into 10 sub-modules:
+//! functionality, organized into 13 sub-modules:
 //! `agent_runtime`, `agent_selection`, `fallback`, `knowledge`, `params`,
-//! `session`, `streaming`, `tool_extraction`, `vector_context`, `voting`.
+//! `phases`, `pipeline`, `session`, `stream_consumer`, `streaming`,
+//! `tool_extraction`, `vector_context`, `voting`.
 //!
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
@@ -649,7 +650,7 @@ pub(crate) fn controller_recommended_phase(
 /// Process chat request (orchestrator — delegates to extracted phases)
 ///
 /// This function is now a thin orchestrator that splits the request lifecycle
-/// into four phases, each in `chat_phases.rs`:
+/// into four phases (in `chat/phases/`):
 ///   1. `observe_phase` — input validation, multimodal detection, prompt injection check,
 ///      context gathering, memory recall, capability sensing
 ///   2. `think_phase`   — model resolution, agent selection, routing, planning,
@@ -1544,7 +1545,7 @@ async fn check_phase_escalation_rules(
 /// another worker — cross-request contamination (wrong phase routing / wrong
 /// knowledge attribution). Each call is an O(N) pass over `messages`; callers
 /// that need the value more than once in the same scope compute it once and
-/// reuse it (e.g. `reflect_phase` in chat_phases.rs).
+/// reuse it (e.g. `reflect_phase` in `chat/phases/reflect.rs`).
 pub(crate) fn extract_task_description(messages: &[Message]) -> String {
     messages
         .iter()

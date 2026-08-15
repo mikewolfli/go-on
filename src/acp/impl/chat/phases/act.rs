@@ -2,16 +2,10 @@
 //!
 //! Split out of the former `chat_phases.rs` (M0.4).
 
-use std::collections::HashMap;
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
-use futures_util::future::join_all;
-use opentelemetry::Context as OtelContext;
 use serde_json::{json, Value};
-use tracing::{debug, info};
 
 use crate::acp::helpers::autonomy_metrics::{
     record_cache_bypass_for_execution, record_cache_shortcircuit_refused,
@@ -20,22 +14,27 @@ use crate::acp::helpers::cache_strategy::{
     should_bypass_for_execution, CacheDecision, CacheStrategy,
 };
 use crate::acp::helpers::context::request_timeout;
-use crate::acp::helpers::response_assembler::CapabilityRoutingInfo;
 use crate::acp::helpers::review_gate::run_review_gate;
 use crate::acp::helpers::vote_executor::{execute_high_risk_vote, HighRiskVoteExecutionResult};
 use crate::acp::r#impl::chat::{
-    agent_switch_state, apply_review_gate_assemble, auto_create_skills_from_conversation,
-    auto_generate_workflow_from_conversation, emit_status_event, emit_stream_chunk,
-    emit_stream_done, emit_stream_token_economy, estimate_token_economy,
-    evaluate_pre_route_policies, execute_autonomy_round, execute_fallback_agents,
-    extract_task_description, persist_chat_knowledge, persist_session_distillation,
-    persist_vector_memory, resolve_request_phase, routing_handles, select_and_score_agents,
-    AutonomyOutcome, ChatParams, ChatRequestContext, FallbackExecutionResult, RiskAssessment,
-    RiskVotePolicy, StreamEventMeta, StreamObserver, VectorContext,
+    agent_switch_state, emit_status_event, emit_stream_chunk, emit_stream_done,
+    emit_stream_token_economy, estimate_token_economy, execute_autonomy_round,
+    execute_fallback_agents, persist_chat_knowledge, persist_session_distillation,
+    persist_vector_memory, AutonomyOutcome, ChatParams, FallbackExecutionResult, RiskAssessment,
+    RiskVotePolicy, StreamEventMeta, StreamObserver,
 };
-use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};
-use crate::orchestration::multi_agent_pipeline::MultiAgentPipeline;
-use crate::rpc_protocol::{child_trace_context, RequestTraceContext};
+use crate::acp::r#impl::request;
+use crate::acp::server::{AcpServer, OutcomeEvent};
+use crate::agents::agent::Message;
+use crate::evaluation::TraceEvent;
+use crate::i18n::runtime::tf;
+use crate::intelligence::token_cache::{
+    estimate_messages_token_count, messages_to_text, ContextLengthClass,
+};
+use crate::orchestration::mode::ModeKind;
+use crate::rpc_protocol::RequestTraceContext;
+
+use super::types::{ActOutput, ObserveOutput, ThinkOutput};
 // ═════════════════════════════════════════════════════════════════════
 
 /// Phase 3: Execute actions: LLM calls, tool execution, autonomy loop,
@@ -210,7 +209,11 @@ pub(crate) async fn act_phase(
         // ── Semantic cache lookup ─────────────────────────────────────
         async {
             if phase_cache_enabled && !cache_bypassed_for_execution && !is_duplicate_user {
-                if let Some(text) = try_semantic_cache(server, semantic_key) {
+                if let Some(text) = try_semantic_cache_with_embedding(
+                    server,
+                    semantic_key,
+                    resolve_out.semantic_embedding.clone(),
+                ) {
                     let agent = resolve_out
                         .resolved
                         .agents
@@ -739,14 +742,43 @@ fn cognitive_empty_checkpoint() -> crate::acp::ConversationCheckpoint {
 
 // ── Execution internal helpers ──────────────────────────────────────────
 
-pub(crate) fn try_semantic_cache(server: &AcpServer, cache_key: &str) -> Option<String> {
+/// Probe the semantic cache: returns the cached value (if any) plus the
+/// minhash embedding used for the similarity scan, so a follow-up
+/// [`try_semantic_cache_with_embedding`] on the same key reuses it instead of
+/// recomputing the embedding (the dominant lookup cost).
+pub(crate) fn try_semantic_cache_probe(
+    server: &AcpServer,
+    cache_key: &str,
+) -> (Option<String>, Option<Vec<f32>>) {
+    let (value, embedding) = server
+        .cache_deps
+        .cache
+        .semantic_cache
+        .read()
+        .unwrap_or_else(|p| p.into_inner())
+        .probe_with_embedding(cache_key, None);
+    (
+        value.and_then(|v| v.as_str().map(|s| s.to_string())),
+        embedding,
+    )
+}
+
+/// Semantic-cache lookup reusing an embedding computed by the observe-phase
+/// probe (when one was computed). Re-verifies the bucket state — the probe and
+/// the lookup are separated by the think phase.
+pub(crate) fn try_semantic_cache_with_embedding(
+    server: &AcpServer,
+    cache_key: &str,
+    embedding: Option<Vec<f32>>,
+) -> Option<String> {
     server
         .cache_deps
         .cache
         .semantic_cache
         .read()
         .unwrap_or_else(|p| p.into_inner())
-        .get(cache_key)
+        .probe_with_embedding(cache_key, embedding)
+        .0
         .and_then(|v| v.as_str().map(|s| s.to_string()))
 }
 

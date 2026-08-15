@@ -2,42 +2,15 @@
 //!
 //! Split out of the former `chat_phases.rs` (M0.4).
 
-use std::collections::HashMap;
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
-use std::time::Instant;
-
 use anyhow::Result;
-use futures_util::future::join_all;
-use opentelemetry::Context as OtelContext;
-use serde_json::{json, Value};
-use tracing::{debug, info};
 
-use crate::acp::helpers::autonomy_metrics::{
-    record_cache_bypass_for_execution, record_cache_shortcircuit_refused,
-};
-use crate::acp::helpers::cache_strategy::{
-    should_bypass_for_execution, CacheDecision, CacheStrategy,
-};
-use crate::acp::helpers::context::request_timeout;
-use crate::acp::helpers::response_assembler::CapabilityRoutingInfo;
-use crate::acp::helpers::review_gate::run_review_gate;
-use crate::acp::helpers::vote_executor::{execute_high_risk_vote, HighRiskVoteExecutionResult};
-use crate::acp::r#impl::chat::{
-    agent_switch_state, apply_review_gate_assemble, auto_create_skills_from_conversation,
-    auto_generate_workflow_from_conversation, emit_status_event, emit_stream_chunk,
-    emit_stream_done, emit_stream_token_economy, estimate_token_economy,
-    evaluate_pre_route_policies, execute_autonomy_round, execute_fallback_agents,
-    extract_task_description, persist_chat_knowledge, persist_session_distillation,
-    persist_vector_memory, resolve_request_phase, routing_handles, select_and_score_agents,
-    AutonomyOutcome, ChatParams, ChatRequestContext, FallbackExecutionResult, RiskAssessment,
-    RiskVotePolicy, StreamEventMeta, StreamObserver, VectorContext,
-};
-use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};
-use crate::orchestration::multi_agent_pipeline::MultiAgentPipeline;
-use crate::rpc_protocol::{child_trace_context, RequestTraceContext};
+use crate::acp::r#impl::chat::{extract_task_description, select_and_score_agents, ChatParams};
+use crate::acp::server::AcpServer;
+use crate::agents::agent::Message;
+use crate::rpc_protocol::RequestTraceContext;
 
 use super::observe::is_simple_chat;
+use super::types::{ObserveOutput, ThinkOutput};
 // Phase 2: Think
 // ═════════════════════════════════════════════════════════════════════
 
@@ -148,10 +121,3 @@ async fn inject_agent_memory_bus(
         );
     }
 }
-
-// ═════════════════════════════════════════════════════════════════════
-// Phase 3: Act
-// ═════════════════════════════════════════════════════════════════════
-
-/// Phase 3: Execute actions: LLM calls, tool execution, autonomy loop,
-/// fallback, vote, cache operations, scheduler.

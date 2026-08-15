@@ -10,7 +10,7 @@
 //! ## Architecture
 //!
 //! ```text
-//! chat.rs / chat_phases.rs
+//! chat.rs / chat/phases/
 //!         │
 //!         ▼
 //!   run_acp_autonomy_loop()    ← YOU ARE HERE — the unified entry point

@@ -25,4 +25,3 @@ pub(crate) use act::act_phase;
 pub(crate) use observe::observe_phase;
 pub(crate) use reflect::reflect_phase;
 pub(crate) use think::think_phase;
-pub(crate) use types::{ActOutput, ObserveOutput, ThinkOutput};

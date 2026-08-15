@@ -438,7 +438,7 @@ pub(crate) async fn execute_fallback_agents(
                 }
 
                 // NOTE: token-cache population is intentionally NOT done here.
-                // act_phase (chat_phases.rs) populates the token/semantic caches
+                // act_phase (`chat/phases/act.rs`) populates the token/semantic caches
                 // for ALL successful execution paths (autonomy loop and fallback)
                 // with the final merged output and the `cache_bypassed_for_execution`
                 // gate. Storing again here with the same agent_messages would be a

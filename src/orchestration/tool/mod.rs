@@ -1784,11 +1784,6 @@ impl ToolRegistry {
         names
     }
 
-    /// Return names of tools directly visible to the AI model.
-    pub fn direct_tool_names(&self) -> Vec<&'static str> {
-        self.tools_by_exposure(ToolExposure::Direct)
-    }
-
     /// Return names of deferred (search-discoverable) tools.
     pub fn deferred_tool_names(&self) -> Vec<&'static str> {
         self.tools_by_exposure(ToolExposure::Deferred)

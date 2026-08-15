@@ -426,13 +426,6 @@ impl DiagnosticTriggerSource {
         }
     }
 
-    /// Returns the inner error-counts map reference for external wiring.
-    #[cfg(test)]
-    #[allow(dead_code, reason = "test-only accessor for evolution loop tests")]
-    pub fn inner_counts(&self) -> &Arc<tokio::sync::Mutex<HashMap<String, u64>>> {
-        &self.error_counts
-    }
-
     /// Record an observed error pattern.
     ///
     /// Record an observed error pattern so that repeated errors

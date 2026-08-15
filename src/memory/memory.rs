@@ -71,7 +71,7 @@ impl MemoryPolicy {
     /// Whether an entry should be retained.
     ///
     /// `staleness` is always 0 at every production write site (see
-    /// chat.rs / chat_phases.rs / exec_pack/task.rs), so the
+    /// chat.rs / chat/phases/ / exec_pack/task.rs), so the
     /// `staleness <= staleness_max_days` term is effectively constant-true
     /// today: GC is driven by `usefulness`. The staleness term is kept as
     /// the designed retention rule for future content-aging producers that
