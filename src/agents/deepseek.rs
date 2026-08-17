@@ -159,7 +159,7 @@ impl Agent for DeepSeekAgent {
     /// via is_default. If DeepSeek releases new models, update this list from their
     /// OFFICIAL documentation only — never from blog posts, rumors, or third-party lists.
     fn available_models(&self) -> Vec<ModelInfo> {
-        vec![
+        let mut models = vec![
             ModelInfo {
                 id: "deepseek-v4-flash".to_string(),
                 name: "DeepSeek V4 Flash".to_string(),
@@ -190,7 +190,21 @@ impl Agent for DeepSeekAgent {
                 // Official docs: same 1M context for v4-pro
                 context_window: Some(1_048_576),
             },
-        ]
+        ];
+
+        // Single source of truth: the provider spec's `model_suggestions` feed
+        // the GUI's model dropdown, so every suggestion must also be listable
+        // here. Hand-curated entries above keep their capability/context
+        // enrichment; suggestions with no curated entry get a default shape.
+        if let Some(spec) = crate::core::providers::provider_spec_by_name("deepseek") {
+            for id in &spec.model_suggestions {
+                if !models.iter().any(|m| &m.id == id) {
+                    models.push(crate::shared::default_model_info(id, self.model == *id));
+                }
+            }
+        }
+
+        models
     }
 }
 

@@ -10,6 +10,10 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde::Deserialize;
 
+use crate::acp::r#impl::chat::stream_consumer::{
+    classify_stream_event, extract_chunk_fields, extract_error_message, extract_result_fields,
+    StreamEventKind,
+};
 use crate::acp::r#impl::chat::{ChatParams, ChatRequestContext, StreamObserver};
 use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
 use crate::acp::r#impl::session::UserSession;
@@ -527,87 +531,81 @@ async fn stream_openai_sse(
         });
 
         while let Some(frame) = rx.recv().await {
-            if frame.event == "error" {
-                // Forward error events from the chat pipeline
-                let err_msg = frame
-                    .payload
-                    .get("error")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown pipeline error");
-                let payload = build_openai_chunk(
-                    &request_id,
-                    &model,
-                    &format!("upstream model service error: {}", err_msg),
-                    Some("stop"),
-                );
-                let _ = write_openai_sse_data(socket, &payload).await;
-                write_openai_sse_done(socket).await?;
-                record_outcome(false);
-                task.abort();
-                return Ok(());
-            }
-            // Forward "done" event: the full response has already been
-            // streamed as per-token "chunk" deltas, so re-sending the whole
-            // text here would duplicate the answer for any OpenAI-compatible
-            // client that concatenates delta.content. Emit only an empty
-            // delta carrying finish_reason="stop" to terminate the stream;
-            // the "result" branch below handles responses that were never
-            // chunked (e.g. a mode-runtime recovery with no chunk frames).
-            if frame.event == "done" {
-                let payload = build_openai_chunk(&request_id, &model, "", Some("stop"));
-                let _ = write_openai_sse_data(socket, &payload).await;
-                write_openai_sse_done(socket).await?;
-                record_outcome(true);
-                task.abort();
-                return Ok(());
-            }
-
-            // Forward "result" event: the final pipeline result carries the complete
-            // response text extracted from the agent output. Send it as the final
-            // chunk with finish_reason="stop", then the SSE [DONE] signal.
-            if frame.event == "result" {
-                let response_text = frame
-                    .payload
-                    .get("response")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let payload = build_openai_chunk(&request_id, &model, response_text, Some("stop"));
-                let _ = write_openai_sse_data(socket, &payload).await;
-                write_openai_sse_done(socket).await?;
-                record_outcome(true);
-                task.abort();
-                return Ok(());
-            }
-
-            // "telemetry" events are informational — ignore them.
-            if frame.event == "telemetry" {
-                continue;
-            }
-
-            // Only "chunk" events should proceed past this point.
-            if frame.event != "chunk" {
-                continue;
-            }
-            let token = frame
-                .payload
-                .get("token")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            if token.is_empty() {
-                continue;
-            }
-            let payload = build_openai_chunk(&request_id, &model, token, None);
-            if let Err(err) = write_openai_sse_data(socket, &payload).await {
-                task.abort();
-                record_outcome(false);
-                return Err(err);
-            }
-            sse_event_count += 1;
-            // Periodic flush: every SSE_FLUSH_INTERVAL events.
-            // This batches syscalls while keeping latency low.
-            if sse_event_count.is_multiple_of(super::super::sse::SSE_FLUSH_INTERVAL) {
-                use super::super::sse::flush_sse;
-                let _ = flush_sse(socket).await;
+            match classify_stream_event(frame.event) {
+                StreamEventKind::Error => {
+                    // Forward error events from the chat pipeline
+                    let err_msg = extract_error_message(&frame.payload)
+                        .unwrap_or_else(|| "unknown pipeline error".to_string());
+                    let payload = build_openai_chunk(
+                        &request_id,
+                        &model,
+                        &format!("upstream model service error: {}", err_msg),
+                        Some("stop"),
+                    );
+                    let _ = write_openai_sse_data(socket, &payload).await;
+                    write_openai_sse_done(socket).await?;
+                    record_outcome(false);
+                    task.abort();
+                    return Ok(());
+                }
+                // Forward "done" event: the full response has already been
+                // streamed as per-token "chunk" deltas, so re-sending the whole
+                // text here would duplicate the answer for any OpenAI-compatible
+                // client that concatenates delta.content. Emit only an empty
+                // delta carrying finish_reason="stop" to terminate the stream;
+                // the "result" branch below handles responses that were never
+                // chunked (e.g. a mode-runtime recovery with no chunk frames).
+                StreamEventKind::Done => {
+                    let payload = build_openai_chunk(&request_id, &model, "", Some("stop"));
+                    let _ = write_openai_sse_data(socket, &payload).await;
+                    write_openai_sse_done(socket).await?;
+                    record_outcome(true);
+                    task.abort();
+                    return Ok(());
+                }
+                // Forward "result" event: the final pipeline result carries the
+                // complete response text extracted from the agent output. Send
+                // it as the final chunk with finish_reason="stop", then the SSE
+                // [DONE] signal.
+                StreamEventKind::Result => {
+                    let response_text = extract_result_fields(&frame.payload)
+                        .response
+                        .unwrap_or_default();
+                    let payload =
+                        build_openai_chunk(&request_id, &model, &response_text, Some("stop"));
+                    let _ = write_openai_sse_data(socket, &payload).await;
+                    write_openai_sse_done(socket).await?;
+                    record_outcome(true);
+                    task.abort();
+                    return Ok(());
+                }
+                // "telemetry" events are informational — ignore them.
+                StreamEventKind::Telemetry => continue,
+                StreamEventKind::Chunk => {
+                    // Only `token` is forwarded into the OpenAI delta (not
+                    // `reasoning`), matching the pre-unification behavior.
+                    let token = extract_chunk_fields(&frame.payload).token;
+                    if token.is_empty() {
+                        continue;
+                    }
+                    let payload = build_openai_chunk(&request_id, &model, &token, None);
+                    if let Err(err) = write_openai_sse_data(socket, &payload).await {
+                        task.abort();
+                        record_outcome(false);
+                        return Err(err);
+                    }
+                    sse_event_count += 1;
+                    // Periodic flush: every SSE_FLUSH_INTERVAL events.
+                    // This batches syscalls while keeping latency low.
+                    if sse_event_count.is_multiple_of(super::super::sse::SSE_FLUSH_INTERVAL) {
+                        use super::super::sse::flush_sse;
+                        let _ = flush_sse(socket).await;
+                    }
+                }
+                // Remaining kinds (status/progress/phase_*/tool_approval and
+                // unknown names) are not part of the OpenAI-compat protocol —
+                // ignore them, matching the previous `!= "chunk"` skip.
+                _ => continue,
             }
         }
 

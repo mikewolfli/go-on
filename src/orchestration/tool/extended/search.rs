@@ -24,9 +24,6 @@ impl Tool for GrepTool {
     fn name(&self) -> &'static str {
         "grep"
     }
-    fn description(&self) -> &str {
-        "Search file contents using regex patterns"
-    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let pattern = input.payload["pattern"]
             .as_str()

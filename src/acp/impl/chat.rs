@@ -37,6 +37,7 @@ use crate::agent::Message;
 use crate::config::PhaseOptions;
 use crate::flow::FlowManager;
 use crate::i18n::runtime::{t, tf};
+use crate::orchestration::events::{global_event_bus, AgentEvent};
 use crate::orchestration::mode::ModeKind;
 
 /// Whole-chat-request timeout shared by the callers that bound an entire
@@ -88,7 +89,7 @@ pub(crate) use knowledge::{
 pub(crate) use streaming::{
     acquire_sse_buffer, emit_status_event, emit_stream_chunk, emit_stream_done,
     emit_stream_token_economy, release_sse_buffer, StreamEventMeta, StreamFrame,
-    StreamNotificationContext, StreamObserver,
+    StreamNotificationContext, StreamObserver, STREAM_EVENT_ERROR, STREAM_EVENT_RESULT,
 };
 pub(crate) use vector_context::{
     build_phase_summary, build_vector_context_message, effective_vector_settings,
@@ -671,6 +672,19 @@ pub(crate) async fn process_chat_request(
 ) -> Result<serde_json::Value> {
     use crate::acp::r#impl::chat::pipeline::ChatPipeline;
 
+    // ── Agent lifecycle events: request start + step boundary ───────
+    // Both are informational (the verdict is ignored here — only
+    // `ToolsPreExecute` honors `Consume`, in the tool executor). The ACP
+    // chat turn is the pipeline's single clean step boundary today, so
+    // `AgentPreStep` reports the whole turn as `step = "turn"`.
+    let request_id = trace.request_id.clone();
+    global_event_bus().dispatch(&AgentEvent::AgentRequest {
+        request_id: request_id.clone(),
+    });
+    global_event_bus().dispatch(&AgentEvent::AgentPreStep {
+        step: "turn".to_string(),
+    });
+
     let outcome =
         ChatPipeline::run(server, params, stream_observer.clone(), trace, span, ctx).await?;
 
@@ -703,7 +717,7 @@ pub(crate) async fn process_chat_request(
             );
             let no_response_msg = crate::i18n::runtime::t("error.chat.no_response_from_pipeline");
             observer.send_sse(crate::acp::r#impl::chat::streaming::StreamFrame {
-                event: "error",
+                event: STREAM_EVENT_ERROR,
                 payload: serde_json::json!({
                     // Both fields carry the RESOLVED text: dispatch and GUI
                     // read `message` (preferring it), the bridge reads `error`,
@@ -731,11 +745,16 @@ pub(crate) async fn process_chat_request(
                 "done": true,
             });
             observer.send_sse(crate::acp::r#impl::chat::streaming::StreamFrame {
-                event: "result",
+                event: STREAM_EVENT_RESULT,
                 payload,
             });
         }
     }
+
+    // ── Agent lifecycle event: turn stopping ─────────────────────────
+    // The response is finalized and no further tool activity will occur
+    // for this request. Informational — the verdict is ignored.
+    global_event_bus().dispatch(&AgentEvent::AgentTurnStopping { request_id });
 
     Ok(result)
 }

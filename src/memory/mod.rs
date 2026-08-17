@@ -16,6 +16,8 @@ pub mod embedding_provider;
 pub mod memory;
 pub mod memory_bridge;
 pub mod memory_persistence;
+#[cfg(feature = "backend-sqlite")]
+pub mod search;
 pub mod semantic_cache;
 pub mod summarization;
 pub mod vector;

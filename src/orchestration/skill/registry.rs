@@ -11,6 +11,7 @@ use tokio::time::interval;
 use tracing::{info, warn};
 
 use crate::i18n::runtime::tf;
+use crate::orchestration::registration::RegistrationGuard;
 use crate::orchestration::skill_import::{parse_skill_md, SkillImportManifest};
 
 use super::execution::{
@@ -92,6 +93,12 @@ pub struct SkillRegistry {
     /// `disable_model_invocation()` returns `false` but should still be
     /// hidden (e.g., utility skills registered as `Arc<dyn Skill>`).
     hidden_skills: HashSet<String>,
+    /// Set of skill names archived by the usage-scoring policy pass
+    /// (`skill::usage::archive_low_frequency` / `promote_high_frequency`).
+    /// Archived skills stay registered and invocable via `get()`, but are
+    /// excluded from model-facing discovery exactly like hidden skills.
+    /// Runtime-only: the flag is not persisted across restarts.
+    archived_skills: HashSet<String>,
 }
 
 impl std::fmt::Debug for SkillRegistry {
@@ -102,6 +109,7 @@ impl std::fmt::Debug for SkillRegistry {
             .field("evolution_history", &self.evolution_history)
             .field("persistence_path", &self.persistence_path)
             .field("prompt_skill_count", &self.prompt_skill_data.len())
+            .field("archived_skills", &self.archived_skills)
             .finish()
     }
 }
@@ -175,6 +183,48 @@ impl SkillRuntimeStats {
     }
 }
 
+/// Validate a skill name against the single shared rule used by every
+/// registration gate (runtime `validate_and_insert` and import-manifest
+/// validation): length ≤ 64, the allowed charset (ASCII lowercase letters,
+/// digits, `.`, `_`, `-`), and rejection of bare path-traversal components
+/// (`.`, `..`) — `name` is used as a path component under the skills cache
+/// directory, so a bare traversal component must be rejected even though `.`
+/// is otherwise allowed in skill names (e.g. `my.skill`). Error text is
+/// identical to the historical per-path checks so messages never change.
+pub(crate) fn validate_skill_name_rule(name: &str) -> Result<()> {
+    if name == "." || name == ".." {
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.skill_name_invalid_chars",
+                &[("name", name), ("chars", "path traversal")]
+            )
+        );
+    }
+    if name.is_empty() || name.len() > 64 {
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.skill_name_length",
+                &[("name", name), ("len", &name.len().to_string())]
+            )
+        );
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-')
+    {
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.skill_name_invalid_chars",
+                &[("name", name), ("chars", "invalid characters")]
+            )
+        );
+    }
+    Ok(())
+}
+
 impl SkillRegistry {
     /// Register a skill with optional provenance tracking.
     ///
@@ -197,6 +247,30 @@ impl SkillRegistry {
     /// - Must be unique (duplicates are rejected)
     pub fn register(&mut self, skill: Arc<dyn super::Skill>) -> Result<()> {
         self.validate_and_insert(skill, None)
+    }
+
+    /// Register a skill and return a guard that unregisters it on drop (or
+    /// explicit `rollback()`), so a failed plugin setup can never leave a
+    /// half-registered skill behind (M1.6 / M4 plugin base). Mirrors
+    /// [`Self::register`]; on validation error the error is propagated and
+    /// nothing is registered.
+    ///
+    /// The guard's closure captures the skill name plus a raw pointer to this
+    /// registry. Because the closure must be `'static` (the guard can outlive
+    /// the `&mut self` borrow), the caller must uphold the scoped-guard
+    /// contract: **the guard must be dropped (or rolled back) before the
+    /// registry itself is dropped or moved**. This is intended for long-lived
+    /// registries with plugin-scoped guards.
+    pub fn register_guarded(&mut self, skill: Arc<dyn super::Skill>) -> Result<RegistrationGuard> {
+        let name = skill.name().to_string();
+        self.register(skill)?;
+        let this = std::ptr::from_mut(self);
+        Ok(RegistrationGuard::new(move || {
+            // SAFETY: per the contract above, the guard is dropped (or rolled
+            // back) before the registry is dropped or moved, so `this` still
+            // points at a live registry whenever the closure runs.
+            unsafe { (&mut *this).unregister(&name) };
+        }))
     }
 
     /// Register a skill that should be hidden from model discovery.
@@ -250,6 +324,24 @@ impl SkillRegistry {
                 .get(name)
                 .map(|s| s.disable_model_invocation())
                 .unwrap_or(false)
+    }
+
+    /// Mark a skill as archived (or un-archive it), per the usage-scoring
+    /// policy pass in `skill::usage` (low-frequency archive / high-frequency
+    /// promote). Archived skills remain registered and invocable via `get()`
+    /// but are excluded from model-facing discovery (like hidden skills).
+    /// This is a runtime-only flag — it is not persisted across restarts.
+    pub fn set_archived(&mut self, name: &str, archived: bool) {
+        if archived {
+            self.archived_skills.insert(name.to_string());
+        } else {
+            self.archived_skills.remove(name);
+        }
+    }
+
+    /// Returns `true` if the skill is archived by the usage-scoring policy.
+    pub fn is_archived(&self, name: &str) -> bool {
+        self.archived_skills.contains(name)
     }
 
     /// Register the set of built-in skills that ship with go-on.
@@ -311,26 +403,7 @@ impl SkillRegistry {
         provenance: Option<SkillProvenance>,
     ) -> Result<()> {
         let name = skill.name().to_string();
-        if name.is_empty() || name.len() > 64 {
-            anyhow::bail!(
-                "{}",
-                tf(
-                    "error.skill_name_length",
-                    &[("name", name.as_str()), ("len", &name.len().to_string())]
-                )
-            );
-        }
-        if !name.chars().all(|c| {
-            c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-'
-        }) {
-            anyhow::bail!(
-                "{}",
-                tf(
-                    "error.skill_name_invalid_chars",
-                    &[("name", name.as_str()), ("chars", "invalid characters")]
-                )
-            );
-        }
+        validate_skill_name_rule(&name)?;
         if self.skills.contains_key(&name) {
             anyhow::bail!(
                 "{}",
@@ -412,6 +485,7 @@ impl SkillRegistry {
             self.prompt_skill_data.remove(internal_name);
             self.provenances.remove(internal_name);
             self.namespaces.remove(internal_name);
+            self.archived_skills.remove(internal_name);
             // Persist the change if prompt skill persistence is enabled.
             if self.persistence_path.is_some() {
                 let _ = self.save_prompt_skills_to_disk();
@@ -423,8 +497,10 @@ impl SkillRegistry {
     /// List skill descriptors sorted by score (comprehensive output).
     ///
     /// When `include_hidden` is `false` (the normal case for model-facing
-    /// listings), skills with `disable_model_invocation()` returning `true`
-    /// are excluded. Pass `true` to include all skills regardless.
+    /// listings), skills with `disable_model_invocation()` returning `true`,
+    /// skills in the `hidden_skills` override set, and skills archived by the
+    /// usage-scoring policy are excluded. Pass `true` to include all skills
+    /// regardless.
     pub fn list(&self, include_hidden: bool) -> Vec<SkillDescriptor> {
         let mut items = self
             .skills
@@ -432,11 +508,13 @@ impl SkillRegistry {
             .filter(|(name, skill)| {
                 include_hidden
                     || (!skill.disable_model_invocation()
-                        && !self.hidden_skills.contains(name.as_str()))
+                        && !self.hidden_skills.contains(name.as_str())
+                        && !self.archived_skills.contains(name.as_str()))
             })
             .map(|(name, skill)| {
-                let hidden =
-                    skill.disable_model_invocation() || self.hidden_skills.contains(name.as_str());
+                let hidden = skill.disable_model_invocation()
+                    || self.hidden_skills.contains(name.as_str())
+                    || self.archived_skills.contains(name.as_str());
                 self.build_descriptor(name, skill.as_ref(), hidden)
             })
             .collect::<Vec<_>>();
@@ -464,7 +542,9 @@ impl SkillRegistry {
     /// skill is not registered.
     pub fn descriptor(&self, name: &str) -> Option<SkillDescriptor> {
         let skill = self.skills.get(name)?;
-        let hidden = skill.disable_model_invocation() || self.hidden_skills.contains(name);
+        let hidden = skill.disable_model_invocation()
+            || self.hidden_skills.contains(name)
+            || self.archived_skills.contains(name);
         Some(self.build_descriptor(name, skill.as_ref(), hidden))
     }
 
@@ -1235,4 +1315,66 @@ pub fn tokenize(text: &str) -> HashSet<String> {
     tokenize_with_stopwords(text, 3, &stop_words)
         .into_iter()
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal valid prompt-based skill used to exercise registration guards.
+    fn guarded_dummy_skill() -> Arc<dyn super::super::Skill> {
+        Arc::new(PromptBasedSkill {
+            name: "dummy-guarded-skill".to_string(),
+            description: "Dummy skill for registration guard tests".to_string(),
+            prompt_template: "echo".to_string(),
+            input_schema: HashMap::new(),
+            timeout_secs: 1,
+            max_retries: 0,
+            disable_model_invocation: false,
+            policy: None,
+        })
+    }
+
+    #[test]
+    fn register_guarded_removes_skill_on_drop() {
+        let mut registry = SkillRegistry::default();
+        let guard = registry
+            .register_guarded(guarded_dummy_skill())
+            .expect("registration should succeed");
+        assert!(registry.get("dummy-guarded-skill").is_some());
+        drop(guard);
+        assert!(registry.get("dummy-guarded-skill").is_none());
+    }
+
+    #[test]
+    fn unregister_returns_false_for_unknown_skill() {
+        let mut registry = SkillRegistry::default();
+        assert!(!registry.unregister("never-registered-skill"));
+    }
+
+    #[test]
+    fn rollback_unregisters_skill_before_drop() {
+        let mut registry = SkillRegistry::default();
+        let guard = registry
+            .register_guarded(guarded_dummy_skill())
+            .expect("registration should succeed");
+        assert!(registry.get("dummy-guarded-skill").is_some());
+        guard.rollback();
+        // The skill is gone before the guard is dropped; a second unregister
+        // returns false, confirming no double-removal.
+        assert!(registry.get("dummy-guarded-skill").is_none());
+        assert!(!registry.unregister("dummy-guarded-skill"));
+    }
+
+    #[test]
+    fn register_guarded_propagates_duplicate_error() {
+        let mut registry = SkillRegistry::default();
+        let _guard = registry
+            .register_guarded(guarded_dummy_skill())
+            .expect("first registration should succeed");
+        let err = registry
+            .register_guarded(guarded_dummy_skill())
+            .expect_err("duplicate registration should fail");
+        assert!(err.to_string().contains("error.skill_already_registered"));
+    }
 }

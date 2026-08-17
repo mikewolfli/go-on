@@ -424,6 +424,7 @@ mod tests {
 
         AppConfig {
             schema_version: "1.0.0".to_string(),
+            layered_merge: false,
             provider: crate::core::config::types::ProviderConfig {
                 default_phase: "coding".to_string(),
                 agents,

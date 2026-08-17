@@ -19,10 +19,6 @@ impl Tool for DiffTool {
         "file_diff"
     }
 
-    fn description(&self) -> &str {
-        "Compare two files and return the unified diff"
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let file_a = input.payload["file_a"]
             .as_str()
@@ -411,8 +407,14 @@ mod tests {
         let props = tool_schema["properties"].as_object().expect("properties");
         assert!(props.contains_key("file_a"), "schema must expose file_a");
         assert!(props.contains_key("file_b"), "schema must expose file_b");
-        assert!(!props.contains_key("file1"), "stale file1 field must be gone");
-        assert!(!props.contains_key("file2"), "stale file2 field must be gone");
+        assert!(
+            !props.contains_key("file1"),
+            "stale file1 field must be gone"
+        );
+        assert!(
+            !props.contains_key("file2"),
+            "stale file2 field must be gone"
+        );
     }
 
     #[test]

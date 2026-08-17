@@ -20,7 +20,7 @@ fn default_schema_version() -> String {
 /// Flattened into [`AppConfig`] so existing config files with
 /// `agents.*`, `default_phase`, and `role_registry.*` keys continue
 /// to deserialize without nesting changes.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ProviderConfig {
     /// Default phase to use when none is specified
     #[serde(default)]
@@ -39,7 +39,7 @@ pub struct ProviderConfig {
 /// security-sensitive settings are grouped and independently
 /// documented.  Flattened into [`AppConfig`] for config-file
 /// backward compatibility.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct SecurityConfig {
     /// Whether inbound entry auth is enabled at gateway/edge for exposed HTTP endpoints
     #[serde(default)]
@@ -124,7 +124,7 @@ pub struct SecurityConfig {
 ///   credential dirs masked, network enabled (default when bwrap exists)
 /// - `read-only`: everything read-only, network disabled
 /// - `isolated`: empty tmpfs root + read-only workspace, network disabled
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct CommandSandboxConfig {
     /// Sandbox mode string. Defaults to `workspace-write` when unset.
     #[serde(default)]
@@ -147,7 +147,7 @@ pub struct CommandSandboxConfig {
 /// LAYER 3: Config-level URL allow/block lists.
 /// Security is enforced at runtime by the tool execution sandbox,
 /// not by LLM pre-policy review.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UrlPolicyConfig {
     /// If true, only URLs matching allowed_patterns are permitted.
     /// If false (default), all http/https URLs are permitted unless blocked.
@@ -188,7 +188,7 @@ fn default_max_response_bytes() -> usize {
 /// Extracted from the original monolithic `RuntimeConfig` and
 /// `AppConfig` so that feature flags are grouped in one place.
 /// Flattened into [`AppConfig`] for config-file backward compatibility.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct FeatureConfig {
     /// Enable governance subsystem (policy enforcement, RBAC, budget, etc.).
     #[serde(default = "super::defaults::default_true")]
@@ -239,13 +239,20 @@ pub struct FeatureConfig {
 /// so that existing TOML/JSON config files with top-level keys like
 /// `agents.*`, `entry_auth_enabled`, `governance_enabled`, etc. continue
 /// to deserialize without nesting changes (A7 backward-compat requirement).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
 pub struct AppConfig {
     /// Config schema version for migration tracking
     #[serde(default = "default_schema_version")]
     pub schema_version: String,
+    /// M1.2 opt-in layered config merge (builtin defaults → project file →
+    /// user config → CLI patch). `false` (default) keeps the historical
+    /// single-file load byte-identical; `true` makes the loader merge the
+    /// user layer (`~/.config/go-on/config.toml`, honoring
+    /// `GO_ON_CONFIG_DIR` / `XDG_CONFIG_HOME`) on top of the project file.
+    #[serde(default)]
+    pub layered_merge: bool,
     /// Provider-related configuration (flattened)
     #[serde(flatten)]
     pub provider: ProviderConfig,
@@ -287,7 +294,7 @@ pub struct AppConfig {
 /// [protocol]
 /// mode = "acp http"
 /// ```
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ProtocolConfig {
     /// Protocol mode: auto / acp / mcp / acp_stdio / mcp_stdio
     #[serde(default)]
@@ -348,6 +355,9 @@ pub struct ProviderSpec {
     pub max_tokens: Option<u32>,
     #[serde(default)]
     pub supports_system: Option<bool>,
+    /// Enables SSE gzip compression for chat-heavy streaming providers.
+    #[serde(default)]
+    pub compression: bool,
     #[serde(default)]
     pub supports_vision: Option<bool>,
     #[serde(default)]
@@ -387,7 +397,7 @@ impl ProviderSpec {
 }
 
 /// Runtime configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RuntimeConfig {
     /// Protocol mode: auto / acp / mcp
     #[serde(default)]
@@ -453,6 +463,18 @@ pub struct RuntimeConfig {
     #[serde(default)]
     pub governance_policy_mode: String,
 
+    /// External-command pre-decision hooks for the tool-approval chain
+    /// (M2.2 layer ①, `governance::approval_chain`). Evaluated after
+    /// HarnessBus policy and BEFORE the user permission prompt. Each entry is
+    /// either a command-line string (`"sh scripts/check.sh --strict"`) or a
+    /// table (`{ command = "python3", args = ["check.py"] }`). The hook
+    /// receives `{tool_name, tool_args}` as JSON on stdin and its first stdout
+    /// line decides: `allow` / `deny` / `override` (anything else or non-zero
+    /// exit = no opinion). Hooks that cannot run never block approval
+    /// (fail-open, audited). Empty by default (approval behavior unchanged).
+    #[serde(default)]
+    pub permission_hooks: Vec<crate::governance::approval_chain::PermissionHookConfig>,
+
     /// Enable builtin skills (e.g. `builtin.echo`) at server startup.
     /// Default is `true` for development; set to `false` in production (`config.production.toml`).
     #[serde(default = "super::defaults::default_runtime_skills_enabled")]
@@ -472,6 +494,13 @@ pub struct RuntimeConfig {
     /// Cache directory used to persist imported skill manifests and index.
     #[serde(default = "super::defaults::default_runtime_skills_cache_dir")]
     pub skills_cache_dir: String,
+    /// Enable deterministic skill auto-extraction (M3.1): after a reflect
+    /// phase completes, a `draft-`-prefixed SKILL.md is derived from the
+    /// request's task and response, validated through the skill-import
+    /// parser, and registered in the skill registry. Default `false` —
+    /// opt-in to avoid draft noise (TOML: `[runtime] skill_auto_extract`).
+    #[serde(default)]
+    pub skill_auto_extract: bool,
     /// Master switch for the self-evolution loop (BLUE56-B03). When `false`
     /// (default) the EvolutionLoop is not started, so no LLM-generated patch
     /// can be auto-applied to the project source. When explicitly enabled,
@@ -607,7 +636,7 @@ impl RuntimeConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CacheConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -640,7 +669,7 @@ fn default_cache_persist_enabled() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VectorConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -676,7 +705,7 @@ pub struct VectorConfig {
     pub summary_max_chars: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 #[derive(Default)]
 pub struct AgentConfig {
@@ -693,7 +722,7 @@ pub struct AgentConfig {
     pub supports_vision: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 #[derive(Default)]
 pub struct FlowConfig {
@@ -743,7 +772,7 @@ pub struct StartupContextConfig {
     pub io_timeout_ms: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 #[derive(Default)]
 pub struct PhaseConfig {

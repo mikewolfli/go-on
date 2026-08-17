@@ -13,6 +13,7 @@
 use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::ToolOutput;
 use anyhow::Context;
+use std::time::Duration;
 use tracing::warn;
 
 // ---------------------------------------------------------------------------
@@ -238,6 +239,25 @@ pub fn cap_timeout_secs(requested_secs: u64) -> u64 {
     std::cmp::min(requested_secs, MAX_TIMEOUT_SECS)
 }
 
+/// Cached result of the GNU timeout availability check.
+/// Once detected, the result is reused for the lifetime of the process.
+fn gnu_timeout_available() -> bool {
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        if cfg!(target_os = "windows") {
+            return false;
+        }
+        std::process::Command::new("timeout")
+            .arg("1")
+            .arg("sh")
+            .arg("-c")
+            .arg("true")
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Blocking tokio runtime
 // ---------------------------------------------------------------------------
@@ -417,6 +437,40 @@ pub fn run_command_capped(
     })
 }
 
+/// Read a pipe keeping only the first `cap` bytes (drain the rest) — the
+/// shared keep-first-drain-rest semantics used by the capped runners.
+/// Returns the kept bytes plus whether the stream exceeded `cap`.
+async fn read_pipe_capped<R>(reader: Option<R>, cap: usize) -> (Vec<u8>, bool)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+    let Some(mut reader) = reader else {
+        return (Vec::new(), false);
+    };
+    let mut kept = Vec::with_capacity(cap.min(64 * 1024));
+    let mut truncated = false;
+    let mut chunk = [0u8; 4096];
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) => break,
+            Ok(n) => {
+                if kept.len() < cap {
+                    let take = (cap - kept.len()).min(n);
+                    kept.extend_from_slice(&chunk[..take]);
+                    if take < n {
+                        truncated = true;
+                    }
+                } else {
+                    truncated = true;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    (kept, truncated)
+}
+
 /// Tokio variant of [`run_command_capped`]: the two pipe reads run as
 /// concurrent futures (no threads) — the async equivalent of the thread-per-
 /// pipe design above, with the same keep-first-drain-rest semantics.
@@ -424,64 +478,13 @@ pub async fn run_command_capped_async(
     cmd: &mut tokio::process::Command,
     cap: usize,
 ) -> anyhow::Result<CappedCommandOutput> {
-    use tokio::io::AsyncReadExt;
     let mut child = cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .context("failed to spawn command")?;
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
-    let stdout_fut = async {
-        let mut kept = Vec::with_capacity(cap.min(64 * 1024));
-        let mut truncated = false;
-        let mut chunk = [0u8; 4096];
-        if let Some(mut reader) = stdout.take() {
-            loop {
-                match reader.read(&mut chunk).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if kept.len() < cap {
-                            let take = (cap - kept.len()).min(n);
-                            kept.extend_from_slice(&chunk[..take]);
-                            if take < n {
-                                truncated = true;
-                            }
-                        } else {
-                            truncated = true;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        }
-        (kept, truncated)
-    };
-    let stderr_fut = async {
-        let mut kept = Vec::with_capacity(cap.min(64 * 1024));
-        let mut truncated = false;
-        let mut chunk = [0u8; 4096];
-        if let Some(mut reader) = stderr.take() {
-            loop {
-                match reader.read(&mut chunk).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if kept.len() < cap {
-                            let take = (cap - kept.len()).min(n);
-                            kept.extend_from_slice(&chunk[..take]);
-                            if take < n {
-                                truncated = true;
-                            }
-                        } else {
-                            truncated = true;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        }
-        (kept, truncated)
-    };
+    let stdout_fut = read_pipe_capped(child.stdout.take(), cap);
+    let stderr_fut = read_pipe_capped(child.stderr.take(), cap);
     let (stdout_res, stderr_res) = tokio::join!(stdout_fut, stderr_fut);
     let status = child.wait().await.ok().and_then(|s| s.code());
     Ok(CappedCommandOutput {
@@ -572,7 +575,12 @@ fn build_sandboxed_base_cmd(
 /// Decision shared by every sandboxed runner: a bwrap setup failure means the
 /// inner command never ran, so it is safe (and necessary) to retry without the
 /// sandbox. Records the degrade + logs once, returns whether to retry.
-fn should_degrade_after_bwrap(prep_applied: bool, status: Option<i32>, stderr: &str, mode: &str) -> bool {
+fn should_degrade_after_bwrap(
+    prep_applied: bool,
+    status: Option<i32>,
+    stderr: &str,
+    mode: &str,
+) -> bool {
     if prep_applied && crate::security::sandbox::is_bwrap_setup_failure(status, stderr) {
         crate::security::sandbox::record_sandbox_degraded();
         tracing::warn!(
@@ -824,6 +832,225 @@ pub async fn run_sandboxed_stdin_output_async(
         return Ok((attempt(program, args, prep.scrub_env).await?, false));
     }
     Ok((first, prep.applied))
+}
+
+// ---------------------------------------------------------------------------
+// Timeout-capable sandboxed runner (shell_exec)
+// ---------------------------------------------------------------------------
+//
+// `shell_exec` needs timeout supervision the plain runners above do not
+// provide: GNU `timeout` wraps the inner command (enforced inside the bwrap
+// namespace, exit 124 == timed out), and when it is unavailable a tokio-side
+// timeout kills the spawned PID (the bwrap PID when sandboxed — bwrap is PID
+// 1 with --die-with-parent, so killing it tears down the whole namespace).
+// Degrade semantics are the same as every other sandboxed runner.
+
+/// Outcome of a sandboxed command run with timeout supervision (shell_exec).
+pub struct TimeoutCappedCommandOutput {
+    /// Process exit code (None when the process was signaled or killed).
+    pub status: Option<i32>,
+    /// stdout bytes (truncated at `cap`).
+    pub stdout: Vec<u8>,
+    /// stderr bytes (truncated at `cap`).
+    pub stderr: Vec<u8>,
+    /// True when stdout exceeded `cap` (explicit, never silent).
+    pub stdout_truncated: bool,
+    /// True when stderr exceeded `cap` (explicit, never silent).
+    pub stderr_truncated: bool,
+    /// True when the command exceeded its timeout and was killed.
+    pub timed_out: bool,
+    /// Sandbox mode that actually ran (e.g. "workspace_write"), or "none"
+    /// after a degrade to direct execution.
+    pub sandbox: String,
+}
+
+/// Tunables for [`run_sandboxed_capped_timeout_async`], grouped so the runner
+/// stays under the argument-count lint (the two timeout knobs, the output cap,
+/// and the optional stdin payload belong together).
+pub struct TimeoutRunOptions {
+    /// Per-pipe output cap in bytes.
+    pub cap: usize,
+    /// Hard wall-clock timeout in milliseconds (tokio-side kill).
+    pub timeout_ms: u64,
+    /// Soft timeout in seconds enforced via GNU `timeout` when available.
+    pub max_timeout_secs: u64,
+    /// Optional stdin payload.
+    pub stdin_input: Option<String>,
+}
+
+/// Capped run with timeout supervision: feeds stdin, drains stdout/stderr
+/// concurrently (keep-first-drain-rest), and enforces `timeout_ms` by killing
+/// the spawned PID (tokio kill on Unix; taskkill /T tree-kill on Windows).
+/// When `use_gnu_timeout` is set, GNU `timeout` enforces the limit inside the
+/// sandbox instead and exit status 124 reports the timeout.
+async fn run_command_capped_timeout_async(
+    cmd: &mut tokio::process::Command,
+    cap: usize,
+    timeout_ms: u64,
+    stdin_input: Option<&str>,
+    use_gnu_timeout: bool,
+) -> anyhow::Result<(CappedCommandOutput, bool)> {
+    use tokio::io::AsyncWriteExt;
+    let mut child = cmd
+        .stdin(if stdin_input.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to spawn command")?;
+    let stdout_fut = read_pipe_capped(child.stdout.take(), cap);
+    let stderr_fut = read_pipe_capped(child.stderr.take(), cap);
+    let stdin = child.stdin.take();
+    let stdin_fut = async move {
+        if let Some(mut writer) = stdin {
+            if let Some(text) = stdin_input {
+                let _ = writer.write_all(text.as_bytes()).await;
+            }
+        }
+    };
+    let wait_fut = async {
+        if use_gnu_timeout {
+            // GNU timeout caps the inner command; its 124 exit convention
+            // maps to a timeout report.
+            let status = child.wait().await.ok().and_then(|s| s.code());
+            (status, status == Some(124))
+        } else {
+            match tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait()).await {
+                Ok(res) => (res.ok().and_then(|s| s.code()), false),
+                Err(_) => {
+                    // Kill the spawned PID. When sandboxed that is the bwrap
+                    // PID and killing it terminates the whole namespace; the
+                    // `/proc/<pid>` liveness pre-check the old sync kill
+                    // thread used is unnecessary here because the timeout
+                    // only fires while the child is still running.
+                    #[cfg(windows)]
+                    if let Some(pid) = child.id() {
+                        let _ = std::process::Command::new("taskkill")
+                            .arg("/F")
+                            .arg("/T")
+                            .arg("/PID")
+                            .arg(pid.to_string())
+                            .output();
+                    }
+                    #[cfg(not(windows))]
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    (None, true)
+                }
+            }
+        }
+    };
+    let ((), stdout_res, stderr_res, (status, timed_out)) =
+        tokio::join!(stdin_fut, stdout_fut, stderr_fut, wait_fut);
+    Ok((
+        CappedCommandOutput {
+            status,
+            stdout: stdout_res.0,
+            stderr: stderr_res.0,
+            stdout_truncated: stdout_res.1,
+            stderr_truncated: stderr_res.1,
+        },
+        timed_out,
+    ))
+}
+
+/// Sandbox-aware capped run with timeout supervision and optional stdin,
+/// for `shell_exec`. Mirrors [`run_sandboxed_capped_async`] (same bwrap
+/// wrap, env scrub, and degrade semantics) but adds shell.rs's timeout
+/// enforcement: when GNU `timeout` is available the base command is wrapped
+/// in `timeout <max_timeout_secs> ...` (so the cap is enforced inside the
+/// sandbox namespace); otherwise the tokio-side kill in
+/// [`run_command_capped_timeout_async`] fires after `timeout_ms`.
+pub async fn run_sandboxed_capped_timeout_async(
+    workspace: &std::path::Path,
+    program: &str,
+    args: &[String],
+    options: TimeoutRunOptions,
+    configure: impl Fn(&mut tokio::process::Command),
+) -> anyhow::Result<TimeoutCappedCommandOutput> {
+    let cap = options.cap;
+    let timeout_ms = options.timeout_ms;
+    let max_timeout_secs = options.max_timeout_secs;
+    let stdin_input = options.stdin_input.as_deref();
+    let use_gnu_timeout = gnu_timeout_available();
+    // GNU `timeout` must sit INSIDE the bwrap namespace (it is wrapped by
+    // the sandbox prep below), so build the base command first.
+    let (base_program, base_args): (String, Vec<String>) = if use_gnu_timeout {
+        let mut wrapped_args = vec![max_timeout_secs.to_string(), program.to_string()];
+        wrapped_args.extend_from_slice(args);
+        ("timeout".to_string(), wrapped_args)
+    } else {
+        (program.to_string(), args.to_vec())
+    };
+    let prep = crate::security::sandbox::prepare_command(
+        crate::security::sandbox::effective_mode(),
+        workspace,
+        &base_program,
+        &base_args,
+    );
+    let attempt = |program: &str, args: &[String], scrub: bool| {
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(args);
+        cmd.current_dir(workspace);
+        if scrub {
+            cmd.env_clear();
+            let passthrough = crate::security::sandbox::sandbox_config()
+                .map(|c| c.passthrough_env)
+                .unwrap_or_default();
+            for (key, val) in crate::security::sandbox::sanitized_env(&passthrough) {
+                cmd.env(key, val);
+            }
+        }
+        configure(&mut cmd);
+        async move {
+            run_command_capped_timeout_async(
+                &mut cmd,
+                cap,
+                timeout_ms,
+                stdin_input,
+                use_gnu_timeout,
+            )
+            .await
+        }
+    };
+    let build = |(capped, timed_out): (CappedCommandOutput, bool), effective: bool| {
+        TimeoutCappedCommandOutput {
+            status: capped.status,
+            stdout: capped.stdout,
+            stderr: capped.stderr,
+            stdout_truncated: capped.stdout_truncated,
+            stderr_truncated: capped.stderr_truncated,
+            timed_out,
+            sandbox: if effective {
+                prep.mode.as_str().to_string()
+            } else {
+                "none".to_string()
+            },
+        }
+    };
+    match attempt(&prep.program, &prep.args, prep.scrub_env).await {
+        Ok((capped, timed_out))
+            if !timed_out
+                && should_degrade_after_bwrap(
+                    prep.applied,
+                    capped.status,
+                    &capped.stderr_lossy(),
+                    prep.mode.as_str(),
+                ) =>
+        {
+            let (capped, timed_out) = attempt(&base_program, &base_args, prep.scrub_env).await?;
+            Ok(build((capped, timed_out), false))
+        }
+        Err(_) if should_degrade_after_spawn_failure(prep.applied, prep.mode.as_str()) => {
+            let (capped, timed_out) = attempt(&base_program, &base_args, prep.scrub_env).await?;
+            Ok(build((capped, timed_out), false))
+        }
+        Ok(ok) => Ok(build(ok, prep.applied)),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]

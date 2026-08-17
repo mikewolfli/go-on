@@ -201,94 +201,6 @@ fn tool_category(name: &str) -> Option<ToolCategory> {
     }
 }
 
-// ── Path-based safety checks ──────────────────────────────────────────────
-
-/// Directories that write operations should never touch without explicit
-/// escalation. Paths are checked case-insensitively and via prefix-matching
-/// on the canonical path.
-const PROTECTED_DIRS: &[&str] = &[
-    "/etc",
-    "/boot",
-    "/sys",
-    "/proc",
-    "/dev",
-    "/root",
-    "/var/run",
-    "/run",
-    "/tmp/.X11-unix",
-];
-
-/// File extensions that indicate sensitive configuration or credential data.
-/// Writes to files with these extensions are flagged.
-const SENSITIVE_EXTENSIONS: &[&str] = &[
-    ".pem",
-    ".key",
-    ".crt",
-    ".cer",
-    ".der",
-    ".p12",
-    ".pfx",
-    ".gpg",
-    ".asc",
-    ".envrc",
-    ".env",
-    ".htpasswd",
-    ".htaccess",
-    ".shadow",
-    ".passwd",
-];
-
-/// Lexically normalize a path string: collapse duplicate slashes and resolve
-/// `.` / `..` segments (no filesystem access, so it works for paths that do
-/// not exist yet). Leading `..` segments are preserved so relative traversal
-/// escapes (`../../etc/cron.d/x`) stay recognizable instead of collapsing to
-/// a bare relative name.
-fn normalize_path_string(path: &str) -> String {
-    let is_abs = path.starts_with('/');
-    let mut out: Vec<&str> = Vec::new();
-    for seg in path.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                if out.is_empty() {
-                    // Preserve a leading escape so `../../etc/x` does not
-                    // collapse into `etc/x` (which would miss the check).
-                    out.push("..");
-                } else {
-                    out.pop();
-                }
-            }
-            s => out.push(s),
-        }
-    }
-    let mut joined = out.join("/");
-    if is_abs {
-        joined.insert(0, '/');
-    }
-    joined
-}
-
-fn path_touches_protected_dir(path: &str) -> bool {
-    // Operate on the lexically normalized path: prefix matching on the raw
-    // string can be bypassed with `..` or duplicate slashes
-    // (e.g. `../../etc/cron.d/x` or `sub//etc/x`).
-    let lower = normalize_path_string(path).to_lowercase();
-    PROTECTED_DIRS.iter().any(|protected| {
-        lower == *protected
-            || lower.starts_with(&format!("{protected}/"))
-            || lower.starts_with(&format!("/{protected}/"))
-            || lower.ends_with(&format!("/{protected}"))
-            // Relative traversal that lands on a protected dir as a segment
-            // (`../../etc/cron.d/x` normalizes to `../../etc/cron.d/x`).
-            || lower.contains(&format!("/{protected}/"))
-    })
-}
-
-fn path_has_sensitive_extension(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    SENSITIVE_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
-}
-
 // ── Shell command safety ──────────────────────────────────────────────────
 
 /// Check a shell command string against blocked patterns.
@@ -389,7 +301,9 @@ fn check_read_only(args: &Value) -> QuickCheckResult {
     // files by name.
     let path = extract_path(args);
     if let Some(p) = path {
-        if path_has_sensitive_extension(p) && !p.starts_with('/') {
+        if crate::security::paths::sensitive_file_extension(std::path::Path::new(p)).is_some()
+            && !p.starts_with('/')
+        {
             // Relative paths to sensitive files are suspicious — but not
             // outright blocked for reads. We log a warning at the info level.
             tracing::info!(
@@ -408,8 +322,9 @@ fn check_write(args: &Value) -> QuickCheckResult {
         None => return QuickCheckResult::allow(), // no path → let tool executor handle error
     };
 
-    // Block writes to protected directories
-    if path_touches_protected_dir(path) {
+    // Block writes to protected directories (shared list in `security::paths`,
+    // also enforced by the tool-layer sandbox).
+    if crate::security::paths::protected_write_path(std::path::Path::new(path)).is_some() {
         return QuickCheckResult::deny(format!(
             "Write to protected directory denied by governance gate: '{}'",
             path
@@ -417,7 +332,7 @@ fn check_write(args: &Value) -> QuickCheckResult {
     }
 
     // Block writes to sensitive file types
-    if path_has_sensitive_extension(path) {
+    if crate::security::paths::sensitive_file_extension(std::path::Path::new(path)).is_some() {
         return QuickCheckResult::deny(format!(
             "Write to sensitive file type denied by governance gate: '{}'",
             path

@@ -20,9 +20,6 @@ impl Tool for CompressTool {
     fn name(&self) -> &'static str {
         "compress"
     }
-    fn description(&self) -> &str {
-        "Compress a file using gzip compression"
-    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
@@ -164,9 +161,6 @@ pub struct DecompressTool;
 impl Tool for DecompressTool {
     fn name(&self) -> &'static str {
         "decompress"
-    }
-    fn description(&self) -> &str {
-        "Decompress a gzip-compressed file"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]

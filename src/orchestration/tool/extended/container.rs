@@ -50,11 +50,6 @@ impl Tool for DockerPsTool {
         "docker_ps"
     }
 
-    fn description(&self) -> &str {
-        "List Docker containers (running and optionally stopped). \
-         Wraps `docker ps`. Returns container IDs, names, images, status, and ports."
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let all = input
             .payload
@@ -175,11 +170,6 @@ impl Tool for DockerExecTool {
         "docker_exec"
     }
 
-    fn description(&self) -> &str {
-        "Execute a command inside a running Docker container. \
-         Wraps `docker exec`. Returns stdout and stderr from the command."
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let container = input
             .payload
@@ -264,11 +254,6 @@ impl Tool for DockerLogsTool {
         "docker_logs"
     }
 
-    fn description(&self) -> &str {
-        "View logs from a Docker container. Wraps `docker logs`. \
-         Supports tail, since, and follow options."
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let container = input
             .payload
@@ -350,24 +335,6 @@ pub struct DockerBuildTool;
 impl Tool for DockerBuildTool {
     fn name(&self) -> &'static str {
         "docker_build"
-    }
-
-    fn description(&self) -> &str {
-        "Build a Docker image from a Dockerfile. Supports build args, tags, and docker compose build."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Build context directory (default: .)"},
-                "tag": {"type": "string", "description": "Image tag (e.g. 'myapp:latest')", "default": "latest"},
-                "dockerfile": {"type": "string", "description": "Path to Dockerfile (default: Dockerfile)"},
-                "build_args": {"type": "object", "description": "Build-time variables as key-value pairs"},
-                "no_cache": {"type": "boolean", "description": "Build without cache (default: false)"},
-            },
-            "required": []
-        })
     }
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
@@ -470,21 +437,6 @@ impl Tool for DockerPushTool {
         "docker_push"
     }
 
-    fn description(&self) -> &str {
-        "Push a Docker image to a registry. Wraps `docker push`."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "image": {"type": "string", "description": "Image name with tag (e.g. 'myapp:latest')"},
-                "registry": {"type": "string", "description": "Registry URL (e.g. 'docker.io/user')"},
-            },
-            "required": ["image"]
-        })
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let image = input
             .payload
@@ -559,29 +511,6 @@ pub struct DockerComposeTool;
 impl Tool for DockerComposeTool {
     fn name(&self) -> &'static str {
         "docker_compose"
-    }
-
-    fn description(&self) -> &str {
-        "Run docker-compose commands (up, down, build, logs, ps). Wraps `docker compose`."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "subcommand": {
-                    "type": "string",
-                    "enum": ["up", "down", "build", "logs", "ps", "restart", "stop", "start"],
-                    "description": "Docker compose subcommand"
-                },
-                "file": {"type": "string", "description": "Path to compose file (default: docker-compose.yml)"},
-                "service": {"type": "string", "description": "Target service name (optional)"},
-                "detach": {"type": "boolean", "description": "Run containers in background (default: true for up)"},
-                "build": {"type": "boolean", "description": "Build images before starting (for up)"},
-                "tail": {"type": "string", "description": "Number of log lines to show (for logs)"},
-            },
-            "required": ["subcommand"]
-        })
     }
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {

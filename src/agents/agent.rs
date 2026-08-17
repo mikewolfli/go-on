@@ -1073,53 +1073,58 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
                 client,
             )))
         }
-        "openai_compatible" => {
-            // Default base URL comes from the provider spec (single source);
-            // the required-field error is only for configs that have neither.
-            // The GUI's generated config may omit `url` for this type (the
-            // offline catalog carries no literal), so the spec default keeps
-            // the server starting.
-            let spec_url = crate::core::providers::provider_spec_by_name("openai_compatible")
-                .and_then(|spec| spec.url.clone());
+        agent_type @ ("openai" | "openai_compatible" | "doubao" | "qwen" | "groq" | "llama"
+        | "mistral" | "perplexity" | "fireworks" | "ai21" | "aleph" | "deepquest"
+        | "facewall" | "glm" | "hunyuan" | "kimi" | "langboat" | "loopai"
+        | "minimax" | "moonshot" | "nim" | "replicate" | "siliconflow"
+        | "skywork" | "stepfun" | "titan" | "together" | "xai" | "xihu" | "yi") => {
+            // All defaults come from the provider spec (single source of
+            // truth): url/model fall back to the spec, chat_path and
+            // supports_system pick up spec hints, and SSE gzip compression is
+            // enabled per spec flag. api_key_env stays config-only so a
+            // missing key is a hard error regardless of the spec default.
+            let spec = crate::core::providers::provider_spec_by_name(agent_type);
             let url = config
                 .url
                 .clone()
-                .or(spec_url)
-                .ok_or_else(|| anyhow::anyhow!("openai_compatible requires a url"))?;
+                .or_else(|| spec.and_then(|s| s.url.clone()))
+                .ok_or_else(|| anyhow::anyhow!("{agent_type} requires a url"))?;
+            let model = config
+                .model
+                .clone()
+                .or_else(|| spec.and_then(|s| s.model.clone()))
+                .ok_or_else(|| anyhow::anyhow!("{agent_type} requires a model"))?;
+            let api_key_env = required_field(agent_type, &config.api_key_env, "api_key_env")?;
             let chat_path = config
                 .chat_path
                 .clone()
+                .or_else(|| spec.and_then(|s| s.chat_path.clone()))
                 .unwrap_or_else(|| default_openai_chat_path(&url).to_string());
-            let api_key_env =
-                required_field("openai_compatible", &config.api_key_env, "api_key_env")?;
-            let model = required_field("openai_compatible", &config.model, "model")?;
-            let supports_system = config.supports_system.unwrap_or(true);
-            Ok(Arc::new(OpenAiCompatibleAgent::new(
-                url,
-                chat_path,
-                api_key_env,
-                model,
-                supports_system,
-                client,
-            )))
-        }
-        "doubao" => {
-            let url = required_field("doubao", &config.url, "url")?;
-            let chat_path = config
-                .chat_path
-                .clone()
-                .unwrap_or_else(|| DEFAULT_ROOT_CHAT_PATH.to_string());
-            let api_key_env = required_field("doubao", &config.api_key_env, "api_key_env")?;
-            let model = required_field("doubao", &config.model, "model")?;
-            let supports_system = config.supports_system.unwrap_or(true);
-            Ok(Arc::new(OpenAiCompatibleAgent::new(
-                url,
-                chat_path,
-                api_key_env,
-                model,
-                supports_system,
-                client,
-            )))
+            let supports_system = config
+                .supports_system
+                .or_else(|| spec.and_then(|s| s.supports_system))
+                .unwrap_or(true);
+            let compression = spec.map(|s| s.compression).unwrap_or(false);
+            let agent = if compression {
+                OpenAiCompatibleAgent::new_with_compression(
+                    url,
+                    chat_path,
+                    api_key_env,
+                    model,
+                    supports_system,
+                    client,
+                )
+            } else {
+                OpenAiCompatibleAgent::new(
+                    url,
+                    chat_path,
+                    api_key_env,
+                    model,
+                    supports_system,
+                    client,
+                )
+            };
+            Ok(Arc::new(agent))
         }
         "claude" => {
             // Default base URL comes from the provider spec (single source).
@@ -1159,63 +1164,6 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
                 client,
             )))
         }
-        "openai" => {
-            let api_key_env = required_field("openai", &config.api_key_env, "api_key_env")?;
-            // Spec default base URL (single source) — the GUI-generated config
-            // may omit `url` because the offline catalog has no literal for
-            // the OPENAI_DEFAULT_BASE_URL constant.
-            let spec_url = crate::core::providers::provider_spec_by_name("openai")
-                .and_then(|spec| spec.url.clone());
-            let url = config
-                .url
-                .clone()
-                .or(spec_url)
-                .ok_or_else(|| anyhow::anyhow!("openai requires a url"))?;
-            let model = required_field("openai", &config.model, "model")?;
-            let chat_path = config
-                .chat_path
-                .clone()
-                .unwrap_or_else(|| default_openai_chat_path(&url).to_string());
-            let supports_system = config.supports_system.unwrap_or(true);
-            Ok(Arc::new(OpenAiCompatibleAgent::new_with_compression(
-                url,
-                chat_path,
-                api_key_env,
-                model,
-                supports_system,
-                client,
-            )))
-        }
-        // Chat-heavy streaming providers — SSE compression reduces bandwidth.
-        agent_type @ ("groq" | "llama" | "mistral" | "perplexity") => {
-            let api_key_env = required_field(agent_type, &config.api_key_env, "api_key_env")?;
-            let url = required_field(agent_type, &config.url, "url")?;
-            let model = required_field(agent_type, &config.model, "model")?;
-            Ok(Arc::new(OpenAiCompatibleAgent::new_with_compression(
-                url,
-                DEFAULT_ROOT_CHAT_PATH.to_string(),
-                api_key_env,
-                model,
-                true,
-                client,
-            )))
-        }
-        agent_type @ ("fireworks" | "ai21" | "aleph" | "deepquest" | "facewall" | "glm"
-        | "hunyuan" | "kimi" | "langboat" | "loopai" | "minimax" | "moonshot"
-        | "nim" | "replicate" | "siliconflow" | "skywork" | "stepfun" | "titan"
-        | "together" | "xai" | "xihu" | "yi") => {
-            let api_key_env = required_field(agent_type, &config.api_key_env, "api_key_env")?;
-            let url = required_field(agent_type, &config.url, "url")?;
-            let model = required_field(agent_type, &config.model, "model")?;
-            Ok(Arc::new(OpenAiCompatibleAgent::new(
-                url,
-                DEFAULT_ROOT_CHAT_PATH.to_string(),
-                api_key_env,
-                model,
-                true,
-                client,
-            )))
-        }
         "cohere" => {
             let api_key_env = required_field("cohere", &config.api_key_env, "api_key_env")?;
             let url = required_field("cohere", &config.url, "url")?;
@@ -1238,24 +1186,6 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
                 model,
                 api_key_env,
                 secret_key_env,
-                client,
-            )))
-        }
-        "qwen" => {
-            let api_key_env = required_field("qwen", &config.api_key_env, "api_key_env")?;
-            let url = required_field("qwen", &config.url, "url")?;
-            let chat_path = config
-                .chat_path
-                .clone()
-                .unwrap_or_else(|| DEFAULT_ROOT_CHAT_PATH.to_string());
-            let model = required_field("qwen", &config.model, "model")?;
-            let supports_system = config.supports_system.unwrap_or(true);
-            Ok(Arc::new(OpenAiCompatibleAgent::new(
-                url,
-                chat_path,
-                api_key_env,
-                model,
-                supports_system,
                 client,
             )))
         }
@@ -1424,6 +1354,7 @@ mod tests {
 
         let app_config = AppConfig {
             schema_version: "1.0.0".to_string(),
+            layered_merge: false,
             provider: crate::core::config::types::ProviderConfig {
                 default_phase: "coding".to_string(),
                 agents,
@@ -1544,6 +1475,62 @@ mod tests {
         }
         checked += 1;
 
+        // anthropic → AnthropicAgent (spec url/model/version/max_tokens defaults).
+        let spec = provider_spec_by_name("anthropic").expect("anthropic spec");
+        let agent = std::sync::Arc::new(AnthropicAgent::new(
+            spec.url.clone().unwrap_or_default(),
+            spec.api_key_env.clone().unwrap_or_default(),
+            spec.model.clone().unwrap_or_default(),
+            spec.anthropic_version.clone().unwrap_or_default(),
+            spec.max_tokens.unwrap_or_default(),
+            client.clone(),
+        ));
+        let available: HashSet<String> =
+            agent.available_models().into_iter().map(|m| m.id).collect();
+        for suggestion in &spec.model_suggestions {
+            assert!(
+                available.contains(suggestion),
+                "anthropic spec suggests `{suggestion}` but available_models() does not list it"
+            );
+        }
+        checked += 1;
+
+        // gemini → GeminiAgent (spec url/model defaults).
+        let spec = provider_spec_by_name("gemini").expect("gemini spec");
+        let agent = std::sync::Arc::new(GeminiAgent::new(
+            spec.api_key_env.clone().unwrap_or_default(),
+            spec.url.clone().unwrap_or_default(),
+            spec.model.clone().unwrap_or_default(),
+            client.clone(),
+        ));
+        let available: HashSet<String> =
+            agent.available_models().into_iter().map(|m| m.id).collect();
+        for suggestion in &spec.model_suggestions {
+            assert!(
+                available.contains(suggestion),
+                "gemini spec suggests `{suggestion}` but available_models() does not list it"
+            );
+        }
+        checked += 1;
+
+        // cohere → CohereAgent (spec url/model defaults).
+        let spec = provider_spec_by_name("cohere").expect("cohere spec");
+        let agent = std::sync::Arc::new(CohereAgent::new(
+            spec.api_key_env.clone().unwrap_or_default(),
+            spec.url.clone().unwrap_or_default(),
+            spec.model.clone().unwrap_or_default(),
+            client.clone(),
+        ));
+        let available: HashSet<String> =
+            agent.available_models().into_iter().map(|m| m.id).collect();
+        for suggestion in &spec.model_suggestions {
+            assert!(
+                available.contains(suggestion),
+                "cohere spec suggests `{suggestion}` but available_models() does not list it"
+            );
+        }
+        checked += 1;
+
         // wenxin / qianfan → BaiduErnieAgent (native catalogs per API).
         for (spec_name, api) in [("wenxin", ErnieApi::Wenxin), ("qianfan", ErnieApi::Qianfan)] {
             let spec = provider_spec_by_name(spec_name).expect("spec exists");
@@ -1565,6 +1552,6 @@ mod tests {
             checked += 1;
         }
 
-        assert_eq!(checked, 3, "guard must cover the three native catalogs");
+        assert_eq!(checked, 6, "guard must cover the six native catalogs");
     }
 }

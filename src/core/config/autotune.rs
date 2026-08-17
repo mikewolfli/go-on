@@ -6,7 +6,7 @@ use serde_json::Value;
 use tracing::{info, warn};
 
 /// Autotune configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AutoTuneConfig {
     #[serde(default)]
     pub enabled: bool,

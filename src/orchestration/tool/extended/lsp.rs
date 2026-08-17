@@ -500,6 +500,159 @@ fn run_lsp_code_action(
     })
 }
 
+/// LSP-mode position parameters shared by the sync and async paths.
+struct LspPosition {
+    file_path: String,
+    line: u32,
+    column: u32,
+}
+
+/// Parse the LSP-mode position inputs (`path`/`line`/`column`). `tool`
+/// prefixes the error text so each tool keeps its own messages.
+fn parse_lsp_position(payload: &Value, tool: &str) -> Result<LspPosition> {
+    let file_path = payload["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("{tool} with lsp_address requires arguments.path"))?;
+    let line = payload["line"].as_u64().ok_or_else(|| {
+        anyhow::anyhow!("{tool} with lsp_address requires arguments.line (1-based)")
+    })? as u32;
+    let column = payload["column"].as_u64().ok_or_else(|| {
+        anyhow::anyhow!("{tool} with lsp_address requires arguments.column (1-based)")
+    })? as u32;
+    Ok(LspPosition {
+        file_path: file_path.to_string(),
+        line,
+        column,
+    })
+}
+
+/// Build the `go_to_definition` LSP-mode ToolOutput (shared by run/run_async).
+fn build_definition_lsp_output(
+    symbol: &str,
+    file_path: &str,
+    line: u32,
+    column: u32,
+    definitions: Vec<Value>,
+) -> ToolOutput {
+    debug!(
+        symbol = %symbol,
+        count = definitions.len(),
+        "go_to_definition (LSP): found definitions"
+    );
+    ToolOutput {
+        success: true,
+        result: Some(json!({
+            "symbol": symbol,
+            "definitions": definitions,
+            "found": !definitions.is_empty(),
+            "mode": "lsp",
+        })),
+        error: None,
+        verification: Some("definition_search_completed".to_string()),
+        audit_log: Some(format!(
+            "go_to_definition (LSP) '{}' at {}:{}:{}: {} definition(s) found",
+            symbol,
+            file_path,
+            line,
+            column,
+            definitions.len()
+        )),
+        pua_report: Some(tool_execution_report(
+            "go_to_definition",
+            Some("definition_search_completed"),
+        )),
+    }
+}
+
+/// Build the `find_references` LSP-mode ToolOutput (shared by run/run_async).
+fn build_references_lsp_output(
+    symbol: &str,
+    file_path: &str,
+    line: u32,
+    column: u32,
+    references: Vec<Value>,
+) -> ToolOutput {
+    let total = references.len();
+    debug!(
+        symbol = %symbol,
+        count = total,
+        "find_references (LSP): search complete"
+    );
+    ToolOutput {
+        success: true,
+        result: Some(json!({
+            "symbol": symbol,
+            "references": references,
+            "files_scanned": 0,
+            "total": total,
+            "truncated": false,
+            "mode": "lsp",
+        })),
+        error: None,
+        verification: Some("reference_search_completed".to_string()),
+        audit_log: Some(format!(
+            "find_references (LSP) '{}' at {}:{}:{}: {} reference(s)",
+            symbol, file_path, line, column, total
+        )),
+        pua_report: Some(tool_execution_report(
+            "find_references",
+            Some("reference_search_completed"),
+        )),
+    }
+}
+
+/// Build the `apply_code_action` LSP-mode ToolOutput (shared by run/run_async).
+fn build_code_action_lsp_output(
+    action: &str,
+    detail: &str,
+    file_path: &Path,
+    line: u32,
+    result: Value,
+) -> ToolOutput {
+    let applied = result
+        .get("applied")
+        .and_then(|a| a.as_bool())
+        .unwrap_or(false);
+    ToolOutput {
+        success: applied,
+        result: Some(json!({
+            "action": action,
+            "detail": detail,
+            "path": file_path.to_string_lossy(),
+            "mode": "lsp",
+            "lsp_result": result,
+        })),
+        error: if applied {
+            None
+        } else {
+            Some("LSP code action was not applied".to_string())
+        },
+        verification: Some(
+            if applied {
+                "code_action_applied"
+            } else {
+                "code_action_failed"
+            }
+            .to_string(),
+        ),
+        audit_log: Some(format!(
+            "apply_code_action (LSP) '{}' '{}' at {}:{}",
+            action,
+            detail,
+            file_path.display(),
+            line
+        )),
+        pua_report: Some(tool_execution_report(
+            "apply_code_action",
+            Some(if applied {
+                "code_action_applied"
+            } else {
+                "code_action_failed"
+            }),
+        )),
+    }
+}
+
 // ── GoToDefinitionTool ─────────────────────────────────────────────
 
 /// Find the definition of a symbol (function, struct, enum, trait, etc.)
@@ -514,30 +667,6 @@ impl Tool for GoToDefinitionTool {
         "go_to_definition"
     }
 
-    fn description(&self) -> &str {
-        "Find definition of a symbol (fn, struct, enum, trait, impl, type, const) in the codebase"
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "symbol": {"type": "string", "description": "The symbol name to find the definition of"},
-                "directory": {"type": "string", "description": "Optional directory scope (default: project root)"},
-                "language": {
-                    "type": "string",
-                    "enum": ["auto", "rust", "python", "typescript", "javascript", "go", "java"],
-                    "description": "Language hint for definition patterns (default: auto-detect from file extension)"
-                },
-                "lsp_address": {"type": "string", "description": "Optional LSP TCP address (e.g. '127.0.0.1:9258'). Uses LSP protocol instead of regex-based search. Requires 'path', 'line', and 'column'."},
-                "path": {"type": "string", "description": "File path to query for definition (required when lsp_address is set)"},
-                "line": {"type": "integer", "description": "Line number (1-based) of the symbol usage (required when lsp_address is set)"},
-                "column": {"type": "integer", "description": "Column number (1-based) of the symbol usage (required when lsp_address is set)"}
-            },
-            "required": ["symbol"]
-        })
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let symbol = input.payload["symbol"]
             .as_str()
@@ -545,51 +674,16 @@ impl Tool for GoToDefinitionTool {
 
         // ── LSP mode ─────────────────────────────────────────────────
         if let Some(lsp_address) = input.payload.get("lsp_address").and_then(|v| v.as_str()) {
-            let file_path = input.payload["path"].as_str().ok_or_else(|| {
-                anyhow::anyhow!("go_to_definition with lsp_address requires arguments.path")
-            })?;
-            let line = input.payload["line"].as_u64().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "go_to_definition with lsp_address requires arguments.line (1-based)"
-                )
-            })? as u32;
-            let column = input.payload["column"].as_u64().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "go_to_definition with lsp_address requires arguments.column (1-based)"
-                )
-            })? as u32;
-
-            let definitions = run_lsp_definition(lsp_address, file_path, line, column)?;
-
-            debug!(
-                symbol = %symbol,
-                count = definitions.len(),
-                "go_to_definition (LSP): found definitions"
-            );
-
-            return Ok(ToolOutput {
-                success: true,
-                result: Some(json!({
-                    "symbol": symbol,
-                    "definitions": definitions,
-                    "found": !definitions.is_empty(),
-                    "mode": "lsp",
-                })),
-                error: None,
-                verification: Some("definition_search_completed".to_string()),
-                audit_log: Some(format!(
-                    "go_to_definition (LSP) '{}' at {}:{}:{}: {} definition(s) found",
-                    symbol,
-                    file_path,
-                    line,
-                    column,
-                    definitions.len()
-                )),
-                pua_report: Some(tool_execution_report(
-                    "go_to_definition",
-                    Some("definition_search_completed"),
-                )),
-            });
+            let pos = parse_lsp_position(&input.payload, "go_to_definition")?;
+            let definitions =
+                run_lsp_definition(lsp_address, &pos.file_path, pos.line, pos.column)?;
+            return Ok(build_definition_lsp_output(
+                symbol,
+                &pos.file_path,
+                pos.line,
+                pos.column,
+                definitions,
+            ));
         }
 
         // ── Regex mode (fallback) ────────────────────────────────────
@@ -645,6 +739,45 @@ impl Tool for GoToDefinitionTool {
             )),
         })
     }
+
+    fn run_async(
+        self: Arc<Self>,
+        input: ToolInput,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
+        Box::pin(async move {
+            let symbol = input.payload["symbol"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("go_to_definition requires arguments.symbol"))?;
+
+            // ── LSP mode ─────────────────────────────────────────────────
+            // Awaits the cached LSP client directly (no spawn_blocking +
+            // with_blocking_runtime), so concurrent LSP queries do not
+            // serialize on the process-wide blocking-runtime mutex.
+            if let Some(lsp_address) = input.payload.get("lsp_address").and_then(|v| v.as_str()) {
+                let pos = parse_lsp_position(&input.payload, "go_to_definition")?;
+                let definitions = {
+                    let client = cached_lsp_client(lsp_address).await?;
+                    client
+                        .query_definition(&pos.file_path, pos.line, pos.column)
+                        .await?
+                };
+                return Ok(build_definition_lsp_output(
+                    symbol,
+                    &pos.file_path,
+                    pos.line,
+                    pos.column,
+                    definitions,
+                ));
+            }
+
+            // ── Regex mode (fallback) ────────────────────────────────────
+            // File-system walking is CPU-bound; reuse the sync path on the
+            // blocking pool (identical to the default run_async behavior).
+            tokio::task::spawn_blocking(move || self.run(&input))
+                .await
+                .map_err(|e| anyhow::anyhow!("tool blocking task failed: {}", e))?
+        })
+    }
 }
 
 // ── FindReferencesTool ─────────────────────────────────────────────
@@ -661,26 +794,6 @@ impl Tool for FindReferencesTool {
         "find_references"
     }
 
-    fn description(&self) -> &str {
-        "Find all references to a symbol across the codebase (source files only)"
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "symbol": {"type": "string", "description": "The symbol name to find references for"},
-                "directory": {"type": "string", "description": "Optional directory scope (default: project root)"},
-                "include": {"type": "string", "description": "Optional glob pattern to filter files (e.g. '**/*.rs')"},
-                "lsp_address": {"type": "string", "description": "Optional LSP TCP address (e.g. '127.0.0.1:9258'). Uses LSP protocol instead of regex-based search. Requires 'path', 'line', and 'column'."},
-                "path": {"type": "string", "description": "File path to query for references (required when lsp_address is set)"},
-                "line": {"type": "integer", "description": "Line number (1-based) of the symbol usage (required when lsp_address is set)"},
-                "column": {"type": "integer", "description": "Column number (1-based) of the symbol usage (required when lsp_address is set)"}
-            },
-            "required": ["symbol"]
-        })
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let symbol = input.payload["symbol"]
             .as_str()
@@ -688,50 +801,15 @@ impl Tool for FindReferencesTool {
 
         // ── LSP mode ─────────────────────────────────────────────────
         if let Some(lsp_address) = input.payload.get("lsp_address").and_then(|v| v.as_str()) {
-            let file_path = input.payload["path"].as_str().ok_or_else(|| {
-                anyhow::anyhow!("find_references with lsp_address requires arguments.path")
-            })?;
-            let line = input.payload["line"].as_u64().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "find_references with lsp_address requires arguments.line (1-based)"
-                )
-            })? as u32;
-            let column = input.payload["column"].as_u64().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "find_references with lsp_address requires arguments.column (1-based)"
-                )
-            })? as u32;
-
-            let references = run_lsp_references(lsp_address, file_path, line, column)?;
-            let total = references.len();
-
-            debug!(
-                symbol = %symbol,
-                count = total,
-                "find_references (LSP): search complete"
-            );
-
-            return Ok(ToolOutput {
-                success: true,
-                result: Some(json!({
-                    "symbol": symbol,
-                    "references": references,
-                    "files_scanned": 0,
-                    "total": total,
-                    "truncated": false,
-                    "mode": "lsp",
-                })),
-                error: None,
-                verification: Some("reference_search_completed".to_string()),
-                audit_log: Some(format!(
-                    "find_references (LSP) '{}' at {}:{}:{}: {} reference(s)",
-                    symbol, file_path, line, column, total
-                )),
-                pua_report: Some(tool_execution_report(
-                    "find_references",
-                    Some("reference_search_completed"),
-                )),
-            });
+            let pos = parse_lsp_position(&input.payload, "find_references")?;
+            let references = run_lsp_references(lsp_address, &pos.file_path, pos.line, pos.column)?;
+            return Ok(build_references_lsp_output(
+                symbol,
+                &pos.file_path,
+                pos.line,
+                pos.column,
+                references,
+            ));
         }
 
         // ── Regex mode (fallback) ────────────────────────────────────
@@ -797,6 +875,45 @@ impl Tool for FindReferencesTool {
             )),
         })
     }
+
+    fn run_async(
+        self: Arc<Self>,
+        input: ToolInput,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
+        Box::pin(async move {
+            let symbol = input.payload["symbol"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("find_references requires arguments.symbol"))?;
+
+            // ── LSP mode ─────────────────────────────────────────────────
+            // Awaits the cached LSP client directly (no spawn_blocking +
+            // with_blocking_runtime), so concurrent LSP queries do not
+            // serialize on the process-wide blocking-runtime mutex.
+            if let Some(lsp_address) = input.payload.get("lsp_address").and_then(|v| v.as_str()) {
+                let pos = parse_lsp_position(&input.payload, "find_references")?;
+                let references = {
+                    let client = cached_lsp_client(lsp_address).await?;
+                    client
+                        .query_references(&pos.file_path, pos.line, pos.column)
+                        .await?
+                };
+                return Ok(build_references_lsp_output(
+                    symbol,
+                    &pos.file_path,
+                    pos.line,
+                    pos.column,
+                    references,
+                ));
+            }
+
+            // ── Regex mode (fallback) ────────────────────────────────────
+            // File-system walking is CPU-bound; reuse the sync path on the
+            // blocking pool (identical to the default run_async behavior).
+            tokio::task::spawn_blocking(move || self.run(&input))
+                .await
+                .map_err(|e| anyhow::anyhow!("tool blocking task failed: {}", e))?
+        })
+    }
 }
 
 // ── ApplyCodeActionTool ────────────────────────────────────────────
@@ -816,29 +933,6 @@ pub struct ApplyCodeActionTool;
 impl Tool for ApplyCodeActionTool {
     fn name(&self) -> &'static str {
         "apply_code_action"
-    }
-
-    fn description(&self) -> &str {
-        "Apply code actions (add_import, fix_lint, auto_fix_diagnostic) at a location"
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "File path to apply the action at"},
-                "action": {
-                    "type": "string",
-                    "enum": ["add_import", "fix_lint", "auto_fix_diagnostic"],
-                    "description": "Type of code action to apply"
-                },
-                "detail": {"type": "string", "description": "Action-specific detail (e.g. 'HashMap' for add_import, or the lint rule name)"},
-                "line": {"type": "integer", "description": "Line number for the action (1-based, default: 1)"},
-                "lsp_address": {"type": "string", "description": "Optional LSP TCP address (e.g. '127.0.0.1:9258'). Delegates to the LSP server's textDocument/codeAction."},
-                "column": {"type": "integer", "description": "Column number for the action (1-based, used with lsp_address, default: 1)"}
-            },
-            "required": ["path", "action"]
-        })
     }
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
@@ -866,49 +960,9 @@ impl Tool for ApplyCodeActionTool {
                 .unwrap_or(1) as u32;
             let fp_str = file_path.to_string_lossy().to_string();
             let result = run_lsp_code_action(lsp_address, &fp_str, action, detail, line, column)?;
-            let applied = result
-                .get("applied")
-                .and_then(|a| a.as_bool())
-                .unwrap_or(false);
-
-            return Ok(ToolOutput {
-                success: applied,
-                result: Some(json!({
-                    "action": action,
-                    "detail": detail,
-                    "path": file_path.to_string_lossy(),
-                    "mode": "lsp",
-                    "lsp_result": result,
-                })),
-                error: if applied {
-                    None
-                } else {
-                    Some("LSP code action was not applied".to_string())
-                },
-                verification: Some(
-                    if applied {
-                        "code_action_applied"
-                    } else {
-                        "code_action_failed"
-                    }
-                    .to_string(),
-                ),
-                audit_log: Some(format!(
-                    "apply_code_action (LSP) '{}' '{}' at {}:{}",
-                    action,
-                    detail,
-                    file_path.display(),
-                    line
-                )),
-                pua_report: Some(tool_execution_report(
-                    "apply_code_action",
-                    Some(if applied {
-                        "code_action_applied"
-                    } else {
-                        "code_action_failed"
-                    }),
-                )),
-            });
+            return Ok(build_code_action_lsp_output(
+                action, detail, &file_path, line, result,
+            ));
         }
 
         // ── Regex mode (fallback) ────────────────────────────────────
@@ -1031,6 +1085,58 @@ impl Tool for ApplyCodeActionTool {
                 action
             )),
         }
+    }
+
+    fn run_async(
+        self: Arc<Self>,
+        input: ToolInput,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
+        Box::pin(async move {
+            let path = input.payload["path"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("apply_code_action requires arguments.path"))?;
+            let action = input.payload["action"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("apply_code_action requires arguments.action"))?;
+            let detail = input.payload["detail"].as_str().unwrap_or_default();
+            let line = input
+                .payload
+                .get("line")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1) as u32;
+
+            let file_path = sanitize_path(&input, path)?;
+
+            // ── LSP mode ─────────────────────────────────────────────────
+            // Awaits the cached LSP client directly (no spawn_blocking +
+            // with_blocking_runtime), so concurrent LSP queries do not
+            // serialize on the process-wide blocking-runtime mutex.
+            if let Some(lsp_address) = input.payload.get("lsp_address").and_then(|v| v.as_str()) {
+                let column = input
+                    .payload
+                    .get("column")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(1) as u32;
+                let fp_str = file_path.to_string_lossy().to_string();
+                let result = {
+                    let client = cached_lsp_client(lsp_address).await?;
+                    client
+                        .query_code_action(&fp_str, action, detail, line, column)
+                        .await?
+                };
+                return Ok(build_code_action_lsp_output(
+                    action, detail, &file_path, line, result,
+                ));
+            }
+
+            // ── Regex mode (fallback) ────────────────────────────────────
+            // File mutation + diagnostics are CPU-bound; reuse the sync path
+            // on the blocking pool (identical to the default run_async
+            // behavior).
+            tokio::task::spawn_blocking(move || self.run(&input))
+                .await
+                .map_err(|e| anyhow::anyhow!("tool blocking task failed: {}", e))?
+        })
     }
 }
 

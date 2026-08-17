@@ -10,6 +10,7 @@
 //! - `impl` - Implementation modules (runtime, request, chat, conversation, agent, io, storage)
 //! - `server` - Main server implementation
 //! - `background` - Background task management
+//! - `session_log` - Append-only session log (M1.4: factual event source for conversations)
 //! - `tests` - Test utilities
 
 // Core modules
@@ -19,6 +20,7 @@ pub mod r#impl;
 pub mod method_names;
 pub mod prelude;
 pub mod server;
+pub mod session_log;
 pub mod transport;
 pub mod transport_factory;
 

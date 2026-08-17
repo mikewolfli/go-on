@@ -102,9 +102,6 @@ impl Tool for JsonQueryTool {
     fn name(&self) -> &'static str {
         "json_query"
     }
-    fn description(&self) -> &str {
-        "Read a JSON file and query it using a simple path syntax like 'obj.key[0].nested'"
-    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
@@ -215,9 +212,6 @@ pub struct YamlQueryTool;
 impl Tool for YamlQueryTool {
     fn name(&self) -> &'static str {
         "yaml_query"
-    }
-    fn description(&self) -> &str {
-        "Read a YAML file and query it using a simple path syntax like 'obj.key[0].nested'"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]

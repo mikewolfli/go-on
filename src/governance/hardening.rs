@@ -793,22 +793,16 @@ pub fn enforce_action(policy: &PolicyBundle, action: GovernanceAction) -> Harden
         GovernanceAction::Network => SandboxPolicy::can_execute_network(policy.sandbox_level),
     };
 
-    let action_label = match action {
-        GovernanceAction::Read => "read",
-        GovernanceAction::Search => "search",
-        GovernanceAction::Write => "write",
-        GovernanceAction::Shell => "shell",
-        GovernanceAction::Network => "network",
-    };
-
     HardeningDecision {
         allowed,
         reason: if allowed {
-            format!("policy '{}' allows {} action", policy.name, action_label)
+            format!("policy '{}' allows {} action", policy.name, action.as_str())
         } else {
             format!(
                 "policy '{}' denied {} action at sandbox level '{}'",
-                policy.name, action_label, policy.sandbox_level
+                policy.name,
+                action.as_str(),
+                policy.sandbox_level
             )
         },
         policy_name: policy.name.clone(),

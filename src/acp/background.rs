@@ -12,9 +12,13 @@ use tokio::sync::Notify;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
 
+#[cfg(feature = "backend-sqlite")]
+use crate::acp::r#impl::request::{exec_pack, DispatchOutput};
 use crate::intelligence::fusion_evolution_bridge::init_fusion_evolution_bridge;
 use crate::memory::semantic_cache::SemanticResponseCache;
 use crate::memory_module::MemoryStore;
+#[cfg(feature = "backend-sqlite")]
+use crate::orchestration::schedule::{CronJob, CronStore};
 use crate::orchestration::self_evolution::evolution_loop::PubsubTriggerSource;
 
 use super::prelude::{with_acp_lock, with_acp_lock_async, MaintenanceTracker};
@@ -800,6 +804,36 @@ pub async fn start_background_tasks(
         );
     }
 
+    // ── User-level cron scheduler (M3.3) ────────────────────────────────
+    // Unconditional-but-cheap: the SQLite job store is opened once; an empty
+    // store makes every tick a no-op, so the loop costs nothing when cron is
+    // unused. No config gate: the loop is always registered (mirroring the
+    // alert-rule loop above) and only acts when jobs exist.
+    #[cfg(feature = "backend-sqlite")]
+    {
+        use crate::orchestration::schedule::cron::cron_db_path;
+        let store_path = cron_db_path();
+        match CronStore::new(&store_path) {
+            Ok(store) => {
+                let store = Arc::new(store);
+                if let Err(e) = store.recover_crashed_runs(crate::shared::timestamps::now_ts()) {
+                    tracing::warn!("cron: crash recovery failed: {e}");
+                }
+                let shutdown = shutdown_notify.clone();
+                spawn_background_task(
+                    async move { cron_tick_loop(Arc::clone(&store), shutdown).await },
+                    "cron_tick",
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "cron: job store unavailable at {}; cron tick loop disabled: {e}",
+                    store_path.display()
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -860,4 +894,138 @@ pub async fn run_health_check(server: &super::server::AcpServer) -> Result<()> {
         tracing::warn!("health.check: skill registry is empty");
     }
     Ok(())
+}
+
+/// Periodic cron tick (M3.3): every 30s, fire every due job through the same
+/// `workflow.execute` executor path the ACP handler uses. Overlap prevention is
+/// enforced by the store: each job is claimed (`CronStore::begin_run`) before
+/// spawning, and a job whose run is still in flight is never due again.
+#[cfg(feature = "backend-sqlite")]
+async fn cron_tick_loop(store: std::sync::Arc<CronStore>, shutdown: Arc<Notify>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = shutdown.notified() => break,
+            _ = interval.tick() => {}
+        }
+        let now = crate::shared::timestamps::now_ts();
+        let due = match store.due_jobs(now) {
+            Ok(due) => due,
+            Err(e) => {
+                tracing::warn!("cron tick: reading due jobs failed: {e}");
+                continue;
+            }
+        };
+        for job in due {
+            match store.begin_run(&job.id, now) {
+                Ok(true) => {
+                    let task_store = std::sync::Arc::clone(&store);
+                    let started_at = now;
+                    spawn_background_task(
+                        async move {
+                            run_cron_job(task_store, job, started_at).await;
+                        },
+                        "cron_job",
+                    );
+                }
+                Ok(false) => {
+                    // Already claimed (overlapping tick) — overlap prevention
+                    // handled it; there is nothing to spawn.
+                }
+                Err(e) => {
+                    tracing::warn!("cron: could not claim job {}: {e}", job.id);
+                }
+            }
+        }
+    }
+}
+
+/// Execute one due cron job. The job payload is run through
+/// `handle_workflow_execute` — the same executor the `workflow.execute` ACP
+/// method dispatches to — with a synthetic request-trace context. The outcome
+/// is recorded in the store's `cron_runs` history and in the global audit log
+/// (tool "cron", decision "cron_run").
+#[cfg(feature = "backend-sqlite")]
+async fn run_cron_job(store: std::sync::Arc<CronStore>, job: CronJob, started_at: i64) {
+    use crate::acp::server::current_acp_server;
+
+    let trace = crate::rpc_protocol::RequestTraceContext {
+        trace_id: format!("cron-{}", job.id),
+        span_id: "cron".to_string(),
+        method: "workflow.execute".to_string(),
+        request_id: format!("cron-{}-{}", job.id, started_at),
+    };
+    let (ok, summary) = match current_acp_server() {
+        Some(server) => {
+            match exec_pack::handle_workflow_execute(&server, job.payload.clone(), &trace).await {
+                Ok(output) => (true, summarize_dispatch_output(&output)),
+                Err(e) => {
+                    tracing::error!("cron job {} (workflow.execute) failed: {e}", job.id);
+                    (false, e.to_string())
+                }
+            }
+        }
+        None => {
+            tracing::error!(
+                "cron job {}: no live ACP server is registered; the run was not executed",
+                job.id
+            );
+            (false, "no live ACP server registered".to_string())
+        }
+    };
+    let truncated = truncate_run_output(&summary);
+    if let Err(e) = store.finish_run(&job.id, started_at, ok, &truncated) {
+        tracing::warn!("cron: could not finalize run for job {}: {e}", job.id);
+    }
+    crate::governance::audit::global_audit_log().record(crate::governance::audit::AuditLogEntry {
+        timestamp: crate::governance::audit::chrono_now(),
+        task_id: job.id.clone(),
+        phase: "cron".to_string(),
+        agent: None,
+        tool: Some("cron".to_string()),
+        decision: "cron_run".to_string(),
+        inputs: serde_json::json!({
+            "job_id": job.id,
+            "expression": job.expression,
+            "payload": job.payload,
+        }),
+        outputs: Some(serde_json::json!({
+            "ok": ok,
+            "output": truncated,
+        })),
+        error: if ok { None } else { Some(summary) },
+        confidence: None,
+        data_classification: None,
+        compliance_tags: Vec::new(),
+        retention_policy: None,
+        correlation_id: None,
+    });
+}
+
+/// Compact one-line summary of a `workflow.execute` dispatch output for the
+/// audit log and run history (the full artifacts live in the workflow ledger).
+#[cfg(feature = "backend-sqlite")]
+fn summarize_dispatch_output(output: &DispatchOutput) -> String {
+    match output {
+        DispatchOutput::Json(value) => value.to_string(),
+        DispatchOutput::Error { code, message, .. } => format!("error {code}: {message}"),
+        DispatchOutput::Text(text) => text.clone(),
+        DispatchOutput::Checkpoint(checkpoint) => format!("checkpoint: {checkpoint:?}"),
+        DispatchOutput::Silent => "silent".to_string(),
+        DispatchOutput::Stream { .. } => "stream".to_string(),
+    }
+}
+
+/// Truncate a run summary for storage/audit: full outputs are already persisted
+/// in the workflow artifact ledger, so the cron row keeps a bounded excerpt.
+#[cfg(feature = "backend-sqlite")]
+fn truncate_run_output(summary: &str) -> String {
+    const MAX_CHARS: usize = 500;
+    if summary.chars().count() <= MAX_CHARS {
+        return summary.to_string();
+    }
+    let mut truncated: String = summary.chars().take(MAX_CHARS).collect();
+    truncated.push_str("...[truncated]");
+    truncated
 }

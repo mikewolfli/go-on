@@ -542,8 +542,8 @@ async fn acp_http_responses_api_upstream_502_branch_keeps_context_writer() {
     // SAFETY: Suite-level serialization lock; intentionally held across
     // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
-    let runtime_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime/openai_compat.rs");
+    let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/acp/impl/runtime/openai_compat/responses.rs");
     let source = fs::read_to_string(&runtime_path).expect("runtime source must be readable");
     // The 502 branch lives in handle_response_create which is called by handle_responses_api.
     let handler_start = source
@@ -574,8 +574,8 @@ async fn acp_http_responses_api_stream_failed_branch_keeps_platform_context() {
     // SAFETY: Suite-level serialization lock; intentionally held across
     // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
-    let runtime_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime/openai_compat.rs");
+    let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/acp/impl/runtime/openai_compat/responses.rs");
     let source = fs::read_to_string(&runtime_path).expect("runtime source must be readable");
     // Check inside handle_response_stream for platform_context injection
     let stream_start = source

@@ -739,39 +739,11 @@ fn validate_manifest(manifest: &SkillImportManifest) -> Result<()> {
 
 /// `name` is used as a path component under the skills cache directory, so a
 /// bare traversal component must be rejected even though `.` is otherwise
-/// allowed in skill names (e.g. `my.skill`).
+/// allowed in skill names (e.g. `my.skill`). The shared validation rule
+/// (length + charset + traversal) lives in `skill::registry` — the same gate
+/// the runtime registration path uses.
 fn validate_skill_name(name: &str) -> Result<()> {
-    if name == "." || name == ".." {
-        anyhow::bail!(
-            "{}",
-            tf(
-                "error.skill_name_invalid_chars",
-                &[("name", name), ("chars", "path traversal")]
-            )
-        );
-    }
-    if name.is_empty() || name.len() > 64 {
-        anyhow::bail!(
-            "{}",
-            tf(
-                "error.skill_name_length",
-                &[("name", name), ("len", &name.len().to_string())]
-            )
-        );
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-')
-    {
-        anyhow::bail!(
-            "{}",
-            tf(
-                "error.skill_name_invalid_chars",
-                &[("name", name), ("chars", "invalid characters")]
-            )
-        );
-    }
-    Ok(())
+    crate::orchestration::skill::registry::validate_skill_name_rule(name)
 }
 
 /// `version` is used as a path component (`root_dir/name/version/`), so a

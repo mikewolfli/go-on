@@ -12,6 +12,7 @@
 /// copy elsewhere.
 pub const GOVERNANCE_SCHEMA_VERSION: &str = "blue26-governance-v1";
 
+pub mod approval_chain;
 pub mod audit;
 pub mod drift;
 pub mod guardian;

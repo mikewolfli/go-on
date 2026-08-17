@@ -139,6 +139,17 @@ pub async fn create_checkpoint_record(
     let resolved_parent =
         parent_checkpoint_id.or_else(|| state.branch_heads.get(&branch_key).cloned());
 
+    // M1.4 (会话日志即事实源): ensure the conversation has a session log
+    // alongside its checkpoints. `ConversationCheckpoint` has no JSON field to
+    // serialize events into (`metacognitive_loop` is reserved for the
+    // metacognitive loop), so the authoritative log lives in
+    // `ConversationState.session_logs`, keyed by the same
+    // `{conversation_id}:{branch_id}` key as `branch_heads`. Snapshotting a
+    // conversation therefore also guarantees a log entry exists for it; the
+    // log is never pruned with checkpoints, so a later fork/resume can derive
+    // the conversation history from it.
+    state.session_logs.entry(branch_key.clone()).or_default();
+
     let checkpoint = ConversationCheckpoint {
         checkpoint_id,
         conversation_id: conversation_id.to_string(),

@@ -5,9 +5,12 @@
 //! * [`registry`] — Skill registry, stats, persistence
 //! * [`execution`] — Skill trait, prompt-based skills, composed skills, built-ins
 
+pub mod auto_extract;
+pub mod bundle; // M4.2: skills as plugins — installable capability bundles
 pub mod discovery_cache;
 pub mod execution;
 pub mod registry;
+pub mod usage;
 
 // Re-exports for backward compatibility
 // NOTE: registry::spawn_skill_refresh_task is available via the wildcard re-export below.

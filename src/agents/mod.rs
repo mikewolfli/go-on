@@ -97,6 +97,11 @@ pub use openai_compatible::OpenAiCompatibleAgent;
 
 pub use sse_compressor::{SseDecompressor, StreamingConfig};
 
+// Option readers moved to `crate::shared` (single source, alongside
+// `option_bool`/`option_usize`); re-exported here so existing
+// `crate::agents::option_*` callers keep working.
+pub use crate::shared::{option_f64, option_string, option_u64};
+
 /// Convert principles to text format
 ///
 /// # Arguments
@@ -136,52 +141,6 @@ pub fn system_text_with_extra(principles: &Option<Vec<String>>, extra: &str) -> 
     }
     text.push_str(extra);
     text
-}
-
-/// Get string option from HashMap
-///
-/// # Arguments
-/// * `options` - Optional HashMap of options
-/// * `key` - Option key
-///
-/// # Returns
-/// * `Option<String>` - Optional string value
-pub fn option_string(options: &Option<HashMap<String, Value>>, key: &str) -> Option<String> {
-    options
-        .as_ref()
-        .and_then(|map| map.get(key))
-        .and_then(|v| v.as_str())
-        .map(|v| v.to_string())
-}
-
-/// Get f64 option from HashMap
-///
-/// # Arguments
-/// * `options` - Optional HashMap of options
-/// * `key` - Option key
-///
-/// # Returns
-/// * `Option<f64>` - Optional f64 value
-pub fn option_f64(options: &Option<HashMap<String, Value>>, key: &str) -> Option<f64> {
-    options
-        .as_ref()
-        .and_then(|map| map.get(key))
-        .and_then(|v| v.as_f64())
-}
-
-/// Get u64 option from HashMap
-///
-/// # Arguments
-/// * `options` - Optional HashMap of options
-/// * `key` - Option key
-///
-/// # Returns
-/// * `Option<u64>` - Optional u64 value
-pub fn option_u64(options: &Option<HashMap<String, Value>>, key: &str) -> Option<u64> {
-    options
-        .as_ref()
-        .and_then(|map| map.get(key))
-        .and_then(|v| v.as_u64())
 }
 
 /// Shared cache for short-lived auth tokens with expiry-based auto-refresh.

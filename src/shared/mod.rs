@@ -40,6 +40,55 @@ pub fn option_usize(options: &HashMap<String, Value>, key: &str, default: usize)
         .unwrap_or(default)
 }
 
+/// Get string option from an optional HashMap.
+///
+/// Returns `None` when the map is absent, the key is missing, or the value is
+/// not a JSON string.
+pub fn option_string(options: &Option<HashMap<String, Value>>, key: &str) -> Option<String> {
+    options
+        .as_ref()
+        .and_then(|map| map.get(key))
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string())
+}
+
+/// Get f64 option from an optional HashMap.
+///
+/// Returns `None` when the map is absent, the key is missing, or the value is
+/// not a JSON number.
+pub fn option_f64(options: &Option<HashMap<String, Value>>, key: &str) -> Option<f64> {
+    options
+        .as_ref()
+        .and_then(|map| map.get(key))
+        .and_then(|v| v.as_f64())
+}
+
+/// Get u64 option from an optional HashMap.
+///
+/// Returns `None` when the map is absent, the key is missing, or the value is
+/// not a JSON number.
+pub fn option_u64(options: &Option<HashMap<String, Value>>, key: &str) -> Option<u64> {
+    options
+        .as_ref()
+        .and_then(|map| map.get(key))
+        .and_then(|v| v.as_u64())
+}
+
+/// Build a default `ModelInfo` entry for a model ID with no hand-curated
+/// metadata. Native providers backfill their `available_models()` catalogs
+/// with this so every provider-spec `model_suggestions` entry — the GUI's
+/// model-dropdown source — is also listable at runtime.
+pub fn default_model_info(id: &str, is_default: bool) -> crate::agent::ModelInfo {
+    crate::agent::ModelInfo {
+        id: id.to_string(),
+        name: id.to_string(),
+        description: format!("{id} (spec catalog)"),
+        is_default,
+        capabilities: vec!["chat".to_string(), "streaming".to_string()],
+        context_window: None,
+    }
+}
+
 /// Raw SHA-256 digest of `data` (single source; per-module copies removed).
 pub fn sha256_bytes(data: &[u8]) -> Vec<u8> {
     use sha2::{Digest, Sha256};

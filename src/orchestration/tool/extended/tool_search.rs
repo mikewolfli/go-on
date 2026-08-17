@@ -18,10 +18,6 @@ impl Tool for ToolSearchTool {
         "tool_search"
     }
 
-    fn description(&self) -> &str {
-        "Search for available tools by name or description. Use this to discover niche or specialized tools that are not shown in the default tool list."
-    }
-
     fn exposure(&self) -> ToolExposure {
         ToolExposure::Direct
     }

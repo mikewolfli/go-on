@@ -6,14 +6,12 @@
 use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
 use anyhow::{Context, Result};
-use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::Value;
 use std::path::Path;
 use tracing::debug;
 
 /// Input parameters for [`EnvironmentInfoTool`].
-#[derive(JsonSchema, Deserialize)]
+#[derive(Deserialize)]
 struct EnvironmentInfoInput {
     /// Project root directory path (defaults to allowed base dir or cwd).
     #[serde(default)]
@@ -29,14 +27,6 @@ pub struct EnvironmentInfoTool;
 impl Tool for EnvironmentInfoTool {
     fn name(&self) -> &'static str {
         "environment_info"
-    }
-
-    fn description(&self) -> &str {
-        "Get OS family, architecture, hostname, project root, and available tooling"
-    }
-
-    fn input_schema(&self) -> Value {
-        schemars::schema_for!(EnvironmentInfoInput).into()
     }
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {

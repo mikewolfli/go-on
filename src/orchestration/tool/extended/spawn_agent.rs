@@ -163,10 +163,6 @@ impl Tool for SpawnAgentTool {
         "spawn_agent"
     }
 
-    fn description(&self) -> &str {
-        "Spawn a sub-agent with a specific task and optional role classification, wait for it to complete, and return the result."
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         // This tool is inherently async (agent chat is async). The sync `run()`
         // always executes on the shared dedicated blocking runtime (see

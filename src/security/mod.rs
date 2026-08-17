@@ -5,6 +5,7 @@
 
 pub mod audit_integrity;
 pub mod mtls;
+pub mod paths;
 pub mod prompt_injection;
 pub mod request_signing;
 pub mod sandbox;

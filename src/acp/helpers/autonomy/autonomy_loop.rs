@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use crate::acp::r#impl::chat::streaming::StreamFrame;
+use crate::acp::r#impl::chat::streaming::{StreamFrame, STREAM_EVENT_CHUNK, STREAM_EVENT_STATUS};
 use crate::agent::{Agent, Message, StreamingSender};
 use crate::orchestration::autonomy_runtime::{classify_agent_token, AgentToken};
 use crate::orchestration::tool::executor::{execute_tools_concurrent, ToolExecConfig};
@@ -158,7 +158,7 @@ pub async fn run_autonomy_loop(
         // ── Emit round iteration progress status ─────────────────────
         if let Some(ref tx) = config.progress_tx {
             let _ = tx.send(StreamFrame {
-                event: "status",
+                event: STREAM_EVENT_STATUS,
                 payload: serde_json::json!({
                     "message": format!("Round {}/{}: planning next steps...",
                         iteration + 1, max_iterations),
@@ -205,7 +205,7 @@ pub async fn run_autonomy_loop(
         // "Thinking..." immediately, before the first token arrives.
         if let Some(ref tx) = config.progress_tx {
             let _ = tx.send(StreamFrame {
-                event: "chunk",
+                event: STREAM_EVENT_CHUNK,
                 payload: serde_json::json!({
                     "token": "",
                     "thinking": true,
@@ -315,7 +315,7 @@ pub async fn run_autonomy_loop(
                                     reasoning.push_str(&reasoning_token);
                                     if let Some(ref tx) = config.progress_tx {
                                         if tx.send(StreamFrame {
-                                            event: "chunk",
+                                            event: STREAM_EVENT_CHUNK,
                                             payload: serde_json::json!({
                                                 "token": "",
                                                 "reasoning": reasoning_token,
@@ -337,7 +337,7 @@ pub async fn run_autonomy_loop(
                                     response.push_str(&token);
                                     if let Some(ref tx) = config.progress_tx {
                                         let _ = tx.send(StreamFrame {
-                                            event: "chunk",
+                                            event: STREAM_EVENT_CHUNK,
                                             payload: serde_json::json!({
                                                 "token": token,
                                             }),
@@ -492,7 +492,7 @@ pub async fn run_autonomy_loop(
                 // ── Send completion notification as visible chunk token ──
                 if let Some(ref tx) = config.progress_tx {
                     let _ = tx.send(StreamFrame {
-                        event: "chunk",
+                        event: STREAM_EVENT_CHUNK,
                         payload: serde_json::json!({
                             "token": summary,
                             "tool_status": "completed",
@@ -505,7 +505,7 @@ pub async fn run_autonomy_loop(
                 // ── Send failure notification ──
                 if let Some(ref tx) = config.progress_tx {
                     let _ = tx.send(StreamFrame {
-                        event: "chunk",
+                        event: STREAM_EVENT_CHUNK,
                         payload: serde_json::json!({
                             "token": format!("❌ **{}** failed ", item.tool_name),
                             "tool_status": "failed",
@@ -538,7 +538,7 @@ pub async fn run_autonomy_loop(
     // ── Emit final summary phase status ─────────────────────────────
     if let Some(ref tx) = config.progress_tx {
         let _ = tx.send(StreamFrame {
-            event: "status",
+            event: STREAM_EVENT_STATUS,
             payload: serde_json::json!({
                 "message": "Generating final summary...",
             }),

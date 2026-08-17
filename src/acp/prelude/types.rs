@@ -8,6 +8,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::acp::session_log::SessionLog;
+
 // ============================================================================
 // Conversation types
 // ============================================================================
@@ -34,6 +36,13 @@ pub struct ConversationCheckpoint {
 pub struct ConversationState {
     pub checkpoints: Vec<ConversationCheckpoint>,
     pub branch_heads: HashMap<String, String>,
+    /// Append-only session logs keyed by `"{conversation_id}:{branch_id}"`
+    /// (the same keying used for `branch_heads`). M1.4: the session log is the
+    /// factual event source for a conversation — model-visible history must be
+    /// rebuildable from it via `SessionLog::derive_messages`. Logs live
+    /// alongside checkpoints and are never pruned when checkpoints are pruned,
+    /// so a later fork/resume can derive the conversation history from them.
+    pub session_logs: HashMap<String, SessionLog>,
     pub last_touched_at: i64,
 }
 

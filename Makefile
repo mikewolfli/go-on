@@ -34,6 +34,9 @@ build-release: ## Build release with default profile
 check: ## Check all targets compile
 	cargo check --all-targets --locked
 
+sdk-types-check: ## Verify sdk/typescript/src/types.ts matches contracts/acp-stream-events.json (M2.3)
+	python3 scripts/gen-sdk-types.py --check
+
 clippy: ## Run clippy on all targets
 	cargo clippy --all-targets --locked -- -D warnings
 
@@ -84,7 +87,7 @@ bench: ## Run benchmarks (criterion runs on stable Rust)
 bench-acp: ## Run ACP protocol benchmarks only
 	cargo bench --bench acp_bench
 
-ci: check clippy test ## Run CI gate (check + clippy + test)
+ci: check clippy test sdk-types-check ## Run CI gate (check + clippy + test + generated SDK types)
 
 dev-container: ## Set up dev container
 	@if [ -f .devcontainer/devcontainer.json ]; then \
@@ -120,4 +123,4 @@ tag-version: ## Verify git tag matches Cargo.toml version
 .PHONY: help build build-simple build-multi build-full build-release
 .PHONY: check clippy clippy-fix test test-lib test-all-profiles
 .PHONY: fmt clean lint doc audit deny bench ci dev-container
-.PHONY: gui-check gui-test vscode-install count tag-version
+.PHONY: gui-check gui-test vscode-install count tag-version sdk-types-check

@@ -8,6 +8,10 @@ pub mod migrator;
 pub mod parser;
 pub mod validator;
 
+// M1.2 layered-merge machinery lives next to the loader (patch.rs) so load
+// submodules can reach it as `super::patch` without crate-path indirection.
+pub use super::patch;
+
 // Re-export all public items from sub-modules to preserve the public API surface.
 // Callers use `crate::core::config::load::some_function()`.
 
@@ -108,6 +112,7 @@ mod tests {
 
         AppConfig {
             schema_version: "1.0.0".to_string(),
+            layered_merge: false,
             provider: crate::core::config::types::ProviderConfig {
                 default_phase: "coding".to_string(),
                 agents,
@@ -239,6 +244,7 @@ mod tests {
             skills_require_sha256: true,
             skills_allow_floating_ref: false,
             skills_cache_dir: "skills_cache".to_string(),
+            skill_auto_extract: false,
             evolution_enabled: false,
             cors_allowed_origins: Vec::new(),
             user_auth_enabled: false,
@@ -255,6 +261,7 @@ mod tests {
             enable_delphi_debate: false,
             governance_enabled: true,
             governance_policy_mode: String::new(),
+            permission_hooks: Vec::new(),
             request_signing_enabled: false,
             request_signing_public_key: String::new(),
             request_signing_hmac_secret: String::new(),
@@ -797,6 +804,7 @@ mod tests {
             skills_require_sha256: true,
             skills_allow_floating_ref: false,
             skills_cache_dir: "skills_cache".to_string(),
+            skill_auto_extract: false,
             evolution_enabled: false,
             cors_allowed_origins: Vec::new(),
             user_auth_enabled: false,
@@ -813,6 +821,7 @@ mod tests {
             enable_delphi_debate: false,
             governance_enabled: true,
             governance_policy_mode: String::new(),
+            permission_hooks: Vec::new(),
             request_signing_enabled: false,
             request_signing_public_key: String::new(),
             request_signing_hmac_secret: String::new(),

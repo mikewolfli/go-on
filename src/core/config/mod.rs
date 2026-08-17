@@ -5,6 +5,7 @@
 pub mod autotune;
 pub mod defaults;
 pub mod load;
+pub mod patch;
 pub mod schema_version;
 pub mod types;
 
@@ -15,6 +16,7 @@ pub mod types;
 // Internal / pub(crate) types are NOT re-exported.
 pub use autotune::{AutoTuneConfig, AutoTuneState};
 pub use defaults::default_non_ai_config_toml;
+pub use patch::{apply_layers, deep_merge, ConfigSource, LayerSource, LayeredLoad};
 
 // pub(crate) re-exports for internal use (not part of the public API)
 pub(crate) use crate::core::providers::provider_specs;

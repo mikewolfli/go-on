@@ -19,12 +19,19 @@ use crate::acp::server::AcpServer;
 use crate::agents::sse_optimizer::SseBufferPool;
 use crate::orchestration::autonomy_runtime::TOKEN_THINKING_PREFIX;
 
-// Stream event type constants to avoid repeated allocations
-const STREAM_EVENT_CHUNK: &str = "chunk";
-const STREAM_EVENT_DONE: &str = "done";
-const STREAM_EVENT_TELEMETRY: &str = "telemetry";
-const STREAM_EVENT_STATUS: &str = "status";
-const STREAM_EVENT_TOOL_APPROVAL: &str = "tool_approval";
+// Stream event type constants to avoid repeated allocations. The values must
+// stay in sync with `stream_consumer::classify_stream_event`, which is the
+// single classifier for the ACP stream protocol.
+pub(crate) const STREAM_EVENT_CHUNK: &str = "chunk";
+pub(crate) const STREAM_EVENT_DONE: &str = "done";
+pub(crate) const STREAM_EVENT_TELEMETRY: &str = "telemetry";
+pub(crate) const STREAM_EVENT_STATUS: &str = "status";
+pub(crate) const STREAM_EVENT_TOOL_APPROVAL: &str = "tool_approval";
+pub(crate) const STREAM_EVENT_RESULT: &str = "result";
+pub(crate) const STREAM_EVENT_ERROR: &str = "error";
+pub(crate) const STREAM_EVENT_PROGRESS: &str = "progress";
+pub(crate) const STREAM_EVENT_PHASE_START: &str = "phase_start";
+pub(crate) const STREAM_EVENT_PHASE_END: &str = "phase_end";
 
 // ── SseBufferPool (GAP-46-12 / BLUE48 Step 2) ────────────────────────
 // Global pool of pre-allocated byte buffers for SSE event serialization.

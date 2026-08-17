@@ -310,9 +310,6 @@ impl Tool for TemplateRenderTool {
     fn name(&self) -> &'static str {
         "template_render"
     }
-    fn description(&self) -> &str {
-        "Render a template with {{variable}} replacement, {{#each}} loops, and {{#if}} conditionals"
-    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let template = input.payload["template"]
             .as_str()

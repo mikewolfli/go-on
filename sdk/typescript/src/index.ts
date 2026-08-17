@@ -38,6 +38,7 @@ export type {
   SessionModeDescription,
   SessionModeState,
   StreamChunk,
+  StreamEvent,
   TaskPlanResponse,
   ToolCall,
   ToolInfo,

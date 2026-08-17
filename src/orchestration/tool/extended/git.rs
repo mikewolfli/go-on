@@ -14,12 +14,6 @@ impl Tool for GitTool {
     fn name(&self) -> &'static str {
         "git"
     }
-    fn description(&self) -> &str {
-        // Keep in sync with ALLOWED_GIT_SUBCOMMANDS below: the whitelist is
-        // deliberately read-only, so the description must not promise
-        // operations the implementation rejects.
-        "Execute safe, read-only git operations (status, diff, log, show, stash)"
-    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let subcommand = input.payload["subcommand"]
             .as_str()

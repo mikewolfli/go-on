@@ -208,6 +208,7 @@ impl Default for RuntimeConfig {
             skills_require_sha256: default_runtime_skills_require_sha256(),
             skills_allow_floating_ref: false,
             skills_cache_dir: default_runtime_skills_cache_dir(),
+            skill_auto_extract: false,
             evolution_enabled: false,
             cors_allowed_origins: Vec::new(),
             user_auth_enabled: false,
@@ -224,6 +225,7 @@ impl Default for RuntimeConfig {
             enable_delphi_debate: false,
             governance_enabled: true,
             governance_policy_mode: String::new(),
+            permission_hooks: Vec::new(),
             // Security (GAP-B52)
             request_signing_enabled: false,
             request_signing_public_key: String::new(),

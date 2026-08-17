@@ -34,9 +34,6 @@ impl Tool for DateTimeTool {
     fn name(&self) -> &'static str {
         "date_time"
     }
-    fn description(&self) -> &str {
-        "Get current date/time, format timestamps, or calculate time differences"
-    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let operation = input.payload["operation"].as_str().unwrap_or("now");
 

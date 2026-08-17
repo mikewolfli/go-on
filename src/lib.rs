@@ -14,6 +14,7 @@ pub mod agents;
 pub mod cli;
 pub mod core;
 pub mod fault_tolerance;
+pub mod gateway; // M3.4: multi-platform gateway (adapter registry + turn lease + delivery ledger)
 pub mod governance;
 
 // Runtime Hub — reserved for multi-process architecture (daemon + client agents).

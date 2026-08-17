@@ -62,6 +62,8 @@ pub mod image;
 pub mod invoice;
 pub mod jsonl;
 pub mod lsp;
+#[cfg(feature = "backend-sqlite")]
+pub mod memory_search;
 pub mod network;
 #[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 pub mod obj;
@@ -131,20 +133,20 @@ pub use filesystem::{
     ListDirectoryTool,
 };
 pub use format::FormatCodeTool;
-#[cfg(feature = "game-state")]
-pub use game::{GameAchievementTool, GameSaveManagerTool};
 #[cfg(feature = "game-agent")]
-pub use game::{GameAutoGrindTool, GameCoachingAssistantTool};
+pub use game::agent::{GameAutoGrindTool, GameCoachingAssistantTool};
 #[cfg(feature = "game-input")]
-pub use game::{GameKeyboardInputTool, GameMouseInputTool};
-#[cfg(feature = "game-process")]
-pub use game::{GameLaunchTool, GameMonitorTool};
-#[cfg(feature = "game-online")]
-pub use game::{GameMatchmakingTool, GamePriceTrackerTool, GameServerQueryTool};
+pub use game::input::{GameKeyboardInputTool, GameMouseInputTool};
 #[cfg(feature = "game-modding")]
-pub use game::{GameModInstallTool, GameModListTool};
+pub use game::modding::{GameModInstallTool, GameModListTool};
+#[cfg(feature = "game-online")]
+pub use game::online::{GameMatchmakingTool, GamePriceTrackerTool, GameServerQueryTool};
+#[cfg(feature = "game-process")]
+pub use game::process::{GameLaunchTool, GameMonitorTool};
 #[cfg(feature = "game-screen")]
-pub use game::{GameReplayRecorderTool, GameScreenCaptureTool};
+pub use game::screen::{GameReplayRecorderTool, GameScreenCaptureTool};
+#[cfg(feature = "game-state")]
+pub use game::state::{GameAchievementTool, GameSaveManagerTool};
 #[cfg(feature = "cam-gcode")]
 pub use gcode::GcodeReadTool;
 #[cfg(feature = "cad-geo")]
@@ -163,6 +165,8 @@ pub use image::{ImageAnalyzeTool, ImageConvertTool, ImageGenerateTool, ImageResi
 pub use invoice::InvoiceParseTool;
 pub use jsonl::{JsonlReadTool, JsonlWriteTool};
 pub use lsp::{ApplyCodeActionTool, FindReferencesTool, GoToDefinitionTool};
+#[cfg(feature = "backend-sqlite")]
+pub use memory_search::MemorySearchTool;
 pub use metrics::CodeMetricsTool;
 pub use network::{DnsLookupTool, PingTool, PortScanTool};
 #[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
@@ -243,6 +247,8 @@ mod tests {
                 if err_msg.contains("No such file or directory")
                     || err_msg.contains("not found")
                     || err_msg.contains("denied")
+                    || err_msg.contains("failed to spawn")
+                    || err_msg.contains("Too many open files")
                 {
                     eprintln!("skipping shell test — shell binary not available");
                     return;

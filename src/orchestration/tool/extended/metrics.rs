@@ -19,11 +19,6 @@ impl Tool for CodeMetricsTool {
         "code_metrics"
     }
 
-    fn description(&self) -> &str {
-        "Analyze source code files and compute code quality metrics (lines of code, \
-         cyclomatic complexity, function/class sizes)"
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let directory = input
             .payload

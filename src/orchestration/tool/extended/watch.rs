@@ -29,12 +29,6 @@ impl Tool for FileWatchTool {
         "file_watch"
     }
 
-    fn description(&self) -> &str {
-        "Watch files or directories for changes. Checks file modification times \
-         against a stored snapshot. On first call, records baseline. On subsequent \
-         calls, returns list of changed files since the last check."
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let directory = input
             .payload

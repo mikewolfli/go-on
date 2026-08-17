@@ -209,12 +209,42 @@ async fn run() -> Result<()> {
             cli::CliCommand::Skill { command } => {
                 return cli::handle_skill_command(command, &config_path).await;
             }
+            cli::CliCommand::Config { command } => {
+                return crate::cli::config::handle_config_command(command, &config_path).await;
+            }
+            #[cfg(feature = "backend-sqlite")]
+            cli::CliCommand::Cron { command } => {
+                return crate::cli::cron::handle_cron_command(command, &config_path).await;
+            }
+            cli::CliCommand::Exec {
+                json,
+                approval_mode,
+                input_stdin,
+                prompt,
+            } => {
+                return crate::cli::exec::run_exec(
+                    &config_path,
+                    json,
+                    approval_mode.as_deref(),
+                    input_stdin,
+                    prompt.as_deref(),
+                )
+                .await;
+            }
             #[cfg(feature = "sub-bus-distributed-memory")]
             cli::CliCommand::Hub { port } => {
                 let mut hub = crate::hub::server::HubServer::with_port(port)?;
                 hub.start().await?;
                 tokio::signal::ctrl_c().await?;
                 return Ok(());
+            }
+            #[cfg(feature = "backend-sqlite")]
+            cli::CliCommand::Gateway { host, config } => {
+                let gateway_config = match config {
+                    Some(path) => PathBuf::from(path),
+                    None => config_path.clone(),
+                };
+                return crate::gateway::webhook::run_gateway_server(&gateway_config, &host).await;
             }
         }
     }
@@ -384,9 +414,7 @@ async fn run() -> Result<()> {
     if cli.chat {
         // CLI chat also runs model-issued commands through the tool loop, so the
         // command sandbox config applies here too.
-        crate::security::sandbox::init_command_sandbox(
-            config.security.command_sandbox.clone(),
-        );
+        crate::security::sandbox::init_command_sandbox(config.security.command_sandbox.clone());
         return server::handle_chat_mode(config, &cli, &config_path, skill_registry).await;
     }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::acp::session_log::SessionEvent;
 use crate::schema::{
     ConfigOptionUpdate, ContentBlock, ContentChunk, SessionConfigSelectOptions, SessionUpdate,
     TextContent,
@@ -153,6 +154,23 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
         .get("sessionId")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+
+    // M1.4 (会话日志即事实源): the session log is the authoritative, append-only
+    // event record for a conversation. Capture the model-visible prompt text
+    // before `build_chat_params_from_acp` consumes `params`, and resolve the
+    // conversation's log key the way the chat pipeline resolves it for this
+    // entry (`ChatRequestContext::new(None)` → "default-tenant" tenant when
+    // auth is enabled; session prompts never set `branch_id` → "main") so
+    // checkpoint keys and session-log keys stay consistent.
+    let prompt_text = super::acp_prompt_to_text(&params);
+    let session_log_key = session_id_for_notification.as_deref().map(|sid| {
+        let conversation_id = if server.runtime_config.user_auth_enabled {
+            format!("default-tenant:{}", sid)
+        } else {
+            sid.to_string()
+        };
+        format!("{}:main", conversation_id)
+    });
 
     // A session marked cancelled via `session/cancel` must not accept new
     // prompts. Checked before `build_chat_params_from_acp` (which consumes
@@ -424,6 +442,49 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                 response_chars = response_text.chars().count(),
                 "ACP session/prompt: completed successfully"
             );
+
+            // M1.4: record the completed turn in the conversation's session
+            // log (append-only factual event source). Only successful turns
+            // are logged — a rejected/failed request produced no model-visible
+            // assistant turn and is covered by the audit chain instead. A
+            // prompt without a `sessionId` is skipped because the pipeline
+            // generates an ephemeral conversation id this path cannot observe.
+            if let Some(log_key) = session_log_key.as_deref() {
+                let mut state = server.session.conversation_state.lock().await;
+                let log = state.session_logs.entry(log_key.to_string()).or_default();
+                if !prompt_text.is_empty() {
+                    log.append(SessionEvent::UserMessage {
+                        content: prompt_text.clone(),
+                    });
+                }
+                log.append(SessionEvent::AssistantMessage {
+                    content: response_text.to_string(),
+                });
+
+                // Debug invariant (M1.4: "模型可见 ⇒ 日志可重建"): the turns this
+                // path just exposed to the model must be reconstructible from
+                // the log's projection.
+                #[cfg(debug_assertions)]
+                {
+                    let derived = log.derive_messages();
+                    if !prompt_text.is_empty() {
+                        debug_assert!(
+                            derived
+                                .iter()
+                                .any(|m| m.role == "user" && m.content == prompt_text),
+                            "session log must rebuild the user turn (key: {})",
+                            log_key
+                        );
+                    }
+                    debug_assert!(
+                        derived
+                            .iter()
+                            .any(|m| m.role == "assistant" && m.content == response_text),
+                        "session log must rebuild the assistant turn (key: {})",
+                        log_key
+                    );
+                }
+            }
 
             // ✅ Real-time streaming via bridge task above handles all
             // `agent_thought_chunk` and `agent_message_chunk` notifications.

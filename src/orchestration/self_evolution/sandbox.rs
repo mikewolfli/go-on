@@ -5,6 +5,7 @@
 //! strict safety controls: no-network, allowed-targets whitelisting, and
 //! a hard iteration limit.
 
+use crate::orchestration::write::{file_hash, record_file_change, FileChangeEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -423,8 +424,37 @@ impl SandboxExecutor {
             )));
         }
 
+        // ── M4.3: change-event audit — hash the target file BEFORE the patch
+        // is applied so the audit chain can replay old→new per change. The
+        // sandbox CodePatch is single-file by construction (`target_file`),
+        // so one event per apply. Hashes are best-effort (warn + None, same
+        // pattern as M1.3): a hash failure must never abort an apply that
+        // would otherwise succeed.
+        let target_path = self.workdir.join(&patch.target_file);
+        let old_hash = file_hash(&target_path).unwrap_or_else(|e| {
+            warn!(
+                sandbox = %self.instance_id,
+                "self_evolution: cannot hash '{}' before apply: {e:#}",
+                target_path.display()
+            );
+            None
+        });
+
         // Apply the patch to the file
         let changed = patch.apply_to_file(&self.workdir).await?;
+
+        // The write above succeeded — record the event AFTER the fact
+        // (fire-and-forget, same pattern as M1.3). A failed apply returns
+        // before this point, so a patch that never wrote is never recorded.
+        let new_hash = file_hash(&target_path).unwrap_or_else(|e| {
+            warn!(
+                sandbox = %self.instance_id,
+                "self_evolution: cannot hash '{}' after apply: {e:#}",
+                target_path.display()
+            );
+            None
+        });
+        self.record_evolution_change(patch.patch_id, "apply", &target_path, old_hash, new_hash);
 
         debug!(
             sandbox = %self.instance_id,
@@ -434,6 +464,42 @@ impl SandboxExecutor {
         );
 
         Ok(changed)
+    }
+
+    /// Best-effort audit record for a file rewrite performed by this sandbox.
+    ///
+    /// Records a [`FileChangeEvent`] with `op = "self_evolution"` so every
+    /// source modification from the evolution loop flows through the M1.3
+    /// unified write chokepoint and the audit chain can replay the old→new
+    /// content hash per change. The evolution loop does not thread a task id
+    /// into the sandbox (`EvolutionLoop::apply` calls `apply_patch(patch)`
+    /// without one), so the task id is derived from the sandbox instance id
+    /// (the evolution run) plus the `patch_id` of the change that caused it,
+    /// e.g. `self_evolution/{sandbox}/{patch}`. Fire-and-forget: the audit
+    /// sink swallows its own I/O errors, and the file write has already
+    /// happened when this is called.
+    fn record_evolution_change(
+        &self,
+        patch_id: Option<Uuid>,
+        phase: &str,
+        path: &Path,
+        old_hash: Option<String>,
+        new_hash: Option<String>,
+    ) {
+        let task_id = match patch_id {
+            Some(id) => format!("self_evolution/{}/{}", self.instance_id, id),
+            None => format!("self_evolution/{}", self.instance_id),
+        };
+        record_file_change(
+            &task_id,
+            phase,
+            &FileChangeEvent {
+                path: path.to_string_lossy().into_owned(),
+                op: "self_evolution",
+                old_hash,
+                new_hash,
+            },
+        );
     }
 
     /// Revert a previously-applied patch by re-applying its inverse.
@@ -451,7 +517,31 @@ impl SandboxExecutor {
             reasoning: format!("revert of {}", patch.reasoning),
             patch_id: patch.patch_id,
         };
-        reversed.apply_to_file(&self.workdir).await
+        // ── M4.3: a revert is a source modification too, so it must land in
+        // the audit chain with the same old→new hash replay as an apply.
+        let target_path = self.workdir.join(&patch.target_file);
+        let old_hash = file_hash(&target_path).unwrap_or_else(|e| {
+            warn!(
+                sandbox = %self.instance_id,
+                "self_evolution: cannot hash '{}' before revert: {e:#}",
+                target_path.display()
+            );
+            None
+        });
+
+        let changed = reversed.apply_to_file(&self.workdir).await?;
+
+        let new_hash = file_hash(&target_path).unwrap_or_else(|e| {
+            warn!(
+                sandbox = %self.instance_id,
+                "self_evolution: cannot hash '{}' after revert: {e:#}",
+                target_path.display()
+            );
+            None
+        });
+        self.record_evolution_change(patch.patch_id, "rollback", &target_path, old_hash, new_hash);
+
+        Ok(changed)
     }
 
     /// Build the project with the given Cargo profile.
@@ -993,5 +1083,68 @@ mod tests {
             Err(SandboxError::ForbiddenTarget(t)) => assert_eq!(t, "Cargo.toml"),
             _ => panic!("Expected ForbiddenTarget error"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_record_evolution_change_lands_in_audit_log() {
+        // `apply_patch` runs a clippy-based quality gate that needs a full
+        // Cargo project to pass, so this exercises the M4.3 audit wiring
+        // end-to-end without it: a real patch applied through the sandbox
+        // write site (`apply_to_file`), real before/after hashes from
+        // `file_hash`, and the event recorded through the extracted
+        // `record_evolution_change` helper. The full apply-loop assertion
+        // would additionally need the quality gate to pass on a real
+        // workspace (see `apply_patch`).
+        let workdir = TempDir::new().unwrap();
+        let target = "src/main.rs";
+        let full = workdir.path().join(target);
+        fs::create_dir_all(workdir.path().join("src"))
+            .await
+            .unwrap();
+        fs::write(&full, "fn a() {}\n").await.unwrap();
+
+        let patch = CodePatch::new(
+            target.to_string(),
+            vec![(1, "fn a() {}".to_string())],
+            vec![(1, "fn b() {}".to_string())],
+            "audit test patch".to_string(),
+        );
+
+        let old_hash = file_hash(&full).expect("pre-apply hash must succeed");
+        assert!(old_hash.is_some(), "target file exists before apply");
+
+        patch.apply_to_file(workdir.path()).await.unwrap();
+        let new_hash = file_hash(&full).expect("post-apply hash must succeed");
+        assert_ne!(
+            old_hash, new_hash,
+            "applying the patch must change the file"
+        );
+
+        let executor = SandboxExecutor::new(workdir.path().to_path_buf(), 1);
+        executor.record_evolution_change(
+            patch.patch_id,
+            "apply",
+            &full,
+            old_hash.clone(),
+            new_hash.clone(),
+        );
+
+        // The task id embeds the sandbox instance id (a fresh UUID per
+        // executor), so filtering by it is collision-free even though the
+        // audit sink is process-wide and shared with parallel tests.
+        let patch_id = patch.patch_id.expect("CodePatch::new sets a patch id");
+        let task_id = format!("self_evolution/{}/{}", executor.instance_id(), patch_id);
+        let entry = crate::governance::audit::global_audit_log()
+            .entries()
+            .into_iter()
+            .find(|e| e.task_id == task_id && e.decision == "file_change")
+            .expect("record_evolution_change must land in the global audit log");
+        assert_eq!(entry.phase, "apply");
+        assert_eq!(entry.tool.as_deref(), Some("self_evolution"));
+        assert_eq!(entry.inputs["path"], full.to_string_lossy().as_ref());
+        assert_eq!(entry.inputs["op"], "self_evolution");
+        let outputs = entry.outputs.as_ref().expect("outputs must be set");
+        assert_eq!(outputs["old_hash"], old_hash.as_deref().unwrap());
+        assert_eq!(outputs["new_hash"], new_hash.as_deref().unwrap());
     }
 }

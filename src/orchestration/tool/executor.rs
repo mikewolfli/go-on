@@ -25,7 +25,13 @@ use futures_util::StreamExt;
 use serde_json::Value;
 use tokio::sync::Semaphore;
 
-use crate::acp::r#impl::chat::streaming::{emit_tool_approval_event, StreamFrame};
+use crate::acp::r#impl::chat::streaming::{
+    emit_tool_approval_event, StreamFrame, STREAM_EVENT_CHUNK, STREAM_EVENT_PROGRESS,
+};
+use crate::governance::approval_chain::{
+    permission_hooks_from_config, run_permission_hooks, HookDecision, HookVerdict,
+};
+use crate::orchestration::events::{global_event_bus, AgentEvent, EventVerdict};
 use crate::orchestration::tool::{RetryPolicy, ToolInput, ToolOutput, ToolRegistry};
 
 /// Execute a tool, consulting the registry's fallback chain when the primary
@@ -222,7 +228,7 @@ async fn execute_single_tool(
     // ── Stream progress event before executing tool ────────────────
     if let Some(ref tx) = progress_tx {
         let _ = tx.send(StreamFrame {
-            event: "progress",
+            event: STREAM_EVENT_PROGRESS,
             payload: serde_json::json!({
                 "message": format!("executing tool {}...", tool_name),
             }),
@@ -343,6 +349,34 @@ async fn execute_single_tool(
             payload: parsed_args.clone(),
             allowed_base_dir,
         };
+
+        // ── Agent lifecycle event: tools/pre-execute ─────────────────
+        // Fire on the global bus BEFORE the hook chain. A listener may
+        // Consume the event to intercept the call; the tool is then
+        // reported as blocked and never reaches the hooks or the executor.
+        // The event is not emitted for calls already rejected by argument
+        // validation or the governance gate above (those never execute).
+        if global_event_bus().dispatch(&AgentEvent::ToolsPreExecute {
+            tool_name: tool_name.clone(),
+            input: parsed_args.clone(),
+        }) == EventVerdict::Consume
+        {
+            let blocked_msg = format!("Tool '{}' intercepted by event listener.", tool_name);
+            return ToolExecItem {
+                tool_name,
+                output: ToolOutput {
+                    success: false,
+                    result: None,
+                    error: Some(blocked_msg.clone()),
+                    verification: None,
+                    audit_log: None,
+                    pua_report: None,
+                },
+                success: false,
+                duration_ms: start.elapsed().as_millis() as u64,
+                formatted: format!("\n[{}]\n", blocked_msg),
+            };
+        }
 
         // ── Pre-execute hooks (unified async chain) ──────────────────
         // `run_pre_async` invokes every hook's `async_pre_execute` — sync
@@ -499,7 +533,7 @@ async fn execute_single_tool(
                 format!("❌ **{}** failed ", tool_name)
             };
             let _ = tx.send(StreamFrame {
-                event: "chunk",
+                event: STREAM_EVENT_CHUNK,
                 payload: serde_json::json!({
                     "token": summary,
                     "tool_status": status,
@@ -514,6 +548,17 @@ async fn execute_single_tool(
         tool_registry
             .hooks
             .run_post(&tool_name, &input, &output, duration_ms);
+
+        // ── Agent lifecycle event: tools/post-execute ────────────────
+        // Informational (the verdict is ignored) — reports the tool's real
+        // outcome. Emitted only when execution actually ran, matching the
+        // scope of the post-execute hooks above; calls blocked by
+        // validation, governance, hooks, or a pre-execute Consume never
+        // emit a post-execute event.
+        let _ = global_event_bus().dispatch(&AgentEvent::ToolsPostExecute {
+            tool_name: tool_name.clone(),
+            ok: success_bool,
+        });
 
         ToolExecItem {
             tool_name,
@@ -627,6 +672,48 @@ async fn ensure_tool_permission(
             if cached { "approved" } else { "denied" }
         );
         return cached;
+    }
+
+    // ── Permission hooks (M2.2 approval-chain layer ①) ────────────────
+    // Configured external commands (`[runtime] permission_hooks`) get a
+    // pre-decision shot at every tool AFTER HarnessBus policy (evaluated
+    // earlier in the request path) and BEFORE the user prompt below. A hook
+    // verdict short-circuits the prompt; no-opinion falls through to the
+    // existing user-permission round-trip. Hooks run on a blocking thread so
+    // a slow hook cannot stall the async runtime, and hook failures never
+    // block the approval (audited fail-open inside `run_permission_hooks`).
+    // Verdicts populate the same per-session cache as user decisions so a
+    // session does not re-run external commands for every repeated call.
+    let hooks = permission_hooks_from_config(&server.runtime_config);
+    if !hooks.is_empty() {
+        let hook_tool = tool_name.to_string();
+        let hook_args = parsed_args.clone();
+        let decision = tokio::task::spawn_blocking(move || {
+            run_permission_hooks(&hooks, &hook_tool, &hook_args)
+        })
+        .await
+        .unwrap_or(HookDecision {
+            verdict: None,
+            reason: None,
+        });
+        match decision.verdict {
+            Some(HookVerdict::Deny) => {
+                tracing::warn!("executor: tool '{}' denied by permission hook", tool_name);
+                governance_cache().insert(cache_key, false);
+                return false;
+            }
+            Some(HookVerdict::Allow) | Some(HookVerdict::Override) => {
+                tracing::debug!("executor: tool '{}' approved by permission hook", tool_name);
+                governance_cache().insert(cache_key, true);
+                return true;
+            }
+            None => {
+                tracing::debug!(
+                    "executor: permission hooks had no opinion on tool '{}', prompting user",
+                    tool_name
+                );
+            }
+        }
     }
 
     // Short timeout: if the ACP client (Zed) doesn't show a permission

@@ -127,12 +127,6 @@ impl Tool for SecurityScanTool {
         "security_scan"
     }
 
-    fn description(&self) -> &str {
-        "Scan project dependencies for known vulnerabilities using the OSV \
-         (Open Source Vulnerabilities) API. Supports Cargo.lock, \
-         package-lock.json, requirements.txt, and go.sum"
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let directory = input
             .payload

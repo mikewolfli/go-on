@@ -12,11 +12,12 @@ use crate::i18n::runtime::{t, tf};
 use crate::orchestration::tool::lock::LockMode;
 use crate::orchestration::tool::types::*;
 use crate::orchestration::tool::SKILL_REGISTRY;
+use crate::orchestration::write::{file_hash, record_file_change, FileChangeEvent};
 use anyhow::Result;
 use glob::Pattern;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, warn};
@@ -101,28 +102,14 @@ pub fn enforce_write_sandbox(path: &std::path::Path, content: &str) -> Result<()
     // Limit file size to prevent disk exhaustion (default 50MB).
     enforce_write_payload_size("write_file", "content", content.len())?;
 
-    // Block writing to sensitive system paths.
-    let path_str = path.to_string_lossy().to_lowercase();
-    let blocked_paths = [
-        "/etc/",
-        "/sys/",
-        "/proc/",
-        "/dev/",
-        "/boot/",
-        "/var/log/",
-        "/var/db/",
-        "/usr/lib/",
-        "/usr/bin/",
-        "C:\\windows\\",
-        "C:\\Program Files\\",
-    ];
-    for blocked in &blocked_paths {
-        if path_str.contains(blocked) {
-            anyhow::bail!(
-                "write_file BLOCKED: writing to system path '{}' is not allowed",
-                blocked
-            );
-        }
+    // Block writing to sensitive system paths. The blocklist lives in
+    // `security::paths` so the tool layer and the governance gate share one
+    // list and cannot drift apart.
+    if let Some(protected) = crate::security::paths::protected_write_path(path) {
+        anyhow::bail!(
+            "write_file BLOCKED: writing to system path '{}' is not allowed",
+            protected
+        );
     }
     Ok(())
 }
@@ -143,9 +130,14 @@ pub fn enforce_write_payload_size(tool: &str, label: &str, len: usize) -> Result
 /// Acquire the exclusive write lock for a file path, returning a transient
 /// error when the lock is held by another operation (the caller can retry).
 /// Shared by write_file and edit_file so the lock semantics cannot drift.
-pub fn acquire_tool_write_lock(path: &std::path::Path) -> Result<crate::orchestration::tool::lock::LockHandle> {
+pub fn acquire_tool_write_lock(
+    path: &std::path::Path,
+) -> Result<crate::orchestration::tool::lock::LockHandle> {
     crate::orchestration::tool::tool_lock_manager()
-        .try_acquire(&path.to_string_lossy(), crate::orchestration::tool::lock::LockMode::Write)
+        .try_acquire(
+            &path.to_string_lossy(),
+            crate::orchestration::tool::lock::LockMode::Write,
+        )
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "write lock contended for '{}' — another tool is modifying this file",
@@ -370,6 +362,16 @@ impl Tool for WriteFileTool {
         // error so the TAO loop can retry.
         let _lock = acquire_tool_write_lock(&path_buf)?;
 
+        // ── M1.3: change-event audit — hash BEFORE the write. Best-effort:
+        // a hash failure must never abort the write itself. ───────────────
+        let old_hash = file_hash(&path_buf).unwrap_or_else(|e| {
+            warn!(
+                "write_file: cannot hash '{}' before write: {e:#}",
+                path_buf.display()
+            );
+            None
+        });
+
         if let Some(parent) = path_buf.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent)?;
@@ -391,6 +393,27 @@ impl Tool for WriteFileTool {
                 anyhow::bail!("{}", tf("error.unsupported_write_mode", &[("mode", other)]));
             }
         }
+
+        // ── M1.3: change-event audit — hash AFTER the write and record the
+        // old→new content hashes. Recording is best-effort: the write has
+        // already succeeded at this point. ────────────────────────────────
+        let new_hash = file_hash(&path_buf).unwrap_or_else(|e| {
+            warn!(
+                "write_file: cannot hash '{}' after write: {e:#}",
+                path_buf.display()
+            );
+            None
+        });
+        record_file_change(
+            &input.task_id,
+            &input.phase,
+            &FileChangeEvent {
+                path: path_buf.to_string_lossy().into_owned(),
+                op: "write_file",
+                old_hash,
+                new_hash,
+            },
+        );
 
         let elapsed = start.elapsed().as_millis() as u64;
         span.record("latency_ms", elapsed);
@@ -424,6 +447,16 @@ impl Tool for WriteFileTool {
 
             let _lock = acquire_tool_write_lock(&path_buf)?;
 
+            // ── M1.3: change-event audit — hash BEFORE the write. Best-effort:
+            // a hash failure must never abort the write itself. ───────────────
+            let old_hash = file_hash(&path_buf).unwrap_or_else(|e| {
+                warn!(
+                    "write_file: cannot hash '{}' before write: {e:#}",
+                    path_buf.display()
+                );
+                None
+            });
+
             if let Some(parent) = path_buf.parent() {
                 if !parent.as_os_str().is_empty() {
                     tokio::fs::create_dir_all(parent).await?;
@@ -446,6 +479,27 @@ impl Tool for WriteFileTool {
                     anyhow::bail!("{}", tf("error.unsupported_write_mode", &[("mode", other)]));
                 }
             }
+
+            // ── M1.3: change-event audit — hash AFTER the write and record the
+            // old→new content hashes. Recording is best-effort: the write has
+            // already succeeded at this point. ────────────────────────────────
+            let new_hash = file_hash(&path_buf).unwrap_or_else(|e| {
+                warn!(
+                    "write_file: cannot hash '{}' after write: {e:#}",
+                    path_buf.display()
+                );
+                None
+            });
+            record_file_change(
+                &input.task_id,
+                &input.phase,
+                &FileChangeEvent {
+                    path: path_buf.to_string_lossy().into_owned(),
+                    op: "write_file",
+                    old_hash,
+                    new_hash,
+                },
+            );
 
             Ok(ToolOutput {
                 success: true,
@@ -600,6 +654,29 @@ impl Tool for ApplyPatchTool {
         let check_only = input.payload["check"].as_bool().unwrap_or(false);
         let current_dir = input.payload["directory"].as_str().unwrap_or(".");
         let sanitized_dir = sanitize_path(input, current_dir)?;
+
+        // ── M1.3: change-event audit — enumerate the files the patch touches
+        // and hash them BEFORE git apply. `patch_affected_files` parses
+        // `diff --git` headers; a patch it cannot parse yields no files and
+        // falls back to a directory-level event below. Old-hash failures are
+        // best-effort (warn + None) — they must never abort a patch that
+        // would otherwise apply. ───────────────────────────────────────────
+        let affected = patch_affected_files(patch);
+        let old_hashes: Vec<(String, Option<String>)> = affected
+            .iter()
+            .map(|rel| {
+                let full = sanitized_dir.join(rel);
+                let hash = file_hash(&full).unwrap_or_else(|e| {
+                    warn!(
+                        "apply_patch: cannot hash '{}' before apply: {e:#}",
+                        full.display()
+                    );
+                    None
+                });
+                (rel.clone(), hash)
+            })
+            .collect();
+
         // Pipe patch via stdin to avoid Windows \\?\\ long-path prefix issues
         // that arise when using tempfile (git apply can't open \\?\\ prefixed paths).
         let mut git_args = vec!["apply".to_string()];
@@ -625,6 +702,49 @@ impl Tool for ApplyPatchTool {
                 stderr = %String::from_utf8_lossy(&output.stderr).trim(),
                 "tool: git apply failed"
             );
+        }
+
+        // ── M1.3: change-event audit — record old→new hashes for every file
+        // the patch touched, but only when the apply actually changed the
+        // working tree (`success && !check_only`); a failed or check-only
+        // apply writes nothing, so nothing is recorded. Recording is
+        // best-effort — hashing failures cannot fail the tool call. ────────
+        if success && !check_only {
+            for (rel, old_hash) in &old_hashes {
+                let full = sanitized_dir.join(rel);
+                let new_hash = file_hash(&full).unwrap_or_else(|e| {
+                    warn!(
+                        "apply_patch: cannot hash '{}' after apply: {e:#}",
+                        full.display()
+                    );
+                    None
+                });
+                record_file_change(
+                    &input.task_id,
+                    &input.phase,
+                    &FileChangeEvent {
+                        path: full.to_string_lossy().into_owned(),
+                        op: "apply_patch",
+                        old_hash: old_hash.clone(),
+                        new_hash,
+                    },
+                );
+            }
+            if affected.is_empty() {
+                // Patch format without parseable `diff --git` headers — the
+                // changed files cannot be determined, so record the working
+                // directory with unknown hashes to keep the write audited.
+                record_file_change(
+                    &input.task_id,
+                    &input.phase,
+                    &FileChangeEvent {
+                        path: sanitized_dir.to_string_lossy().into_owned(),
+                        op: "apply_patch",
+                        old_hash: None,
+                        new_hash: None,
+                    },
+                );
+            }
         }
 
         let elapsed = start.elapsed().as_millis() as u64;
@@ -674,6 +794,26 @@ impl Tool for ApplyPatchTool {
             let check_only = input.payload["check"].as_bool().unwrap_or(false);
             let current_dir = input.payload["directory"].as_str().unwrap_or(".");
             let sanitized_dir = sanitize_path(&input, current_dir)?;
+
+            // ── M1.3: change-event audit — same as the sync path: enumerate
+            // the files the patch touches and hash them BEFORE git apply,
+            // best-effort (warn + None, never abort the patch). ─────────────
+            let affected = patch_affected_files(patch);
+            let old_hashes: Vec<(String, Option<String>)> = affected
+                .iter()
+                .map(|rel| {
+                    let full = sanitized_dir.join(rel);
+                    let hash = file_hash(&full).unwrap_or_else(|e| {
+                        warn!(
+                            "apply_patch: cannot hash '{}' before apply: {e:#}",
+                            full.display()
+                        );
+                        None
+                    });
+                    (rel.clone(), hash)
+                })
+                .collect();
+
             let mut git_args = vec!["apply".to_string()];
             if check_only {
                 git_args.push("--check".to_string());
@@ -698,6 +838,49 @@ impl Tool for ApplyPatchTool {
                     stderr = %String::from_utf8_lossy(&output.stderr).trim(),
                     "tool: git apply failed"
                 );
+            }
+
+            // ── M1.3: change-event audit — record old→new hashes only when
+            // the apply actually changed the working tree (`success &&
+            // !check_only`); a failed or check-only apply writes nothing, so
+            // nothing is recorded. Recording is best-effort — hashing
+            // failures cannot fail the tool call. ───────────────────────────
+            if success && !check_only {
+                for (rel, old_hash) in &old_hashes {
+                    let full = sanitized_dir.join(rel);
+                    let new_hash = file_hash(&full).unwrap_or_else(|e| {
+                        warn!(
+                            "apply_patch: cannot hash '{}' after apply: {e:#}",
+                            full.display()
+                        );
+                        None
+                    });
+                    record_file_change(
+                        &input.task_id,
+                        &input.phase,
+                        &FileChangeEvent {
+                            path: full.to_string_lossy().into_owned(),
+                            op: "apply_patch",
+                            old_hash: old_hash.clone(),
+                            new_hash,
+                        },
+                    );
+                }
+                if affected.is_empty() {
+                    // Patch format without parseable `diff --git` headers —
+                    // record the working directory with unknown hashes to
+                    // keep the write audited.
+                    record_file_change(
+                        &input.task_id,
+                        &input.phase,
+                        &FileChangeEvent {
+                            path: sanitized_dir.to_string_lossy().into_owned(),
+                            op: "apply_patch",
+                            old_hash: None,
+                            new_hash: None,
+                        },
+                    );
+                }
             }
 
             Ok(ToolOutput {
@@ -731,6 +914,74 @@ impl Tool for ApplyPatchTool {
             })
         })
     }
+}
+
+/// Best-effort list of files a git patch touches, parsed from its
+/// `diff --git a/<old> b/<new>` headers (paths relative to the repo root).
+///
+/// `/dev/null` sides (new/deleted files) are skipped — the caller records
+/// `None` on the absent side instead. Renames yield both the removed and the
+/// added path. Git double-quotes paths containing spaces or non-ASCII; those
+/// are unquoted here (embedded octal escapes are not decoded, which at worst
+/// degrades the hashes to `None`). Relative paths that would escape the
+/// working directory (absolute or `..`) are dropped — git apply rejects such
+/// patches anyway. A patch without parseable headers yields `vec![]` and the
+/// caller falls back to a directory-level event.
+fn patch_affected_files(patch: &str) -> Vec<String> {
+    let mut files: Vec<String> = Vec::new();
+    for line in patch.lines() {
+        let Some(rest) = line.strip_prefix("diff --git ") else {
+            continue;
+        };
+        let tokens = split_quoted_whitespace(rest);
+        if tokens.len() < 2 {
+            continue;
+        }
+        for token in [tokens[0].as_str(), tokens[1].as_str()] {
+            let path = token.trim_matches('"');
+            let Some(rel) = path.strip_prefix("a/").or_else(|| path.strip_prefix("b/")) else {
+                continue;
+            };
+            if rel.is_empty() || rel == "/dev/null" {
+                continue;
+            }
+            let rel_path = Path::new(rel);
+            if rel_path.is_absolute()
+                || rel_path
+                    .components()
+                    .any(|c| c == std::path::Component::ParentDir)
+            {
+                continue;
+            }
+            if !files.iter().any(|f| f.as_str() == rel) {
+                files.push(rel.to_string());
+            }
+        }
+    }
+    files
+}
+
+/// Split on whitespace while keeping double-quoted runs intact (git quotes
+/// paths containing spaces as `"a/path with spaces"`).
+fn split_quoted_whitespace(s: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for c in s.chars() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            c if c.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
 
 // ============================================================================

@@ -10,48 +10,13 @@ use crate::orchestration::tool::exec_common::{
 };
 use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 use anyhow::Result;
-use std::io::Write;
-use std::process::{Command, Stdio};
-use std::sync::OnceLock;
-use std::time::Duration;
 use tracing::{debug, info, warn};
-
-/// Cached result of the GNU timeout availability check.
-/// Once detected, the result is reused for the lifetime of the process.
-fn gnu_timeout_available() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        if cfg!(target_os = "windows") {
-            return false;
-        }
-        Command::new("timeout")
-            .arg("1")
-            .arg("sh")
-            .arg("-c")
-            .arg("true")
-            .output()
-            .map(|out| out.status.success())
-            .unwrap_or(false)
-    })
-}
-
-/// Write stdin content to the child process if provided.
-fn write_stdin_if_needed(child: &mut std::process::Child, stdin_input: &Option<String>) {
-    if let Some(stdin_text) = stdin_input {
-        if let Some(mut stdin_writer) = child.stdin.take() {
-            let _ = stdin_writer.write_all(stdin_text.as_bytes());
-        }
-    }
-}
 
 pub struct ShellExecTool;
 
 impl Tool for ShellExecTool {
     fn name(&self) -> &'static str {
         "shell_exec"
-    }
-    fn description(&self) -> &str {
-        "Execute a shell command with timeout and capture output"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let command = input.payload["command"]
@@ -93,181 +58,46 @@ impl Tool for ShellExecTool {
         } else {
             ("sh", "-c")
         };
-
-        let timeout_secs = (timeout_ms as f64 / 1000.0).ceil() as u64;
-        let max_timeout = cap_timeout_secs(timeout_secs);
-
-        // Use cached result — GNU timeout detection runs only once per process
-        let use_gnu_timeout = gnu_timeout_available();
+        let shell_args = vec![shell_arg.to_string(), command.to_string()];
 
         // ── LAYER 3: OS-level command sandbox (bubblewrap) ──────────────
-        // The whole command (including the `timeout` wrapper) runs inside a
-        // new user/pid namespace with a read-only host filesystem when the
+        // The whole command (including the GNU `timeout` wrapper) runs inside
+        // a new user/pid namespace with a read-only host filesystem when the
         // effective sandbox mode requires it and bwrap is available — so a
         // blocked-command-list bypass in the command text cannot escape the
         // workspace or touch credential files. Spawn failure (bwrap missing /
         // unprivileged user namespaces denied) degrades to direct execution
         // with a warning; the policy gates and blocked-command filter above
-        // still apply in that case.
-        let base_program: &str = if use_gnu_timeout { "timeout" } else { shell };
-        let base_args: Vec<String> = if use_gnu_timeout {
-            vec![
-                format!("{max_timeout}"),
-                shell.to_string(),
-                shell_arg.to_string(),
-                command.to_string(),
-            ]
-        } else {
-            vec![shell_arg.to_string(), command.to_string()]
-        };
-        let wrapped = crate::security::sandbox::wrap_command(
-            crate::security::sandbox::effective_mode(),
-            &current_dir,
-            base_program,
-            &base_args,
-        );
-        // Credential env vars are scrubbed from commands whenever a sandbox
-        // mode is requested (even when bwrap is unavailable and execution
-        // degrades to direct, or the platform has no bwrap): env leakage is
-        // independent of filesystem containment. `passthrough_env` is the
-        // explicit escape hatch.
-        let scrub_env = wrapped.mode != crate::security::sandbox::SandboxMode::None;
-        let passthrough_env = crate::security::sandbox::sandbox_config()
-            .map(|c| c.passthrough_env)
-            .unwrap_or_default();
+        // still apply in that case. The sandbox wrap, env scrubbing, degrade
+        // retry, and timeout supervision (GNU `timeout` inside the namespace,
+        // kill-thread fallback without it) are all handled by the shared
+        // runner in `exec_common`.
+        let timeout_secs = (timeout_ms as f64 / 1000.0).ceil() as u64;
+        let max_timeout = cap_timeout_secs(timeout_secs);
+        let outcome = crate::orchestration::tool::exec_common::with_blocking_runtime(|rt| {
+            rt.block_on(
+                crate::orchestration::tool::exec_common::run_sandboxed_capped_timeout_async(
+                    &current_dir,
+                    shell,
+                    &shell_args,
+                    crate::orchestration::tool::exec_common::TimeoutRunOptions {
+                        cap: crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+                        timeout_ms,
+                        max_timeout_secs: max_timeout,
+                        stdin_input,
+                    },
+                    |cmd| {
+                        for (key, val) in &env_vars {
+                            cmd.env(key, val);
+                        }
+                    },
+                ),
+            )
+        })?;
 
-        let spawn_once =
-            |program: &str, args: &[String], scrub: bool| -> std::io::Result<std::process::Child> {
-                let mut cmd = Command::new(program);
-                cmd.args(args)
-                    .current_dir(&current_dir)
-                    .stdin(if stdin_input.is_some() {
-                        Stdio::piped()
-                    } else {
-                        Stdio::null()
-                    })
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped());
-                if scrub {
-                    // The sandbox isolates the filesystem but not the inherited
-                    // environment: drop credential-bearing vars so `printenv`
-                    // inside the sandbox cannot leak keys/tokens to the command.
-                    cmd.env_clear();
-                    for (key, val) in crate::security::sandbox::sanitized_env(&passthrough_env) {
-                        cmd.env(key, val);
-                    }
-                }
-                for (key, val) in &env_vars {
-                    cmd.env(key, val);
-                }
-                cmd.spawn()
-            };
-
-        // ── Run supervision ──────────────────────────────────────────────
-        // run_one spawns `program args` (applying env scrub when requested),
-        // feeds stdin, and waits with timeout enforcement:
-        // - GNU `timeout` caps the inner command (works identically inside the
-        //   bwrap namespace); its 124 exit convention maps to a timeout report.
-        // - Without GNU timeout, a DETACHED kill thread SIGKILLs the spawned
-        //   PID after `timeout_ms` — for a sandboxed command that is the bwrap
-        //   PID, and killing it terminates the whole namespace (bwrap is PID 1
-        //   there with --die-with-parent). The thread checks `/proc/<pid>`
-        //   liveness first so a recycled PID is never killed, and it is never
-        //   joined, so a fast command returns immediately instead of blocking
-        //   for the full timeout window.
-        let run_one = |program: &str,
-                       args: &[String],
-                       scrub: bool|
-         -> std::io::Result<(std::process::Output, bool)> {
-            let mut child = spawn_once(program, args, scrub)?;
-            write_stdin_if_needed(&mut child, &stdin_input);
-            if use_gnu_timeout {
-                let out = child.wait_with_output()?;
-                // GNU timeout's exit status 124 == timed out.
-                let timed_out = out.status.code() == Some(124);
-                return Ok((out, timed_out));
-            }
-            let kill_after = Duration::from_millis(timeout_ms);
-            let pid = child.id();
-            let killed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let child_finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let (killed_clone, finished_clone) = (killed.clone(), child_finished.clone());
-            let _ = std::thread::spawn(move || {
-                std::thread::sleep(kill_after);
-                if finished_clone.load(std::sync::atomic::Ordering::SeqCst) {
-                    return;
-                }
-                #[cfg(unix)]
-                if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
-                    return;
-                }
-                killed_clone.store(true, std::sync::atomic::Ordering::SeqCst);
-                if cfg!(target_os = "windows") {
-                    let _ = Command::new("taskkill")
-                        .arg("/F")
-                        .arg("/T")
-                        .arg("/PID")
-                        .arg(pid.to_string())
-                        .output();
-                } else {
-                    let _ = Command::new("kill").arg("--").arg(pid.to_string()).output();
-                    let _ = Command::new("kill")
-                        .arg("-9")
-                        .arg("--")
-                        .arg(pid.to_string())
-                        .output();
-                }
-            });
-            let out = child.wait_with_output()?;
-            child_finished.store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok((out, killed.load(std::sync::atomic::Ordering::SeqCst)))
-        };
-
-        // Try the sandboxed command first; degrade to direct execution on a
-        // spawn-level failure (sandbox unavailable/denied at runtime) or on a
-        // bwrap *setup* failure (spawns fine but exits 1 with a `bwrap:`
-        // stderr prefix — e.g. unprivileged user namespaces denied, in which
-        // case the inner command never ran). A plain non-zero exit is never
-        // degraded — that is the sandbox doing its job.
-        let mut sandbox_effective = wrapped.applied;
-        let mut result = match run_one(&wrapped.program, &wrapped.args, scrub_env) {
-            Ok(r) => r,
-            Err(e) if wrapped.applied => {
-                crate::security::sandbox::record_sandbox_degraded();
-                sandbox_effective = false;
-                warn!(
-                    error = %e,
-                    mode = %wrapped.mode.as_str(),
-                    "sandboxed spawn failed — falling back to direct execution"
-                );
-                run_one(base_program, &base_args, scrub_env)?
-            }
-            Err(e) => return Err(e.into()),
-        };
-        if wrapped.applied && crate::security::sandbox::is_bwrap_setup_failure(
-            result.0.status.code(),
-            &String::from_utf8_lossy(&result.0.stderr),
-        ) {
-            crate::security::sandbox::record_sandbox_degraded();
-            sandbox_effective = false;
-            warn!(
-                mode = %wrapped.mode.as_str(),
-                "sandboxed command failed at setup (bwrap error) — retrying without sandbox"
-            );
-            result = run_one(base_program, &base_args, scrub_env)?;
-        }
-        let (output, timed_out) = result;
-        // Audit/result reports the mode that actually ran, not the requested
-        // one: after degrade the command ran direct, so report "none".
-        let audit_sandbox = if sandbox_effective {
-            wrapped.mode.as_str()
-        } else {
-            "none"
-        };
-
-        if timed_out {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if outcome.timed_out {
+            let stdout = String::from_utf8_lossy(&outcome.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&outcome.stderr).to_string();
             warn!(
                 command = %command,
                 timeout_ms = %timeout_ms,
@@ -280,14 +110,14 @@ impl Tool for ShellExecTool {
                 directory,
                 timeout_ms,
                 "shell_exec",
-                audit_sandbox,
+                &outcome.sandbox,
             ));
         }
 
-        let success = output.status.success();
-        let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code();
+        let success = outcome.status == Some(0);
+        let mut stdout = String::from_utf8_lossy(&outcome.stdout).to_string();
+        let mut stderr = String::from_utf8_lossy(&outcome.stderr).to_string();
+        let exit_code = outcome.status;
 
         // ── LAYER 2: Output size limit ──────────────────────────
         truncate_output(&mut stdout);
@@ -312,7 +142,7 @@ impl Tool for ShellExecTool {
             command,
             directory,
             "shell_exec",
-            audit_sandbox,
+            &outcome.sandbox,
         ))
     }
 }
@@ -328,6 +158,7 @@ mod tests {
     // Serializes against the startup_context chdir tests (see
     // bwrap_setup_failure_detection below).
     use serial_test::serial;
+    use std::process::Command;
 
     fn tool_input(payload: serde_json::Value, base: std::path::PathBuf) -> ToolInput {
         ToolInput {

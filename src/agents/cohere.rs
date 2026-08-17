@@ -208,7 +208,7 @@ impl Agent for CohereAgent {
     }
 
     fn available_models(&self) -> Vec<ModelInfo> {
-        vec![
+        let mut models = vec![
             ModelInfo {
                 id: "command-a-03-2025".to_string(),
                 name: "Command A (03-2025)".to_string(),
@@ -249,7 +249,21 @@ impl Agent for CohereAgent {
                 capabilities: vec!["chat".to_string()],
                 context_window: Some(131072),
             },
-        ]
+        ];
+
+        // Single source of truth: the provider spec's `model_suggestions` feed
+        // the GUI's model dropdown, so every suggestion must also be listable
+        // here. Hand-curated entries above keep their capability/context
+        // enrichment; suggestions with no curated entry get a default shape.
+        if let Some(spec) = crate::core::providers::provider_spec_by_name("cohere") {
+            for id in &spec.model_suggestions {
+                if !models.iter().any(|m| &m.id == id) {
+                    models.push(crate::shared::default_model_info(id, self.model == *id));
+                }
+            }
+        }
+
+        models
     }
 }
 

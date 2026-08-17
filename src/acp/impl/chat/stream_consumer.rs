@@ -1,10 +1,11 @@
 //! Unified ACP stream-event consumption (M0.1).
 //!
 //! Single classification + field-extraction implementation for the ACP stream
-//! event protocol. The JSON-RPC dispatch loop (`request/dispatch.rs`) and the
-//! session bridge (`request/protocol_pack/session.rs`) previously matched
-//! event-name string literals and re-extracted payload fields inline, and the
-//! two consumers' match arm sets had already drifted (dispatch handles
+//! event protocol. The JSON-RPC dispatch loop (`request/dispatch.rs`), the
+//! session bridge (`request/protocol_pack/session.rs`), and the OpenAI-compat
+//! SSE consumer (`runtime/openai_compat/chat_completions.rs`) previously
+//! matched event-name string literals and re-extracted payload fields inline,
+//! and the consumers' match arm sets had already drifted (dispatch handles
 //! `progress`/`phase_*`, the bridge silently ignores them). This module is the
 //! src-side single source so the consumers cannot drift again.
 //!
@@ -15,6 +16,12 @@
 //! a non-empty literal).
 
 use serde_json::Value;
+
+use crate::acp::r#impl::chat::streaming::{
+    STREAM_EVENT_CHUNK, STREAM_EVENT_DONE, STREAM_EVENT_ERROR, STREAM_EVENT_PHASE_END,
+    STREAM_EVENT_PHASE_START, STREAM_EVENT_PROGRESS, STREAM_EVENT_RESULT, STREAM_EVENT_STATUS,
+    STREAM_EVENT_TELEMETRY, STREAM_EVENT_TOOL_APPROVAL,
+};
 
 /// Classified stream event types covering every production event name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,18 +41,21 @@ pub(crate) enum StreamEventKind {
 
 /// Classify a stream event name. Unknown names fall to [`StreamEventKind::Unknown`]
 /// so consumers must still decide their fallback (ignore / generic notify).
+///
+/// Matches on the `STREAM_EVENT_*` constants from [`crate::acp::r#impl::chat::streaming`]
+/// so emission and classification share one vocabulary and cannot drift.
 pub(crate) fn classify_stream_event(event: &str) -> StreamEventKind {
     match event {
-        "chunk" => StreamEventKind::Chunk,
-        "done" => StreamEventKind::Done,
-        "result" => StreamEventKind::Result,
-        "error" => StreamEventKind::Error,
-        "status" => StreamEventKind::Status,
-        "progress" => StreamEventKind::Progress,
-        "phase_start" => StreamEventKind::PhaseStart,
-        "phase_end" => StreamEventKind::PhaseEnd,
-        "telemetry" => StreamEventKind::Telemetry,
-        "tool_approval" => StreamEventKind::ToolApproval,
+        STREAM_EVENT_CHUNK => StreamEventKind::Chunk,
+        STREAM_EVENT_DONE => StreamEventKind::Done,
+        STREAM_EVENT_RESULT => StreamEventKind::Result,
+        STREAM_EVENT_ERROR => StreamEventKind::Error,
+        STREAM_EVENT_STATUS => StreamEventKind::Status,
+        STREAM_EVENT_PROGRESS => StreamEventKind::Progress,
+        STREAM_EVENT_PHASE_START => StreamEventKind::PhaseStart,
+        STREAM_EVENT_PHASE_END => StreamEventKind::PhaseEnd,
+        STREAM_EVENT_TELEMETRY => StreamEventKind::Telemetry,
+        STREAM_EVENT_TOOL_APPROVAL => StreamEventKind::ToolApproval,
         _ => StreamEventKind::Unknown,
     }
 }
@@ -135,13 +145,41 @@ pub(crate) fn extract_tool_approval_fields(payload: &Value) -> ToolApprovalField
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
-        risk_score: payload.get("risk_score").and_then(Value::as_f64).unwrap_or_default(),
+        risk_score: payload
+            .get("risk_score")
+            .and_then(Value::as_f64)
+            .unwrap_or_default(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classifies_every_stream_event_constant() {
+        // The STREAM_EVENT_* constants in `streaming` are the src-side emission
+        // vocabulary; each one must resolve to a concrete kind (never Unknown)
+        // so a constant emitted by any producer is always consumed correctly.
+        for name in [
+            STREAM_EVENT_CHUNK,
+            STREAM_EVENT_DONE,
+            STREAM_EVENT_RESULT,
+            STREAM_EVENT_ERROR,
+            STREAM_EVENT_STATUS,
+            STREAM_EVENT_PROGRESS,
+            STREAM_EVENT_PHASE_START,
+            STREAM_EVENT_PHASE_END,
+            STREAM_EVENT_TELEMETRY,
+            STREAM_EVENT_TOOL_APPROVAL,
+        ] {
+            assert_ne!(
+                classify_stream_event(name),
+                StreamEventKind::Unknown,
+                "constant {name} must classify to a concrete kind"
+            );
+        }
+    }
 
     #[test]
     fn classifies_all_production_event_names() {
@@ -159,7 +197,10 @@ mod tests {
         ] {
             assert_eq!(classify_stream_event(name), kind, "event {name}");
         }
-        assert_eq!(classify_stream_event("unknown_event"), StreamEventKind::Unknown);
+        assert_eq!(
+            classify_stream_event("unknown_event"),
+            StreamEventKind::Unknown
+        );
     }
 
     #[test]
@@ -176,7 +217,10 @@ mod tests {
         );
         // message-only events (GUI/proxy style) still resolve.
         let msg_only = serde_json::json!({ "message": "stream failed" });
-        assert_eq!(extract_error_message(&msg_only).as_deref(), Some("stream failed"));
+        assert_eq!(
+            extract_error_message(&msg_only).as_deref(),
+            Some("stream failed")
+        );
         // Empty strings are treated as absent.
         let empty = serde_json::json!({ "error": "" });
         assert_eq!(extract_error_message(&empty), None);

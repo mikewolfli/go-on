@@ -5,6 +5,9 @@ use clap::{Parser, Subcommand};
 
 use std::sync::Arc;
 
+use crate::cli::config::ConfigCommand;
+#[cfg(feature = "backend-sqlite")]
+use crate::cli::cron::CronCommand;
 use crate::orchestration::skill::SkillRegistry;
 use crate::orchestration::skill_market::SkillMarketRegistry;
 use crate::shared::protocol_mode::{ProtocolMode, ProtocolModeError};
@@ -181,6 +184,45 @@ pub enum CliCommand {
     Skill {
         #[command(subcommand)]
         command: SkillCommand,
+    },
+    /// Inspect the effective configuration (M1.2 layered merge + source tracking)
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+    /// Manage user-level cron jobs (durable SQLite-backed scheduler; jobs fire
+    /// through the workflow.execute contract when the server ticks)
+    #[cfg(feature = "backend-sqlite")]
+    Cron {
+        #[command(subcommand)]
+        command: CronCommand,
+    },
+    /// Headless executor: run one bounded turn and emit JSONL events on stdout
+    Exec {
+        /// Emit a JSONL event stream on stdout (one flat JSON object per line);
+        /// without it, plain response text is printed instead
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Tool approval policy: never = headless (no prompts, tools approved);
+        /// auto = tools must pass the governance gate (default: never)
+        #[arg(long, value_name = "MODE")]
+        approval_mode: Option<String>,
+        /// Read the prompt (and optional session_id) from a JSON object on stdin
+        #[arg(long, default_value_t = false)]
+        input_stdin: bool,
+        /// The prompt to execute (optional when --input-stdin provides one)
+        prompt: Option<String>,
+    },
+    /// Serve the multi-platform gateway webhook (M3.4): POST /webhook/<platform>
+    /// turns inbound JSON messages into agent turns and delivers the replies
+    #[cfg(feature = "backend-sqlite")]
+    Gateway {
+        /// Bind address for the webhook listener
+        #[arg(long, default_value = "127.0.0.1:9797")]
+        host: String,
+        /// Path to the agent configuration file (defaults to the global config)
+        #[arg(long)]
+        config: Option<String>,
     },
     /// Start Hub daemon (distributed memory / multi-process mode)
     #[cfg(feature = "sub-bus-distributed-memory")]

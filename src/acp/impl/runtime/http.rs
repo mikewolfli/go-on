@@ -11,6 +11,7 @@ use anyhow::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info};
 
+use crate::acp::r#impl::chat::streaming::STREAM_EVENT_ERROR;
 use crate::acp::r#impl::cors::build_cors_headers;
 use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
 use crate::acp::server::AcpServer;
@@ -705,7 +706,7 @@ async fn route_http_post(
                         // an empty response + "system" agent.
                         // The TLS handler already does this correctly.
                         let _ = sse_tx.send(crate::acp::r#impl::chat::streaming::StreamFrame {
-                            event: "error",
+                            event: STREAM_EVENT_ERROR,
                             payload: serde_json::json!({
                                 "error": err_str,
                             }),

@@ -28,30 +28,6 @@ impl Tool for WebSearchTool {
         "web_search"
     }
 
-    fn description(&self) -> &str {
-        "Search the web for information. Returns a list of results with titles, URLs, and snippets. Uses DuckDuckGo by default (free, no API key needed)."
-    }
-
-    fn input_schema(&self) -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query (required)"
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Maximum number of search results to return (default: 5)",
-                    "default": 5,
-                    "minimum": 1,
-                    "maximum": 20
-                }
-            },
-            "required": ["query"]
-        })
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         // Extract parameters
         let query = input.payload["query"]

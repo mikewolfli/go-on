@@ -5,12 +5,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::orchestration::roles::install_role_registry;
 
 use super::super::defaults;
 use super::super::types::AppConfig;
 use super::migrator;
+use super::patch::{self, LayeredLoad};
 
 /// Process-wide config parse cache keyed by (path, mtime).
 ///
@@ -149,6 +151,19 @@ impl AppConfig {
     }
 
     fn load_inner(path: &Path) -> Result<Self> {
+        Ok(Self::load_inner_with_layers(path, None)?.config)
+    }
+
+    /// Layered config load (M1.2): the same funnel as [`Self::load`], but
+    /// returns the merged config plus per-top-level-key sources and accepts an
+    /// inline CLI patch layer for this invocation only (used by `go-on config
+    /// dump --patch`). The mtime cache is bypassed on purpose — every dump is
+    /// a fresh, patch-specific parse.
+    pub fn load_layered(path: &Path, cli_patch: Option<&str>) -> Result<LayeredLoad> {
+        Self::load_inner_with_layers(path, cli_patch)
+    }
+
+    fn load_inner_with_layers(path: &Path, cli_patch: Option<&str>) -> Result<LayeredLoad> {
         let content = fs::read_to_string(path).with_context(|| {
             crate::i18n::runtime::tf(
                 "error.config_read_failed",
@@ -175,12 +190,67 @@ impl AppConfig {
                 e,
             )
         })?;
-        sync_legacy_flat_keys(&mut cfg, &normalized);
+
+        // M1.2 opt-in layered merge (builtin defaults → project file → user
+        // config → CLI patch). OFF by default: when `layered_merge` is
+        // absent/false and no CLI patch is given, nothing below runs and the
+        // load is byte-identical to the historical single-file path.
+        let mut warnings = Vec::new();
+        let mut sources = Vec::new();
+        let mut merged_view: Option<Value> = None;
+        let layered_view: Option<String> = if cfg.layered_merge || cli_patch.is_some() {
+            let mut layers = vec![patch::LayerSource {
+                layer: "project",
+                path: Some(path.display().to_string()),
+                toml: normalized.clone(),
+            }];
+            if cfg.layered_merge {
+                match patch::read_user_layer() {
+                    Ok(Some(user_layer)) => layers.push(user_layer),
+                    Ok(None) => {}
+                    Err(err) => warnings.push(err),
+                }
+            }
+            if let Some(cli) = cli_patch {
+                layers.push(patch::LayerSource {
+                    layer: "cli",
+                    path: None,
+                    toml: cli.to_string(),
+                });
+            }
+
+            let layered = patch::merge_layers(patch::builtin_layer(), &layers);
+            merged_view = Some(layered.merged);
+            cfg = layered.config;
+            sources = layered.sources;
+            warnings.extend(layered.warnings);
+
+            // Legacy-key sync + migration below run against the merged layer
+            // view so keys set in any layer participate; when that view cannot
+            // be re-serialized to TOML (exotic values), fall back to the
+            // project file content.
+            match patch::explicit_layers_toml(&layers) {
+                Some(view) => Some(view),
+                None => {
+                    warnings.push(
+                        "merged config could not be re-serialized to TOML for legacy-key sync; \
+                         using the project file only"
+                            .to_string(),
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let toml_view = layered_view.unwrap_or(normalized);
+
+        sync_legacy_flat_keys(&mut cfg, &toml_view);
         defaults::normalize_nested_phase_option_extra(&mut cfg);
 
         // Validate and migrate schema version BEFORE applying auto-rules
         // so that auto-rules don't reference stale phase names after migration.
-        migrator::migrate_config_schema(&mut cfg, &normalized)?;
+        migrator::migrate_config_schema(&mut cfg, &toml_view)?;
 
         // Apply auto-rules AFTER migration to ensure phase structure is final.
         defaults::apply_auto_rules(path, &mut cfg);
@@ -199,7 +269,19 @@ impl AppConfig {
             install_role_registry(cfg.role_registry().clone());
         }
 
-        Ok(cfg)
+        Ok(LayeredLoad {
+            merged: merged_view.unwrap_or_else(|| {
+                // No layering ran: fall back to the plain effective config
+                // (serde defaults materialized, nulls stripped) so `config
+                // dump` still prints something meaningful.
+                let mut view = serde_json::to_value(&cfg).unwrap_or(Value::Null);
+                patch::strip_nulls(&mut view);
+                view
+            }),
+            config: cfg,
+            sources,
+            warnings,
+        })
     }
 }
 
@@ -563,5 +645,128 @@ mod tests {
             crate::core::config::defaults::default_runtime_user_auth_token_secret()
         );
         assert_eq!(runtime.maintenance_interval_seconds, 120);
+    }
+
+    #[test]
+    fn layered_load_applies_cli_patch_and_tracks_sources() {
+        let path = write_temp_config(
+            r#"
+            layered_merge = true
+            default_phase = "planning"
+            [cache]
+            enabled = false
+            "#,
+        );
+
+        // Point the user-layer resolution at an empty temp dir so this test
+        // is hermetic (a real ~/.config/go-on/config.toml would otherwise
+        // participate once `layered_merge` is on).
+        let _guard = crate::config::patch::USER_CONFIG_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let empty_user_dir = tempfile::tempdir().expect("tempdir should be created");
+        std::env::set_var("GO_ON_CONFIG_DIR", empty_user_dir.path());
+
+        let loaded = AppConfig::load_layered(&path, Some("[cache]\nenabled = true"))
+            .expect("layered load should succeed");
+
+        std::env::remove_var("GO_ON_CONFIG_DIR");
+
+        // The cli patch layer wins over the project file value.
+        assert!(
+            loaded
+                .config
+                .cache
+                .as_ref()
+                .expect("cache should exist")
+                .enabled
+        );
+        assert_eq!(loaded.config.provider.default_phase, "planning");
+        let cache_source = loaded
+            .sources
+            .iter()
+            .find(|s| s.key == "cache")
+            .expect("cache source should be tracked");
+        assert_eq!(cache_source.layer, "cli");
+        let phase_source = loaded
+            .sources
+            .iter()
+            .find(|s| s.key == "default_phase")
+            .expect("default_phase source should be tracked");
+        assert_eq!(phase_source.layer, "project");
+        assert!(
+            loaded.warnings.is_empty(),
+            "no warnings expected: {:?}",
+            loaded.warnings
+        );
+    }
+
+    #[test]
+    fn runtime_load_path_applies_user_layer_when_knob_enabled() {
+        // The server/exec/hot-reload path (`AppConfig::load`) must also get
+        // the layered merge when the knob is on — not just `load_layered`.
+        let path = write_temp_config(
+            r#"
+            layered_merge = true
+            [cache]
+            enabled = false
+            "#,
+        );
+
+        let _guard = crate::config::patch::USER_CONFIG_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let user_dir = tempfile::tempdir().expect("tempdir should be created");
+        let user_cfg = user_dir.path().join("config.toml");
+        std::fs::write(&user_cfg, "[cache]\nenabled = true")
+            .expect("user config should be written");
+        std::env::set_var("GO_ON_CONFIG_DIR", user_dir.path());
+
+        let cfg = AppConfig::load_uncached(&path).expect("load should succeed");
+
+        std::env::remove_var("GO_ON_CONFIG_DIR");
+
+        assert!(cfg.cache.as_ref().expect("cache should exist").enabled);
+    }
+
+    #[test]
+    fn layered_load_without_knob_is_single_file_behavior() {
+        // No `layered_merge` knob and no CLI patch: byte-identical to the
+        // historical load — no sources, no user/cli layers.
+        let path = write_temp_config(
+            r#"
+            default_phase = "planning"
+            [cache]
+            enabled = false
+            "#,
+        );
+
+        let loaded = AppConfig::load_layered(&path, None).expect("load should succeed");
+        assert!(loaded.sources.is_empty());
+        assert!(
+            !loaded
+                .config
+                .cache
+                .as_ref()
+                .expect("cache should exist")
+                .enabled
+        );
+        assert_eq!(loaded.config.provider.default_phase, "planning");
+
+        // And the plain load agrees exactly.
+        let plain = AppConfig::load_uncached(&path).expect("load should succeed");
+        assert_eq!(
+            plain.provider.default_phase,
+            loaded.config.provider.default_phase
+        );
+        assert_eq!(
+            plain.cache.as_ref().expect("cache should exist").enabled,
+            loaded
+                .config
+                .cache
+                .as_ref()
+                .expect("cache should exist")
+                .enabled
+        );
     }
 }

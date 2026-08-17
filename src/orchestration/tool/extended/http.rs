@@ -404,58 +404,6 @@ impl Tool for HttpRequestTool {
     fn name(&self) -> &'static str {
         "http_request"
     }
-    fn description(&self) -> &str {
-        "Make HTTP requests (GET/POST/PUT/DELETE) to external APIs. Only http:// and https:// URLs are allowed. Private/internal IPs are blocked for security."
-    }
-
-    fn input_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "The full HTTP/HTTPS URL to request (required)"
-                },
-                "method": {
-                    "type": "string",
-                    "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
-                    "description": "HTTP method (default: GET)"
-                },
-                "headers": {
-                    "type": "object",
-                    "description": "Optional HTTP headers as key-value pairs",
-                    "additionalProperties": {"type": "string"}
-                },
-                "body": {
-                    "type": "string",
-                    "description": "Request body for POST/PUT/PATCH"
-                },
-                "auth": {
-                    "type": "object",
-                    "properties": {
-                        "bearer": {
-                            "type": "string",
-                            "description": "Bearer token for Authorization header"
-                        }
-                    }
-                },
-                "query": {
-                    "type": "object",
-                    "description": "Query parameters as key-value pairs",
-                    "additionalProperties": {"type": "string"}
-                },
-                "timeout_ms": {
-                    "type": "integer",
-                    "description": "Request timeout in milliseconds (default: 15000)"
-                }
-            },
-            "required": ["url"]
-        })
-    }
-
-    /// Sync path: uses blocking reqwest client directly.
-    /// Independent from run_async — no cross-delegation to avoid
-    /// issues with spawn_blocking + block_in_place nesting.
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         Self::run_sync(input)
     }

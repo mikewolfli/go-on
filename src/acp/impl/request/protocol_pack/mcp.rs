@@ -519,7 +519,7 @@ pub fn record_tool_call_audit_with_protocol(
         change_summary: format!(
             "tool={} action={} status={} protocol={}",
             name,
-            super::audit::governance_action_label(action),
+            action.as_str(),
             if success { "ok" } else { "error" },
             protocol,
         ),

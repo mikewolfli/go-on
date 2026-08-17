@@ -107,9 +107,6 @@ impl Tool for RunBuildTool {
     fn name(&self) -> &'static str {
         "build_run"
     }
-    fn description(&self) -> &str {
-        "Detect and run the project's build system: cargo build, npm run build, python -m build, or make"
-    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let directory = input.payload["directory"].as_str().unwrap_or(".");
         let current_dir = sanitize_path(input, directory)?;
@@ -186,9 +183,6 @@ impl Tool for LintCodeTool {
     fn name(&self) -> &'static str {
         "lint_run"
     }
-    fn description(&self) -> &str {
-        "Detect and run the project's linter: cargo clippy, npx eslint, ruff, or pylint"
-    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let directory = input.payload["directory"].as_str().unwrap_or(".");
         let current_dir = sanitize_path(input, directory)?;
@@ -256,9 +250,6 @@ pub struct AddDependencyTool;
 impl Tool for AddDependencyTool {
     fn name(&self) -> &'static str {
         "dependency_add"
-    }
-    fn description(&self) -> &str {
-        "Add a dependency to the project: cargo add, npm install, pip install, or go get"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let package = input.payload["package"]

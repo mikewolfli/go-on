@@ -24,34 +24,6 @@ impl Tool for SearchPackagesTool {
         "search_packages"
     }
 
-    fn description(&self) -> &str {
-        concat!(
-            "Search package registries for available libraries. ",
-            "Supports: crates.io (rust), npm (js/ts), pypi (python), go (golang). ",
-            "Returns package name, description, version, and download counts.",
-        )
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Search query"},
-                "registry": {
-                    "type": "string",
-                    "enum": ["auto", "crates.io", "npm", "pypi", "go"],
-                    "description": "Package registry to search (default: auto-detect from project context)"
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Maximum results (default: 5, max: 20)",
-                    "default": 5
-                }
-            },
-            "required": ["query"]
-        })
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let query = input.payload["query"]
             .as_str()

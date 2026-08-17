@@ -23,10 +23,6 @@ impl Tool for ReadFileLinesTool {
         "read_file_lines"
     }
 
-    fn description(&self) -> &str {
-        "Read specific line ranges from a file"
-    }
-
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

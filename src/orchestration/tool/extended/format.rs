@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
 
@@ -16,33 +16,6 @@ pub struct FormatCodeTool;
 impl Tool for FormatCodeTool {
     fn name(&self) -> &'static str {
         "format_code"
-    }
-
-    fn description(&self) -> &str {
-        concat!(
-            "Auto-format code files using the appropriate formatter. ",
-            "Detects formatter by file extension: .rs->rustfmt, .js/.ts->prettier, ",
-            ".py->black, .go->gofmt, .java->google-java-format, .c/.h->clang-format. ",
-            "Returns the formatting result (files changed, unchanged count).",
-        )
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "File or directory path to format"},
-                "check": {
-                    "type": "boolean",
-                    "description": "Check mode: only report if files need formatting (default: false)"
-                },
-                "formatter": {
-                    "type": "string",
-                    "description": "Optional formatter override (rustfmt, prettier, black, gofmt, clang-format)"
-                }
-            },
-            "required": ["path"]
-        })
     }
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {

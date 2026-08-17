@@ -89,6 +89,10 @@ pub(crate) fn is_simple_chat(params: &ChatParams) -> bool {
     true
 }
 use super::act::try_semantic_cache_probe;
+/// Planned URL-fetch entry produced during the observe phase:
+/// (message index, url, optional (http status, body)).
+type PlannedFetchEntry = (usize, String, Option<(String, String)>);
+
 pub(crate) async fn observe_phase(
     server: &AcpServer,
     params: &mut ChatParams,
@@ -386,32 +390,26 @@ pub(crate) async fn observe_phase(
 
                 let fetch_results = join_all(fetch_futures).await;
 
-                // Phase 2: Process each result sequentially (SPA detection, API probing,
-                // message building). Inserts are collected and applied by the caller
-                // (after the join) so this block can run concurrently with multimodal
+                // Phase 2: Plan SPA detection / API probing, then apply the
+                // results. The SPA API probes (POST .../agent-task) are I/O
+                // bound and used to run serially inside the per-URL loop (N
+                // SPA URLs = N sequential round-trips added to the observe
+                // phase), so they are now collected as futures and run
+                // concurrently with a second join_all. Results are applied in
+                // the same order, with identical probe-failure handling.
+                // Inserts are collected and applied by the caller (after the
+                // join) so this block can run concurrently with multimodal
                 // detection.
-                let mut url_inserts: Vec<(usize, Message)> = Vec::new();
+
+                // First pass (no awaits): plan each fetch result and collect
+                // the SPA probe futures, keyed by the planned entry index.
+                let mut planned: Vec<PlannedFetchEntry> = Vec::new();
+                let mut spa_prefixes: Vec<String> = Vec::new();
+                let mut probe_futures: Vec<_> = Vec::new();
                 for item in fetch_results.into_iter().flatten() {
                     let (msg_idx, url, fetch_url, fetch_result) = item;
-                    if let Some((status, body)) = fetch_result {
-                        let truncated = if body.len() > PREFETCH_BODY_LIMIT {
-                            format!(
-                                "{}...\n[Response truncated at {} bytes]",
-                                crate::shared::truncate::truncate_chars(
-                                    &body,
-                                    PREFETCH_BODY_LIMIT,
-                                    ""
-                                ),
-                                PREFETCH_BODY_LIMIT
-                            )
-                        } else {
-                            body.clone()
-                        };
-                        let mut context_msg = format!(
-                            "[Auto-fetched content from {}]\nHTTP Status: {}\n\n{}",
-                            url, status, truncated
-                        );
-
+                    let mut spa_prefix = String::new();
+                    if let Some((_status, body)) = &fetch_result {
                         // Phase 2: Detect SPA and probe API endpoints
                         let is_spa = body.contains("<div id=\"root\"")
                             || body.contains("<div id=\"app\"")
@@ -444,10 +442,10 @@ pub(crate) async fn observe_phase(
                                 .filter(|s| !s.is_empty())
                                 .collect();
 
-                            let mut spa_info = format!(
+                            spa_prefix = format!(
                                 "\n\n[SPA Page Analysis]\n\
-                         The URL returned a JavaScript SPA shell.\n\
-                         Path segments: {}\nFragment params: {:?}",
+                                 The URL returned a JavaScript SPA shell.\n\
+                                 Path segments: {}\nFragment params: {:?}",
                                 path_segments.join(" / "),
                                 fragment_params,
                             );
@@ -478,114 +476,167 @@ pub(crate) async fn observe_phase(
                                         "web_origin": web_origin,
                                     });
 
-                                    match tokio::time::timeout(
-                                        SPA_API_PROBE_TIMEOUT,
-                                        crate::shared::http_client::http_client()
-                                            .expect("shared HTTP client must build")
-                                            .post(&api_url)
-                                            .header("Content-Type", "application/json")
-                                            .json(&api_body)
-                                            .send(),
-                                    )
-                                    .await
-                                    {
-                                        Ok(Ok(api_resp)) => {
-                                            let api_status = api_resp.status();
+                                    let planned_idx = planned.len();
+                                    probe_futures.push((
+                                        planned_idx,
+                                        async move {
                                             match tokio::time::timeout(
-                                                SPA_API_BODY_TIMEOUT,
-                                                api_resp.text(),
+                                                SPA_API_PROBE_TIMEOUT,
+                                                crate::shared::http_client::http_client()
+                                                    .expect("shared HTTP client must build")
+                                                    .post(&api_url)
+                                                    .header("Content-Type", "application/json")
+                                                    .json(&api_body)
+                                                    .send(),
                                             )
                                             .await
                                             {
-                                                Ok(Ok(api_body_text)) => {
-                                                    let t = if api_body_text.len()
-                                                        > SPA_API_BODY_LIMIT
+                                                Ok(Ok(api_resp)) => {
+                                                    let api_status = api_resp.status();
+                                                    match tokio::time::timeout(
+                                                        SPA_API_BODY_TIMEOUT,
+                                                        api_resp.text(),
+                                                    )
+                                                    .await
                                                     {
-                                                        format!(
-                                                            "{}...\n[truncated]",
-                                                            crate::shared::truncate::truncate_chars(
-                                                                &api_body_text,
-                                                                SPA_API_BODY_LIMIT,
-                                                                ""
-                                                            )
-                                                        )
-                                                    } else {
-                                                        api_body_text.clone()
-                                                    };
-                                                    spa_info.push_str(&format!(
-                                                "\n\n[API: POST {}]\nStatus: {}\nRequest: {}\nResponse:\n{}",
-                                                api_url, api_status, api_body, t,
-                                            ));
+                                                        Ok(Ok(api_body_text)) => {
+                                                            let t = if api_body_text.len()
+                                                                > SPA_API_BODY_LIMIT
+                                                            {
+                                                                format!(
+                                                                    "{}...\n[truncated]",
+                                                                    crate::shared::truncate::truncate_chars(
+                                                                        &api_body_text,
+                                                                        SPA_API_BODY_LIMIT,
+                                                                        ""
+                                                                    )
+                                                                )
+                                                            } else {
+                                                                api_body_text.clone()
+                                                            };
+                                                            let mut probe_text = format!(
+                                                        "\n\n[API: POST {}]\nStatus: {}\nRequest: {}\nResponse:\n{}",
+                                                        api_url, api_status, api_body, t,
+                                                    );
 
-                                                    // ── Phase 3: Present raw task data to AI for planning ──────
-                                                    // The AI receives the full task package and plans the workflow
-                                                    // itself using general PUA principles (FETCH, ANALYZE, EXTRACT,
-                                                    // CHAIN, RES, ERR). No task-specific instructions here.
-                                                    match serde_json::from_str::<Value>(&api_body_text) {
-                                                Ok(task_json) => {
-                                                    let ok_val = task_json
-                                                        .get("ok")
-                                                        .and_then(|v| v.as_bool())
-                                                        .unwrap_or(false);
-                                                    if ok_val {
-                                                        if let Some(data) = task_json
-                                                            .get("data")
-                                                            .and_then(|v| v.as_object())
-                                                        {
-                                                            let data_json = serde_json::to_string_pretty(data)
-                                                                .unwrap_or_default();
-                                                            spa_info.push_str(&format!(
-                                                                "\n\n[Agent World Task Package - pre-fetched by system]\n{}",
-                                                                data_json,
-                                                            ));
-                                                        } else {
-                                                            spa_info.push_str(
-                                                                "\n\n[Agent World] No `data` object in task response",
-                                                            );
+                                                            // ── Phase 3: Present raw task data to AI for planning ──────
+                                                            // The AI receives the full task package and plans the workflow
+                                                            // itself using general PUA principles (FETCH, ANALYZE, EXTRACT,
+                                                            // CHAIN, RES, ERR). No task-specific instructions here.
+                                                            match serde_json::from_str::<Value>(&api_body_text) {
+                                                        Ok(task_json) => {
+                                                            let ok_val = task_json
+                                                                .get("ok")
+                                                                .and_then(|v| v.as_bool())
+                                                                .unwrap_or(false);
+                                                            if ok_val {
+                                                                if let Some(data) = task_json
+                                                                    .get("data")
+                                                                    .and_then(|v| v.as_object())
+                                                                {
+                                                                    let data_json = serde_json::to_string_pretty(data)
+                                                                        .unwrap_or_default();
+                                                                    probe_text.push_str(&format!(
+                                                                        "\n\n[Agent World Task Package - pre-fetched by system]\n{}",
+                                                                        data_json,
+                                                                    ));
+                                                                } else {
+                                                                    probe_text.push_str(
+                                                                        "\n\n[Agent World] No `data` object in task response",
+                                                                    );
+                                                                }
+                                                            } else {
+                                                                probe_text.push_str(&format!(
+                                                                    "\n\n[Agent World] Task package returned ok=false: {}",
+                                                                    task_json,
+                                                                ));
+                                                            }
                                                         }
-                                                    } else {
-                                                        spa_info.push_str(&format!(
-                                                            "\n\n[Agent World] Task package returned ok=false: {}",
-                                                            task_json,
-                                                        ));
+                                                        Err(e) => probe_text.push_str(&format!(
+                                                            "\n\n[Agent World] Failed to parse task package JSON: {}",
+                                                            e,
+                                                        )),
+                                                    }
+                                                            probe_text
+                                                        }
+                                                        _ => format!(
+                                                            "\n\n[API: POST {}] - read failed",
+                                                            api_url
+                                                        ),
                                                     }
                                                 }
-                                                Err(e) => spa_info.push_str(&format!(
-                                                    "\n\n[Agent World] Failed to parse task package JSON: {}",
-                                                    e,
-                                                )),
-                                            }
-                                                }
-                                                _ => spa_info.push_str(&format!(
-                                                    "\n\n[API: POST {}] - read failed",
+                                                Ok(Err(e)) => format!(
+                                                    "\n\n[API: POST {}] - failed: {}",
+                                                    api_url, e
+                                                ),
+                                                Err(_) => format!(
+                                                    "\n\n[API: POST {}] - timeout",
                                                     api_url
-                                                )),
+                                                ),
                                             }
-                                        }
-                                        Ok(Err(e)) => spa_info.push_str(&format!(
-                                            "\n\n[API: POST {}] - failed: {}",
-                                            api_url, e
-                                        )),
-                                        Err(_) => spa_info.push_str(&format!(
-                                            "\n\n[API: POST {}] - timeout",
-                                            api_url
-                                        )),
-                                    }
+                                        },
+                                    ));
                                 }
                             }
-                            context_msg.push_str(&spa_info);
                         }
-
-                        url_inserts.push((
-                            msg_idx,
-                            Message {
-                                role: "system".to_string(),
-                                content: context_msg,
-                            },
-                        ));
-                    } else {
-                        tracing::warn!("observe_phase: failed to fetch URL: {}", url);
                     }
+                    planned.push((msg_idx, url, fetch_result));
+                    spa_prefixes.push(spa_prefix);
+                }
+
+                // Run all SPA probes concurrently, then map the results back
+                // onto their planned entries (same order as the sequential
+                // loop that preceded this refactor).
+                let probe_results = join_all(
+                    probe_futures
+                        .into_iter()
+                        .map(|(idx, fut)| async move { (idx, fut.await) }),
+                )
+                .await;
+                let mut probe_outputs: Vec<Option<String>> = vec![None; planned.len()];
+                for (idx, text) in probe_results {
+                    probe_outputs[idx] = Some(text);
+                }
+
+                // Second pass: build the system messages from the plans and
+                // the (now resolved) probe outputs.
+                let mut url_inserts: Vec<(usize, Message)> = Vec::new();
+                for (i, (msg_idx, url, fetch_result)) in planned.into_iter().enumerate() {
+                    let (status, body) = match fetch_result {
+                        Some(r) => r,
+                        None => {
+                            tracing::warn!("observe_phase: failed to fetch URL: {}", url);
+                            continue;
+                        }
+                    };
+                    let truncated = if body.len() > PREFETCH_BODY_LIMIT {
+                        format!(
+                            "{}...\n[Response truncated at {} bytes]",
+                            crate::shared::truncate::truncate_chars(&body, PREFETCH_BODY_LIMIT, ""),
+                            PREFETCH_BODY_LIMIT
+                        )
+                    } else {
+                        body.clone()
+                    };
+                    let mut context_msg = format!(
+                        "[Auto-fetched content from {}]\nHTTP Status: {}\n\n{}",
+                        url, status, truncated
+                    );
+
+                    if !spa_prefixes[i].is_empty() {
+                        context_msg.push_str(&spa_prefixes[i]);
+                        if let Some(probe_text) = &probe_outputs[i] {
+                            context_msg.push_str(probe_text);
+                        }
+                    }
+
+                    url_inserts.push((
+                        msg_idx,
+                        Message {
+                            role: "system".to_string(),
+                            content: context_msg,
+                        },
+                    ));
                 }
 
                 url_inserts

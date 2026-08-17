@@ -1,15 +1,4 @@
 use super::*;
-use crate::governance::hardening::GovernanceAction;
-
-pub fn governance_action_label(action: GovernanceAction) -> &'static str {
-    match action {
-        GovernanceAction::Read => "read",
-        GovernanceAction::Search => "search",
-        GovernanceAction::Write => "write",
-        GovernanceAction::Shell => "shell",
-        GovernanceAction::Network => "network",
-    }
-}
 
 pub fn audit_file_path_from_arguments(name: &str, arguments: &Value) -> String {
     for key in ["path", "filePath", "sourcePdfPath"] {
@@ -21,11 +10,9 @@ pub fn audit_file_path_from_arguments(name: &str, arguments: &Value) -> String {
 }
 
 pub fn is_rate_limited_message(message: &str) -> bool {
-    let normalized = message.to_ascii_lowercase();
-    normalized.contains("rate limited")
-        || normalized.contains("rate_limited")
-        || normalized.contains("error.chat.rate_limited")
-        || normalized.contains("too many requests")
+    crate::agents::agent::is_rate_limit_error(message)
+        || message.contains("rate_limited")
+        || message.contains("error.chat.rate_limited")
 }
 
 pub fn normalize_rate_limited_message(message: &str) -> String {

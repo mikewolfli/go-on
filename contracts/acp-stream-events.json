@@ -1,0 +1,629 @@
+{
+  "$comment": "Canonical single source of truth for the ACP SSE stream event protocol and the TypeScript SDK's public types. Generate sdk/typescript/src/types.ts with: python3 scripts/gen-sdk-types.py. The generator also verifies (1) the event names match the STREAM_EVENT_* constants in src/acp/impl/chat/streaming.rs and (2) every type imported/re-exported by sdk/typescript/src/{index,client}.ts is derivable from this contract. Event payload field names mirror the extractors in src/acp/impl/chat/stream_consumer.rs and the emitters in src/acp/impl/chat/streaming.rs.",
+  "schema_version": "1.0.0",
+  "sse": {
+    "endpoint": "/chat/stream",
+    "frame_format": "event: <event_name>\ndata: <json_payload>",
+    "done_sentinel": "data: [DONE]"
+  },
+  "events": {
+    "chunk": {
+      "description": "Incremental token produced during streaming generation (many per turn). `token` is the visible text; `reasoning` carries thinking-only spans.",
+      "properties": {
+        "token": "string",
+        "reasoning": "string",
+        "agent": "string",
+        "chunk_index": "number",
+        "total_chars": "number",
+        "phase": "string",
+        "trace_id": "string",
+        "mode": { "type": ["string", "null"] },
+        "risk_score": { "type": ["string", "null"] },
+        "degrade_policy": { "type": ["string", "null"] }
+      },
+      "required": ["token", "agent", "chunk_index", "total_chars", "mode", "risk_score", "degrade_policy"]
+    },
+    "done": {
+      "description": "Stream completion marker with final metadata (duration, totals); may also carry the assembled `response` text so clients do not depend on a separate `result` event.",
+      "properties": {
+        "agent": "string",
+        "done": "boolean",
+        "chunks": "number",
+        "total_chars": "number",
+        "duration_ms": "number",
+        "phase": "string",
+        "trace_id": "string",
+        "mode": { "type": ["string", "null"] },
+        "risk_score": { "type": ["string", "null"] },
+        "degrade_policy": { "type": ["string", "null"] },
+        "selected_model": "string",
+        "response": "string"
+      },
+      "required": ["agent", "done", "chunks", "total_chars", "duration_ms", "mode", "risk_score", "degrade_policy"]
+    },
+    "error": {
+      "description": "Stream terminated with an error. Both `error` (preferred by the unified extractor) and legacy `message` carry the resolved human text.",
+      "properties": {
+        "error": "string",
+        "message": "string"
+      },
+      "required": ["error"]
+    },
+    "phase_end": {
+      "description": "Marks the end of a pipeline phase (observe / think / act / reflect).",
+      "properties": {
+        "phase": "string",
+        "description": "string",
+        "progress_current": "number",
+        "progress_total": "number"
+      },
+      "required": ["phase", "description"]
+    },
+    "phase_start": {
+      "description": "Marks the start of a pipeline phase with a human-readable description and optional progress counters.",
+      "properties": {
+        "phase": "string",
+        "description": "string",
+        "progress_current": "number",
+        "progress_total": "number"
+      },
+      "required": ["phase", "description"]
+    },
+    "progress": {
+      "description": "Coarse progress update during long operations (e.g. tool execution).",
+      "properties": {
+        "message": "string"
+      },
+      "required": ["message"]
+    },
+    "result": {
+      "description": "Final assembled response of a successful generation (sent after all phases complete).",
+      "properties": {
+        "response": "string",
+        "agent": "string",
+        "done": "boolean"
+      },
+      "required": ["response", "agent", "done"]
+    },
+    "status": {
+      "description": "Lightweight status indicator ('Thinking...', 'Scanning...', autonomy round updates).",
+      "properties": {
+        "message": "string",
+        "round_current": "number",
+        "round_total": "number"
+      },
+      "required": ["message"]
+    },
+    "telemetry": {
+      "description": "Token usage / cost telemetry snapshot for the ongoing stream.",
+      "properties": {
+        "agent": "string",
+        "phase": "string",
+        "trace_id": "string",
+        "mode": { "type": ["string", "null"] },
+        "risk_score": { "type": ["string", "null"] },
+        "degrade_policy": { "type": ["string", "null"] },
+        "token_economy": "object"
+      },
+      "required": ["agent", "phase", "trace_id", "mode", "risk_score", "degrade_policy", "token_economy"]
+    },
+    "tool_approval": {
+      "description": "Requests user confirmation before executing a tool in edit / safeguard modes.",
+      "properties": {
+        "tool_name": "string",
+        "tool_args": "object",
+        "mode": "string",
+        "risk_score": "number",
+        "message": "string"
+      },
+      "required": ["tool_name", "tool_args", "mode", "risk_score", "message"]
+    }
+  },
+  "types": {
+    "AcpSessionCloseRequest": {
+      "description": "Request to close an ACP session.",
+      "properties": {
+        "sessionId": "string"
+      },
+      "required": ["sessionId"]
+    },
+    "AcpSessionInfo": {
+      "description": "Info about an ACP session, as returned by the backend `session/list`.",
+      "properties": {
+        "id": "string"
+      },
+      "required": ["id"]
+    },
+    "AcpSessionListResponse": {
+      "description": "Response from listing ACP sessions.",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": "AcpSessionInfo",
+          "description": "The backend returns a minimal summary per session: `[{ \"id\": sid }]`."
+        },
+        "nextCursor": {
+          "type": ["string", "null"],
+          "description": "Wire key is camelCase `nextCursor` (backend `ListSessionsResponse` uses\n`#[serde(rename_all = \"camelCase\")]`); currently always absent because\nthe backend handler sends `next_cursor: None`."
+        }
+      },
+      "required": ["sessions"]
+    },
+    "AcpSessionNewRequest": {
+      "description": "Request to create a new ACP session.",
+      "properties": {
+        "cwd": "string",
+        "work_dirs": {
+          "type": "array",
+          "items": "string",
+          "description": "Backend reads this key as snake_case `work_dirs`."
+        },
+        "additionalDirectories": {
+          "type": "array",
+          "items": "string",
+          "description": "Backend reads this key as camelCase `additionalDirectories`."
+        },
+        "mode": "string"
+      },
+      "required": []
+    },
+    "AcpSessionNewResponse": {
+      "description": "Response from creating a new ACP session.",
+      "properties": {
+        "sessionId": "string",
+        "modes": "SessionModeState",
+        "configOptions": "SessionConfigOption[]"
+      },
+      "required": ["sessionId"]
+    },
+    "AcpSessionPromptRequest": {
+      "description": "Request to send a prompt in an ACP session.",
+      "properties": {
+        "sessionId": "string",
+        "prompt": "PromptContentBlock[]",
+        "mode": "string",
+        "cwd": "string",
+        "additionalDirectories": {
+          "type": "array",
+          "items": "string",
+          "description": "Backend reads this key as camelCase `additionalDirectories`."
+        }
+      },
+      "required": ["sessionId", "prompt"]
+    },
+    "AcpSessionResumeRequest": {
+      "description": "Request to resume an ACP session.",
+      "properties": {
+        "sessionId": "string",
+        "cwd": "string"
+      },
+      "required": ["sessionId"]
+    },
+    "AgentInfo": {
+      "description": "Metadata about an available agent.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Unique agent name/ID."
+        },
+        "agent_type": {
+          "type": "string",
+          "description": "Agent type (e.g. \"copilot\", \"custom\")."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description."
+        },
+        "models": {
+          "type": "array",
+          "items": "string",
+          "description": "Available model names this agent can use."
+        },
+        "capabilities": {
+          "type": "array",
+          "items": "string",
+          "description": "Capability tags (e.g. \"coding\", \"review\")."
+        },
+        "healthy": {
+          "type": "boolean",
+          "description": "Whether this agent is currently healthy."
+        }
+      },
+      "required": ["name", "agent_type", "description"]
+    },
+    "ApiResponse": {
+      "description": "Standard API response envelope wrapping typed output.",
+      "generic": "T",
+      "properties": {
+        "id": "string",
+        "object": "string",
+        "created_at": "number",
+        "model": "string",
+        "status": "string",
+        "output": "T",
+        "usage": "Usage",
+        "error": "string"
+      },
+      "required": ["id", "object", "created_at", "model", "status", "output"]
+    },
+    "BreakerStatusResponse": {
+      "description": "Circuit breaker status.",
+      "properties": {
+        "breakers": "object"
+      },
+      "required": ["breakers"]
+    },
+    "ChatMessage": {
+      "description": "Core message in a chat conversation.",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["user", "assistant", "system"]
+        },
+        "content": "string"
+      },
+      "required": ["role", "content"]
+    },
+    "ChatRequest": {
+      "description": "Request payload for the chat endpoint.",
+      "properties": {
+        "messages": "ChatMessage[]",
+        "model": "string",
+        "temperature": "number",
+        "max_tokens": "number",
+        "stream": "boolean"
+      },
+      "required": ["messages"]
+    },
+    "CheckpointListResponse": {
+      "description": "Checkpoint list entry.",
+      "properties": {
+        "checkpoints": "unknown[]"
+      },
+      "required": ["checkpoints"]
+    },
+    "ConfigBaselineResponse": {
+      "description": "Configuration baseline info.",
+      "properties": {
+        "baseline": "object"
+      },
+      "required": ["baseline"]
+    },
+    "CostStatusResponse": {
+      "description": "Cost / budget status.",
+      "properties": {
+        "cost": "object"
+      },
+      "required": ["cost"]
+    },
+    "GovernanceStatusResponse": {
+      "description": "Governance status.",
+      "properties": {
+        "ok": "boolean",
+        "governance": "object"
+      },
+      "required": ["ok", "governance"]
+    },
+    "HarnessStatusResponse": {
+      "description": "Harness / integration testing status.",
+      "properties": {
+        "harness": "object"
+      },
+      "required": ["harness"]
+    },
+    "HealthProbesResponse": {
+      "description": "Health probe results per module.",
+      "properties": {
+        "modules": "object"
+      },
+      "required": ["modules"]
+    },
+    "HealthResponse": {
+      "description": "Health check response (ServerStatus / runtime.health payloads).",
+      "properties": {
+        "lifecycle": "object",
+        "version": "string",
+        "stats": "object",
+        "maintenance": "object",
+        "timestamp": "number",
+        "metrics": "object",
+        "modules": "object"
+      },
+      "required": []
+    },
+    "LearningSummaryResponse": {
+      "description": "Learning / intelligence summary.",
+      "properties": {
+        "summary": "object"
+      },
+      "required": ["summary"]
+    },
+    "MetricsResponse": {
+      "description": "Runtime metrics snapshot.",
+      "properties": {
+        "metrics": "object"
+      },
+      "required": ["metrics"]
+    },
+    "MultimodalInput": {
+      "description": "Multimodal input types for rich chat requests.",
+      "union": [
+        {
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["text"]
+            },
+            "text": "string"
+          },
+          "required": ["type", "text"]
+        },
+        {
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["image"]
+            },
+            "image_url": "string",
+            "detail": {
+              "type": "string",
+              "enum": ["auto", "low", "high"]
+            }
+          },
+          "required": ["type", "image_url"]
+        },
+        {
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["document"]
+            },
+            "data": "string",
+            "mime_type": "string",
+            "filename": "string"
+          },
+          "required": ["type", "data", "mime_type"]
+        },
+        {
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["audio"]
+            },
+            "data": "string",
+            "format": "string"
+          },
+          "required": ["type", "data", "format"]
+        }
+      ]
+    },
+    "PromptContentBlock": {
+      "description": "A content block in a prompt (text, resource, image, audio, etc.).",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["text", "resource", "resource_link", "image", "audio"]
+        },
+        "text": "string",
+        "uri": "string",
+        "name": "string",
+        "resource": {
+          "type": "object",
+          "properties": {
+            "uri": "string",
+            "text": "string",
+            "mimeType": "string"
+          },
+          "required": ["uri"]
+        }
+      },
+      "required": ["type"]
+    },
+    "SelectorStatusResponse": {
+      "description": "Selector / router status.",
+      "properties": {
+        "selector": "object"
+      },
+      "required": ["selector"]
+    },
+    "SessionConfigGroup": {
+      "description": "A group within select options.",
+      "properties": {
+        "group": "string",
+        "name": "string",
+        "options": "SessionConfigOption[]"
+      },
+      "required": ["group", "name", "options"]
+    },
+    "SessionConfigKind": {
+      "description": "Kind of a session configuration option (discriminated union).",
+      "union": [
+        {
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["select"]
+            },
+            "currentValue": "string",
+            "options": "SessionConfigSelectOptions"
+          },
+          "required": ["type", "currentValue", "options"]
+        }
+      ]
+    },
+    "SessionConfigOption": {
+      "description": "Configuration option for a session.",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "description": "string",
+        "category": "string",
+        "kind": "SessionConfigKind"
+      },
+      "required": ["id", "name", "kind"]
+    },
+    "SessionConfigSelectOptions": {
+      "description": "Select options for a select-type config option.",
+      "union": [
+        {
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["grouped"]
+            },
+            "groups": "SessionConfigGroup[]"
+          },
+          "required": ["type", "groups"]
+        }
+      ]
+    },
+    "SessionLoadResponse": {
+      "description": "Response from loading an existing ACP session (session/load).",
+      "properties": {
+        "sessionId": "string",
+        "modes": "SessionModeState",
+        "configOptions": "SessionConfigOption[]",
+        "memoryContext": "string[]",
+        "memoryRestoredCount": "number"
+      },
+      "required": []
+    },
+    "SessionModeDescription": {
+      "description": "Description of an available session mode.",
+      "properties": {
+        "id": "string",
+        "name": "string",
+        "description": "string"
+      },
+      "required": ["id", "name"]
+    },
+    "SessionModeState": {
+      "description": "State describing the current session mode and available modes.",
+      "properties": {
+        "currentModeId": "string",
+        "availableModes": "SessionModeDescription[]"
+      },
+      "required": ["currentModeId", "availableModes"]
+    },
+    "StreamChunk": {
+      "description": "A single chunk in an SSE streaming response.",
+      "properties": {
+        "token": {
+          "type": "string",
+          "description": "The token text content."
+        },
+        "done": {
+          "type": "boolean",
+          "description": "Whether this is the final chunk."
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Optional reasoning content."
+        },
+        "tool_calls": {
+          "type": "array",
+          "items": "ToolCall",
+          "description": "Optional tool calls included in this chunk."
+        },
+        "index": {
+          "type": "number",
+          "description": "Chunk index in the stream."
+        },
+        "total_chars": {
+          "type": "number",
+          "description": "Total characters sent so far."
+        }
+      },
+      "required": ["token", "done", "index", "total_chars"]
+    },
+    "TaskPlanResponse": {
+      "description": "Task plan description.",
+      "properties": {
+        "plan": "object"
+      },
+      "required": ["plan"]
+    },
+    "ToolCall": {
+      "description": "Record of a tool call made by an agent.",
+      "properties": {
+        "tool_name": {
+          "type": "string",
+          "description": "Name of the tool that was called."
+        },
+        "arguments": {
+          "type": "object",
+          "description": "Arguments passed to the tool."
+        },
+        "agent_name": {
+          "type": "string",
+          "description": "The agent that made the call."
+        },
+        "result": {
+          "type": "object",
+          "description": "Optional result of the tool execution."
+        },
+        "duration_ms": {
+          "type": "number",
+          "description": "Duration of the tool call in milliseconds."
+        }
+      },
+      "required": ["tool_name", "arguments", "agent_name", "duration_ms"]
+    },
+    "ToolInfo": {
+      "description": "Descriptor for a tool exposed via tools/list.",
+      "properties": {
+        "name": "string",
+        "description": "string",
+        "input_schema": {
+          "type": "object",
+          "description": "Backend emits the schema under the snake_case key `input_schema`."
+        },
+        "inputSchema": {
+          "type": "object",
+          "description": "MCP-spec alias; some tool entries may emit `inputSchema` instead."
+        }
+      },
+      "required": ["name", "description"]
+    },
+    "ToolsCallRequest": {
+      "description": "Request payload for tools/call.",
+      "properties": {
+        "name": "string",
+        "arguments": "object",
+        "sessionId": {
+          "type": "string",
+          "description": "Optional ACP session ID for progress streaming."
+        }
+      },
+      "required": ["name", "arguments"]
+    },
+    "ToolsCallResult": {
+      "description": "Result of a tools/call execution.",
+      "properties": {
+        "content": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": "string",
+              "text": "string"
+            },
+            "required": ["type", "text"]
+          }
+        },
+        "structured": "unknown",
+        "isError": "boolean"
+      },
+      "required": ["content"]
+    },
+    "Usage": {
+      "description": "Token usage metadata returned by the API.",
+      "properties": {
+        "input_tokens": "number",
+        "output_tokens": "number",
+        "total_tokens": "number"
+      },
+      "required": ["input_tokens", "output_tokens", "total_tokens"]
+    }
+  }
+}

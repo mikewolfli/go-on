@@ -318,6 +318,46 @@ pub(crate) async fn reflect_phase(
         }
     }
 
+    // Skill auto-curation (M3.1, gated by `runtime.skill_auto_extract`):
+    // fire-and-forget work derived from the request's task description and
+    // the reflect response. Spawned and never awaited — it must not block or
+    // affect the reflect result; the task logs its own failures.
+    //
+    // The task runs the usage-scoring policy pass (archive low-frequency
+    // skills, promote high-frequency ones — both idempotent and cheap) and
+    // then the deterministic draft-skill extraction.
+    if server.runtime_config.skill_auto_extract {
+        use crate::orchestration::skill::usage as skill_usage;
+        let registry = server.orchestration_deps.skill_registry.clone();
+        let task = task_desc.clone();
+        let summary = crate::shared::truncate::truncate_chars(&exec_out.response_text, 400, "...");
+        tokio::spawn(async move {
+            {
+                let mut reg = registry.write().unwrap_or_else(|e| e.into_inner());
+                let archived = skill_usage::archive_low_frequency(
+                    &mut reg,
+                    skill_usage::ARCHIVE_MIN_CALLS,
+                    skill_usage::ARCHIVE_THRESHOLD_CALLS,
+                );
+                let promoted = skill_usage::promote_high_frequency(
+                    &mut reg,
+                    skill_usage::ARCHIVE_THRESHOLD_CALLS,
+                );
+                if !archived.is_empty() || !promoted.is_empty() {
+                    debug!(
+                        archived = ?archived,
+                        promoted = ?promoted,
+                        "skill usage curation pass"
+                    );
+                }
+            }
+            crate::orchestration::skill::auto_extract::maybe_auto_extract(
+                registry, true, &task, &summary,
+            )
+            .await;
+        });
+    }
+
     // Include all_tools_failed flag when all tools failed
     if exec_out.all_tools_failed {
         if let Some(obj) = result.as_object() {

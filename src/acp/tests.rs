@@ -78,6 +78,7 @@ mod test_suite {
 
         let _config = AppConfig {
             schema_version: "1.0.0".to_string(),
+            layered_merge: false,
             provider: crate::core::config::types::ProviderConfig {
                 default_phase: default_phase.to_string(),
                 agents,

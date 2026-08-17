@@ -19,6 +19,12 @@ echo "=== Validating prompt templates ==="
 echo "=== Validating i18n key sets ==="
 python3 "$SCRIPT_DIR/validate-i18n.py"
 
+# Generated SDK types drift guard (M2.3): sdk/typescript/src/types.ts must be
+# byte-identical to what scripts/gen-sdk-types.py emits from the canonical
+# ACP stream event contract (contracts/acp-stream-events.json).
+echo "=== Verifying generated SDK types (M2.3) ==="
+python3 "$SCRIPT_DIR/gen-sdk-types.py" --check
+
 # Regression gate: the generated `requests/quality-benchmark.ndjson` scenario
 # is not part of the repo, so run the lib test suite as the regression gate.
 echo "=== Running lib test suite (regression) ==="

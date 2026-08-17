@@ -5,6 +5,7 @@ use crate::i18n::runtime::{t, tf};
 use crate::orchestration::tool::{
     sanitize_path, sanitize_path_for_write, Tool, ToolInput, ToolOutput,
 };
+use crate::orchestration::write::{file_hash, record_file_change, FileChangeEvent};
 use anyhow::{Context, Result};
 use std::fs;
 use tracing::{info, warn};
@@ -16,9 +17,6 @@ pub struct ListDirectoryTool;
 impl Tool for ListDirectoryTool {
     fn name(&self) -> &'static str {
         "list_directory"
-    }
-    fn description(&self) -> &str {
-        "List files and directories in a given path"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
@@ -102,9 +100,6 @@ impl Tool for FileMoveTool {
     fn name(&self) -> &'static str {
         "move_path"
     }
-    fn description(&self) -> &str {
-        "Move or rename a file from source to destination"
-    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let source = input.payload["source"]
             .as_str()
@@ -162,9 +157,6 @@ impl Tool for FileDeleteTool {
     fn name(&self) -> &'static str {
         "delete_path"
     }
-    fn description(&self) -> &str {
-        "Delete a file (requires confirmation)"
-    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
@@ -220,9 +212,6 @@ pub struct CreateDirectoryTool;
 impl Tool for CreateDirectoryTool {
     fn name(&self) -> &'static str {
         "create_directory"
-    }
-    fn description(&self) -> &str {
-        "Create a new directory (and all parent directories)"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
@@ -283,9 +272,6 @@ impl Tool for EditFileTool {
     fn name(&self) -> &'static str {
         "edit_file"
     }
-    fn description(&self) -> &str {
-        "Edit a file by replacing exact text with new text (precision text replacement)"
-    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
@@ -342,7 +328,38 @@ impl Tool for EditFileTool {
         // via the edit path (previously only path containment was enforced).
         crate::orchestration::tool::enforce_write_sandbox(&validated, &new_content)?;
 
+        // ── M1.3: change-event audit — hash BEFORE the write. Best-effort:
+        // a hash failure must never abort the edit itself. ───────────────
+        let old_hash = file_hash(&validated).unwrap_or_else(|e| {
+            warn!(
+                "edit_file: cannot hash '{}' before edit: {e:#}",
+                validated.display()
+            );
+            None
+        });
+
         fs::write(&validated, &new_content).context("failed to write file after edit")?;
+
+        // ── M1.3: change-event audit — hash AFTER the write and record the
+        // old→new content hashes. Recording is best-effort: the write has
+        // already succeeded at this point. ────────────────────────────────
+        let new_hash = file_hash(&validated).unwrap_or_else(|e| {
+            warn!(
+                "edit_file: cannot hash '{}' after edit: {e:#}",
+                validated.display()
+            );
+            None
+        });
+        record_file_change(
+            &input.task_id,
+            &input.phase,
+            &FileChangeEvent {
+                path: validated.to_string_lossy().into_owned(),
+                op: "edit_file",
+                old_hash,
+                new_hash,
+            },
+        );
 
         info!(
             path = %validated.display(),
@@ -373,9 +390,6 @@ pub struct CopyPathTool;
 impl Tool for CopyPathTool {
     fn name(&self) -> &'static str {
         "copy_path"
-    }
-    fn description(&self) -> &str {
-        "Copy a file or directory from source to destination"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let source = input.payload["source"]

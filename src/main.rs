@@ -8,6 +8,10 @@ mod agents;
 mod cli;
 mod core;
 mod fault_tolerance;
+// M3.4 gateway: only compiled where the CLI `gateway` subcommand (which needs
+// the SQLite delivery ledger) is available.
+#[cfg(feature = "backend-sqlite")]
+mod gateway;
 mod governance;
 
 // Runtime Hub — reserved for multi-process architecture (daemon + client agents).

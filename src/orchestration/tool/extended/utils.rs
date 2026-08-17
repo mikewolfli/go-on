@@ -7,9 +7,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use rand::RngExt;
-use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
 
@@ -71,23 +70,11 @@ pub(crate) fn extract_xml_tag(text: &str, tag: &str) -> Option<String> {
 
 // ── UUID Generator ──────────────────────────────────────────────────────────
 
-/// Input parameters for [`UuidGenTool`].
-#[derive(JsonSchema, Deserialize)]
-struct UuidGenInput {}
-
 pub struct UuidGenTool;
 
 impl Tool for UuidGenTool {
     fn name(&self) -> &'static str {
         "uuid_gen"
-    }
-
-    fn description(&self) -> &str {
-        "Generate a UUID v4 (random). Returns a universally unique identifier string."
-    }
-
-    fn input_schema(&self) -> Value {
-        schemars::schema_for!(UuidGenInput).into()
     }
 
     fn run(&self, _input: &ToolInput) -> Result<ToolOutput> {
@@ -107,7 +94,7 @@ impl Tool for UuidGenTool {
 // ── Random Token Generator ──────────────────────────────────────────────────
 
 /// Input parameters for [`RandomTokenTool`].
-#[derive(JsonSchema, Deserialize)]
+#[derive(Deserialize)]
 struct RandomTokenInput {
     /// Token length in characters (default: 32, range: 4–256).
     #[serde(default)]
@@ -122,17 +109,6 @@ pub struct RandomTokenTool;
 impl Tool for RandomTokenTool {
     fn name(&self) -> &'static str {
         "random_token"
-    }
-
-    fn description(&self) -> &str {
-        concat!(
-            "Generate a cryptographically secure random token. ",
-            "Supports: hex, base64, alphanumeric formats. Default: 32-char hex.",
-        )
-    }
-
-    fn input_schema(&self) -> Value {
-        schemars::schema_for!(RandomTokenInput).into()
     }
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
@@ -187,32 +163,6 @@ pub struct EncodeDecodeTool;
 impl Tool for EncodeDecodeTool {
     fn name(&self) -> &'static str {
         "encode_decode"
-    }
-
-    fn description(&self) -> &str {
-        concat!(
-            "Encode or decode data using various formats. ",
-            "Supports: base64, hex, url encoding/decoding. ",
-            "Input text or binary data and choose the operation.",
-        )
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "operation": {
-                    "type": "string",
-                    "enum": ["base64_encode", "base64_decode", "hex_encode", "hex_decode", "url_encode", "url_decode"],
-                    "description": "Encoding/decoding operation"
-                },
-                "input": {
-                    "type": "string",
-                    "description": "Input text to encode or decode"
-                }
-            },
-            "required": ["operation", "input"]
-        })
     }
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
@@ -302,29 +252,6 @@ pub struct HashFileTool;
 impl Tool for HashFileTool {
     fn name(&self) -> &'static str {
         "hash_file"
-    }
-
-    fn description(&self) -> &str {
-        concat!(
-            "Compute a cryptographic hash of a file. ",
-            "Supports SHA-256 (default) and SHA-512. Returns the hash as a hex string.",
-        )
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "File path to hash"},
-                "algorithm": {
-                    "type": "string",
-                    "enum": ["sha256", "sha512"],
-                    "description": "Hash algorithm (default: sha256)",
-                    "default": "sha256"
-                }
-            },
-            "required": ["path"]
-        })
     }
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {

@@ -201,7 +201,7 @@ impl Agent for BaiduErnieAgent {
     }
 
     fn available_models(&self) -> Vec<ModelInfo> {
-        match self.api {
+        let mut models = match self.api {
             ErnieApi::Wenxin => vec![
                 ModelInfo {
                     id: "ERNIE-4.5-8K".to_string(),
@@ -270,7 +270,26 @@ impl Agent for BaiduErnieAgent {
                     context_window: Some(4096),
                 },
             ],
+        };
+
+        // Single source of truth: the provider spec's `model_suggestions` feed
+        // the GUI's model dropdown, so every suggestion must also be listable
+        // here. Hand-curated entries above keep their capability/context
+        // enrichment; suggestions with no curated entry get a default shape.
+        // The spec name mirrors the API family.
+        let spec_name = match self.api {
+            ErnieApi::Wenxin => "wenxin",
+            ErnieApi::Qianfan => "qianfan",
+        };
+        if let Some(spec) = crate::core::providers::provider_spec_by_name(spec_name) {
+            for id in &spec.model_suggestions {
+                if !models.iter().any(|m| &m.id == id) {
+                    models.push(crate::shared::default_model_info(id, self.model == *id));
+                }
+            }
         }
+
+        models
     }
 }
 
@@ -400,7 +419,10 @@ mod tests {
                 ("response_format".to_string(), json!("json")),
             ])),
         );
-        assert_eq!(payload["tools"], tools, "tools schema must reach the payload");
+        assert_eq!(
+            payload["tools"], tools,
+            "tools schema must reach the payload"
+        );
         assert_eq!(payload["tool_choice"], "auto");
         // Unsupported options must NOT leak into the ERNIE payload.
         assert!(payload.get("response_format").is_none());
