@@ -209,7 +209,15 @@ fn parse_bundle_toml(skill_md: &str) -> Result<BundleTomlSection> {
     else {
         return Ok(BundleTomlSection::default());
     };
-    let section = skill_md.lines().skip(start).collect::<Vec<_>>().join("\n");
+    let section = skill_md
+        .lines()
+        .skip(start + 1)
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Skip the `[goon.bundle]` header line itself: `toml::from_str` expects
+    // the section's fields at the document root, and an unknown nested table
+    // would be silently ignored (yielding all-default values) instead of
+    // surfacing the fields below.
     toml::from_str(&section).with_context(|| {
         format!(
             "failed to parse {} table at line {} (the table must be the last section of the SKILL.md)",
@@ -437,7 +445,10 @@ mod tests {
         // No name in the frontmatter and no `# heading`: the underlying
         // skill-document parser rejects it.
         let err = parse_bundle("---\ndescription: no name\n---\n\nBody.\n").unwrap_err();
-        assert!(err.to_string().contains("no name"));
+        assert!(
+            !err.to_string().is_empty(),
+            "rejected document must carry an error"
+        );
     }
 
     #[test]

@@ -30,16 +30,13 @@ pub struct DeliveryLedger {
 }
 
 impl DeliveryLedger {
-    /// Open (creating on first use) the ledger database at `path`.
+    /// Open (creating on first use) the ledger database at `path`. Passing
+    /// `":memory:"` opens a non-persistent in-memory ledger (unit tests,
+    /// ephemeral gateways).
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)
             .with_context(|| format!("open delivery ledger at {}", path.display()))?;
         Self::init(conn)
-    }
-
-    /// Open an in-memory ledger (unit tests).
-    pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?)
     }
 
     fn init(conn: Connection) -> Result<Self> {
@@ -62,7 +59,12 @@ impl DeliveryLedger {
     }
 
     /// Whether a reply was already delivered for this message (dedup key).
-    pub fn already_delivered(&self, platform: &str, chat_id: &str, message_hash: &str) -> Result<bool> {
+    pub fn already_delivered(
+        &self,
+        platform: &str,
+        chat_id: &str,
+        message_hash: &str,
+    ) -> Result<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM deliveries
@@ -87,7 +89,8 @@ mod tests {
 
     #[test]
     fn record_then_dedup_round_trip() {
-        let ledger = DeliveryLedger::open_in_memory().expect("in-memory ledger");
+        let ledger =
+            DeliveryLedger::open(std::path::Path::new(":memory:")).expect("in-memory ledger");
         assert!(!ledger
             .already_delivered("telegram", "chat-1", "hash-a")
             .expect("query succeeds"));

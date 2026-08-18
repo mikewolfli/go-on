@@ -165,6 +165,13 @@ where
 
     // The dedup triple: identical redelivered payloads share the hash.
     let message_hash = crate::shared::sha256_hex(&body);
+    tracing::debug!(
+        target: "go_on::gateway",
+        platform = platform_name,
+        chat_id = %message.platform_chat_id,
+        raw = ?message.raw,
+        "processing inbound webhook message"
+    );
     if ledger
         .already_delivered(platform_name, &message.platform_chat_id, &message_hash)
         .map_err(WebhookError::Ledger)?
@@ -181,7 +188,16 @@ where
     // Per-chat turn lease: never run two concurrent turns for the same chat.
     let _lease = leases
         .try_claim(platform_name, &message.platform_chat_id)
-        .ok_or_else(|| WebhookError::Busy(message.platform_chat_id.clone()))?;
+        .ok_or_else(|| {
+            tracing::debug!(
+                target: "go_on::gateway",
+                platform = platform_name,
+                chat_id = %message.platform_chat_id,
+                lease_active = leases.is_active(platform_name, &message.platform_chat_id),
+                "turn already in progress for chat — rejecting delivery"
+            );
+            WebhookError::Busy(message.platform_chat_id.clone())
+        })?;
 
     let reply = run_turn(message.text.clone())
         .await
@@ -243,6 +259,7 @@ impl GatewayServer {
         info!(
             target: "go_on::gateway",
             bind,
+            platforms = ?self.registry.platform_names(),
             "gateway webhook listener ready — POST /webhook/<platform>"
         );
         loop {
@@ -526,7 +543,8 @@ mod tests {
 
         let registry = Arc::new(PlatformRegistry::new());
         let _guard = registry.register(Arc::new(WebhookPlatform::new("webhook")));
-        let ledger = DeliveryLedger::open_in_memory().expect("in-memory ledger");
+        let ledger =
+            DeliveryLedger::open(std::path::Path::new(":memory:")).expect("in-memory ledger");
         let leases = TurnLease::new();
 
         let body = br#"{"chat_id":"chat-1","text":"hello from webhook"}"#.to_vec();
@@ -600,7 +618,8 @@ mod tests {
     async fn concurrent_turn_for_same_chat_is_rejected_with_busy() {
         let registry = Arc::new(PlatformRegistry::new());
         let _guard = registry.register(Arc::new(WebhookPlatform::new("webhook")));
-        let ledger = DeliveryLedger::open_in_memory().expect("in-memory ledger");
+        let ledger =
+            DeliveryLedger::open(std::path::Path::new(":memory:")).expect("in-memory ledger");
         let leases = TurnLease::new();
 
         // Hold the lease for chat-1, then the handler must report Busy without
@@ -625,7 +644,8 @@ mod tests {
     #[tokio::test]
     async fn unknown_platform_is_rejected() {
         let registry = PlatformRegistry::new();
-        let ledger = DeliveryLedger::open_in_memory().expect("in-memory ledger");
+        let ledger =
+            DeliveryLedger::open(std::path::Path::new(":memory:")).expect("in-memory ledger");
         let leases = TurnLease::new();
         let err = handle_webhook_request(
             &registry,

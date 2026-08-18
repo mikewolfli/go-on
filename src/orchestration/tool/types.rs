@@ -91,6 +91,42 @@ impl ToolHook for GuardianHook {
             .reviewer
             .review_action(tool_name, input, "tool pre-execution review")
             .await;
+        // M2.2 ②: every reviewer decision (allow / deny / escalate) enters the
+        // audit chain, alongside the permission-hook verdicts and the user
+        // approval decisions, so the three-layer chain is fully auditable.
+        let (verdict, reason) = match &decision {
+            crate::governance::guardian::GuardianDecision::Allow { .. } => ("allow", String::new()),
+            crate::governance::guardian::GuardianDecision::Deny { reason } => {
+                ("deny", reason.clone())
+            }
+            crate::governance::guardian::GuardianDecision::EscalateToUser { reason } => {
+                ("escalate_to_user", reason.clone())
+            }
+        };
+        crate::governance::audit::global_audit_log().record(
+            crate::governance::audit::AuditLogEntry {
+                timestamp: crate::governance::audit::chrono_now(),
+                task_id: input.task_id.clone(),
+                phase: "approval".to_string(),
+                agent: None,
+                tool: Some(tool_name.to_string()),
+                decision: "guardian_review".to_string(),
+                inputs: serde_json::json!({
+                    "tool_name": tool_name,
+                    "tool_args": input.payload,
+                }),
+                outputs: Some(serde_json::json!({
+                    "verdict": verdict,
+                    "reason": reason,
+                })),
+                error: None,
+                confidence: None,
+                data_classification: None,
+                compliance_tags: Vec::new(),
+                retention_policy: None,
+                correlation_id: None,
+            },
+        );
         match decision {
             crate::governance::guardian::GuardianDecision::Allow { .. } => Ok(()),
             crate::governance::guardian::GuardianDecision::Deny { reason } => {

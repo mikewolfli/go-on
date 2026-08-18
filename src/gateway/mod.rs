@@ -26,10 +26,6 @@ pub mod session;
 #[cfg(feature = "backend-sqlite")]
 pub mod webhook;
 
-pub use adapter::{InboundMessage, PlatformAdapter};
-pub use registry::PlatformRegistry;
-pub use session::{session_key, TurnLease, TurnLeaseGuard};
-
 // ─────────────────────────────────────────────────────────────────────────────
 // One-turn agent runner (mirrors the `go-on exec` engine)
 // ─────────────────────────────────────────────────────────────────────────────
