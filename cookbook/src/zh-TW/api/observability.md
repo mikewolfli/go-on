@@ -140,7 +140,7 @@ Accept: text/event-stream
   "supported_versions": [1, 2],
   "latest": 2,
   "server": "go-on",
-  "server_version": "1.5.3"
+  "server_version": "1.6.0"
 }
 ```
 

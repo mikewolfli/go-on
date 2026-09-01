@@ -65,7 +65,7 @@ impl CapabilityBus {
         // 1. BLUE70: Write to LearningOptimizationBus (replaces legacy WorkflowLearningBus)
         {
             let mut lob = crate::write_or_recover!(&self.learning_optimization_bus, "intelligence");
-            lob.record_and_optimize(
+            lob.record_event(
                 crate::intelligence::capability_bus::learning_optimization_bus::LearningEvent {
                     task_type: task_type.to_string(),
                     agent: agent.to_string(),

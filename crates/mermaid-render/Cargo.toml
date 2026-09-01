@@ -1,6 +1,6 @@
 [package]
 name = "go-on-mermaid-render"
-version = "1.5.3"
+version = "1.6.0"
 edition = "2021"
 description = "Framework-agnostic Mermaid diagram renderer. Takes mermaid source text and a color theme, outputs SVG or rasterized RGBA pixels. No GUI framework dependency."
 

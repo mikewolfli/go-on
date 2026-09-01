@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.6.0] - 2026-09-01
+
+### Version bump + full-project refinement (multi-round scan, R63–R76)
+
+- All product versions aligned to **1.6.0** (workspace, GUI, VS Code addon, rust/python/typescript SDKs, crates, cookbook, README badges).
+- **Dedup consolidation across the whole project**: 53 fixes removing duplicated implementations — HTTP status-reason table (3 sites), SSE response headers (MCP/ACP), JSON-RPC error construction (5 sites), URL query encoding (3 sites + multi-byte UTF-8 truncation fix), control-mode mapping, dedup helpers (generic), sha256_hex (2 impls), signal-line collection, dependency-set construction (17 sites), AlertManager singleton, fault-tolerance parent-dir creation, and more.
+- **Wiring/consistency fixes**: MCP SSE first-search auto-build now matches module docs (previously returned empty results silently); hub HTTP responses no longer emit non-standard reason phrases for 401/413/431; `status_text` covers every status the project can produce (408 added).
+- Zero-warning gates hold across all four profiles (`local`, `simple-server`, `multi-users-server`, `full`) and `cargo clippy --all-targets -D warnings`.
+
 ## [1.5.3] - 2026-08-14
 
 ### Version bump + Zed agent-server governance fixes (2026-08-14, commit a25cfe0b)

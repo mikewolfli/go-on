@@ -50,7 +50,11 @@ impl LearningOptimizationBus {
     // ── Record ────────────────────────────────────────────────────────
 
     /// Record an execution event (bounded FIFO ring).
-    pub fn record_and_optimize(&mut self, event: LearningEvent) {
+    ///
+    /// Named `record_event` (not `record_and_optimize`): the former per-event
+    /// optimization/prevention analysis had zero production readers and was
+    /// removed, so recording is all this method does.
+    pub fn record_event(&mut self, event: LearningEvent) {
         if self.events.len() >= self.max_events {
             self.events.pop_front();
         }
@@ -104,7 +108,7 @@ mod tests {
     #[test]
     fn test_record_event() {
         let mut bus = LearningOptimizationBus::new();
-        bus.record_and_optimize(make_event("research", "agent_a", true, 1000));
+        bus.record_event(make_event("research", "agent_a", true, 1000));
         assert_eq!(bus.event_count(), 1);
     }
 
@@ -113,7 +117,7 @@ mod tests {
         let mut bus = LearningOptimizationBus::new();
         bus.max_events = 100;
         for i in 0..150 {
-            bus.record_and_optimize(make_event("t", "a", true, i));
+            bus.record_event(make_event("t", "a", true, i));
         }
         assert_eq!(bus.event_count(), 100);
         // The oldest events were evicted; the newest remain.
@@ -125,8 +129,8 @@ mod tests {
     #[test]
     fn test_events_snapshot() {
         let mut bus = LearningOptimizationBus::new();
-        bus.record_and_optimize(make_event("t1", "a1", true, 100));
-        bus.record_and_optimize(make_event("t2", "a2", false, 200));
+        bus.record_event(make_event("t1", "a1", true, 100));
+        bus.record_event(make_event("t2", "a2", false, 200));
 
         let snapshot = bus.events_snapshot();
         assert_eq!(snapshot.len(), 2);

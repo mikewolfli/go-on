@@ -27,6 +27,15 @@ pub struct Subtask {
     pub priority: u8,
 }
 
+/// Build a dependency set from string literals.
+///
+/// The rule-based decomposers previously repeated
+/// `["x".to_string()].iter().cloned().collect()` per subtask (~17 copies);
+/// this is the single shared construction.
+fn dep_set(items: &[&str]) -> HashSet<String> {
+    items.iter().map(|s| s.to_string()).collect()
+}
+
 /// Task decomposition result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskDecomposition {
@@ -234,7 +243,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "locate_bug".to_string(),
                 description: "Locate the bug in the codebase".to_string(),
                 complexity: characteristics.complexity,
-                dependencies: ["analyze_bug".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["analyze_bug"]),
                 estimated_duration_seconds: 600,
                 priority: 5,
             },
@@ -242,7 +251,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "implement_fix".to_string(),
                 description: "Implement the fix".to_string(),
                 complexity: characteristics.complexity,
-                dependencies: ["locate_bug".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["locate_bug"]),
                 estimated_duration_seconds: 900,
                 priority: 5,
             },
@@ -250,7 +259,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "write_test".to_string(),
                 description: "Write test to prevent regression".to_string(),
                 complexity: (characteristics.complexity as i32 - 1).max(1) as u8,
-                dependencies: ["implement_fix".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["implement_fix"]),
                 estimated_duration_seconds: 600,
                 priority: 4,
             },
@@ -258,10 +267,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "verify_fix".to_string(),
                 description: "Verify the fix works".to_string(),
                 complexity: 2,
-                dependencies: ["implement_fix".to_string(), "write_test".to_string()]
-                    .iter()
-                    .cloned()
-                    .collect(),
+                dependencies: dep_set(&["implement_fix", "write_test"]),
                 estimated_duration_seconds: 300,
                 priority: 5,
             },
@@ -282,7 +288,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "implement_core".to_string(),
                 description: "Implement core feature logic".to_string(),
                 complexity: characteristics.complexity,
-                dependencies: ["design_api".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["design_api"]),
                 estimated_duration_seconds: 1800,
                 priority: 5,
             },
@@ -290,7 +296,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "implement_edge_cases".to_string(),
                 description: "Implement error handling and edge cases".to_string(),
                 complexity: characteristics.complexity.saturating_sub(1),
-                dependencies: ["implement_core".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["implement_core"]),
                 estimated_duration_seconds: 900,
                 priority: 4,
             },
@@ -298,7 +304,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "write_documentation".to_string(),
                 description: "Write user and developer documentation".to_string(),
                 complexity: 2,
-                dependencies: ["implement_core".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["implement_core"]),
                 estimated_duration_seconds: 600,
                 priority: 3,
             },
@@ -306,10 +312,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "add_tests".to_string(),
                 description: "Add comprehensive tests".to_string(),
                 complexity: characteristics.complexity.saturating_sub(1),
-                dependencies: ["implement_edge_cases".to_string()]
-                    .iter()
-                    .cloned()
-                    .collect(),
+                dependencies: dep_set(&["implement_edge_cases"]),
                 estimated_duration_seconds: 1200,
                 priority: 4,
             },
@@ -330,7 +333,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "plan_refactor".to_string(),
                 description: "Plan refactoring strategy and changes".to_string(),
                 complexity: characteristics.complexity.max(2),
-                dependencies: ["analyze_current".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["analyze_current"]),
                 estimated_duration_seconds: 600,
                 priority: 5,
             },
@@ -338,7 +341,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "refactor_code".to_string(),
                 description: "Execute refactoring".to_string(),
                 complexity: characteristics.complexity,
-                dependencies: ["plan_refactor".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["plan_refactor"]),
                 estimated_duration_seconds: 1800,
                 priority: 5,
             },
@@ -346,7 +349,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "update_tests".to_string(),
                 description: "Update and run all tests".to_string(),
                 complexity: characteristics.complexity.saturating_sub(1),
-                dependencies: ["refactor_code".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["refactor_code"]),
                 estimated_duration_seconds: 900,
                 priority: 4,
             },
@@ -354,7 +357,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "performance_verify".to_string(),
                 description: "Verify no performance regressions".to_string(),
                 complexity: 3,
-                dependencies: ["update_tests".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["update_tests"]),
                 estimated_duration_seconds: 600,
                 priority: 4,
             },
@@ -375,7 +378,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "design".to_string(),
                 description: "Design new architecture".to_string(),
                 complexity: characteristics.complexity.max(3),
-                dependencies: ["research".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["research"]),
                 estimated_duration_seconds: 1800,
                 priority: 5,
             },
@@ -383,7 +386,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "prototype".to_string(),
                 description: "Build prototype/POC".to_string(),
                 complexity: characteristics.complexity.max(2),
-                dependencies: ["design".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["design"]),
                 estimated_duration_seconds: 1200,
                 priority: 4,
             },
@@ -391,7 +394,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "document".to_string(),
                 description: "Document architecture".to_string(),
                 complexity: 2,
-                dependencies: ["design".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["design"]),
                 estimated_duration_seconds: 900,
                 priority: 4,
             },
@@ -412,7 +415,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "write_unit_tests".to_string(),
                 description: "Write unit tests".to_string(),
                 complexity: 2,
-                dependencies: ["identify_cases".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["identify_cases"]),
                 estimated_duration_seconds: 1200,
                 priority: 5,
             },
@@ -420,7 +423,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "write_integration_tests".to_string(),
                 description: "Write integration tests".to_string(),
                 complexity: 2,
-                dependencies: ["identify_cases".to_string()].iter().cloned().collect(),
+                dependencies: dep_set(&["identify_cases"]),
                 estimated_duration_seconds: 1200,
                 priority: 4,
             },
@@ -428,13 +431,7 @@ Return ONLY valid JSON, no markdown formatting.
                 id: "run_all_tests".to_string(),
                 description: "Run and verify all tests".to_string(),
                 complexity: 1,
-                dependencies: [
-                    "write_unit_tests".to_string(),
-                    "write_integration_tests".to_string(),
-                ]
-                .iter()
-                .cloned()
-                .collect(),
+                dependencies: dep_set(&["write_unit_tests", "write_integration_tests"]),
                 estimated_duration_seconds: 300,
                 priority: 5,
             },

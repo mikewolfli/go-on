@@ -1,6 +1,6 @@
 # go-on Documentation
 
-This book documents the current `1.5.3` architecture and usage model of `go-on`.
+This book documents the current `1.6.0` architecture and usage model of `go-on`.
 
 The runtime implements a **sub-bus capability architecture** (7 feature-gated sub-buses per `Cargo.toml`) with **37 AI provider integrations**,
 a passing test suite (zero failures; see `CHANGELOG.md` for the latest counts), and **zero clippy warnings across all build profiles**.

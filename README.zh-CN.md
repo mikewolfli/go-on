@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — 用 Rust 编写的 AI 智能体编排运行时，提供桌面 GUI、VS Code 插件、SSE 流式传输、MCP/ACP 协议、自治工作流与内置治理。v1.5.3
+  <strong>go-on</strong> — 用 Rust 编写的 AI 智能体编排运行时，提供桌面 GUI、VS Code 插件、SSE 流式传输、MCP/ACP 协议、自治工作流与内置治理。v1.6.0
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
 [![Providers](https://img.shields.io/badge/providers-37-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
-[![LOC](https://img.shields.io/badge/code-252K-blue)]()
+[![LOC](https://img.shields.io/badge/code-270K-blue)]()
 
 ## go-on 是什么？
 
@@ -32,7 +32,7 @@ go-on 是一个**本地优先**、生产级的 AI 智能体编排运行时，使
 - 🔌 将 AI 模型连接到 MCP 服务器，或作为 MCP 服务器运行
 - 🛡️ 通过 RBAC、审计追踪和风险评估执行治理策略
 - 📊 通过 SSE 面板实时监控子代理执行和命令输出
-- 🧩 通过 VS Code 插件、技能市场（34 个技能）或 Rust/Python/TypeScript SDK 扩展
+- 🧩 通过 VS Code 插件、技能市场（35 个技能）或 Rust/Python/TypeScript SDK 扩展
 
 ## 快速开始
 
@@ -53,6 +53,8 @@ cargo run -- --protocol-mode mcp_stdio
 首次运行时会检测 AI 供应商配置，若未配置则启动交互式初始化向导。
 
 **完整文档**：`cookbook/` 目录（mdBook 格式，支持三语） — `cd cookbook && mdbook serve --open`
+
+**[贡献指南](CONTRIBUTING.md)** — 提交规范、PR 流程与开发环境搭建。
 
 默认健康检查端点：`http://127.0.0.1:8090/health`
 
@@ -97,7 +99,7 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 - **跨入口一致性** — 同一任务在 ACP/CLI/MCP 下产生一致的 stop_reason 与回合数
 
 ### 工具系统
-- **108 个内置工具** — 读写文件/代码搜索/补丁应用/测试运行/Git Diff/Shell 执行/HTTP 请求/grep/search_files/git/cargo_check/cargo_test/目录列表/文件移动/文件删除/压缩解压/日期时间/DNS/Ping/端口扫描 + CAD/3D/GIS/条码/SVG/Office/图像处理 + 文档解析(PDF/DOCX/PPT/HTML/Markdown/Excel)
+- **121 个内置工具** — 读写文件/代码搜索/补丁应用/测试运行/Git Diff/Shell 执行/HTTP 请求/grep/search_files/git/cargo_check/cargo_test/目录列表/文件移动/文件删除/压缩解压/日期时间/DNS/Ping/端口扫描 + CAD/3D/GIS/条码/SVG/Office/图像处理 + 文档解析(PDF/DOCX/PPT/HTML/Markdown/Excel) + 游戏/存档/Mod 工具
 - **工具流水线** — 串行/并行/条件执行，可配置的错误处理策略
 - **动态工具推荐** — 基于模式+近因+共现的工具推荐引擎
 - **基于模式的工具限制** — 各模式强制执行 allowed_tools 与 max_tool_calls
@@ -113,8 +115,9 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 - **内容安全审查** — AI 驱动的高风险操作评估
 
 ### 性能
-- **SSE 缓冲池** — 零分配的流式事件序列化
+- **亚秒级启动** — 精简冗余 SQLite 初始化；HTTP 服务秒级绑定端口
 - **并发执行** — 按角色 BinaryHeap 出队（O(log n)），信号量背压
+- **SSE 缓冲池** — 零分配的流式事件序列化
 - **DAG 汇聚超时** — 防止单工具拖慢整个流水线
 
 ### 韧性
@@ -149,7 +152,7 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 - **OTel** — 通过 OTLP collector 的分布式追踪（默认：`localhost:4317`）
 - **三语国际化** — 英文、简体中文、繁体中文，覆盖后端/GUI/VS Code 约 95%
 
-### 技能市场（34 个技能）
+### 技能市场（35 个技能）
 - **内置技能**：api-docs-generator、api-tester、architecture-diagrammer、changelog-generator、ci-pipeline-generator、classify-text、code-execution-sandbox、code-review、context-summarizer、data-pipeline-optimizer、data-transformer、dockerfile-generator、env-config-validator、error-recovery-planner、knowledge-retriever、log-analyzer、note-taking、performance-analyzer、progress-tracker、project-analyzer、prompt-optimizer、refactoring-advisor、regex-builder、security-auditor、self-reviewer、semantic-diff、skill-creator、sql-query-helper、summarize-text、task-planner、test-generator、translate-text、web-scraper、workflow-optimizer（与 `skills/` 目录一致；部分条目为合并后的展示名，如 analyze-text←classify-text、conventional-commits-toolkit←changelog-generator）
 - **从 GitHub/URL/本地导入** — SkillImportStore 获取并验证 SKILL.md 清单
 - **自动发现** — 启动时扫描 `~/.agents/skills/` 目录
@@ -268,14 +271,14 @@ npm run compile
 
 | 指标 | 数值 |
 |:-----|:-----|
-| Rust 后端代码行数 | ~213K（450 个模块）|
+| Rust 后端代码行数 | ~223K（528 个模块）|
 | GUI（EGUI）代码行数 | ~24K |
 | VS Code 插件（TypeScript）代码行数 | ~17K |
 | SDK（Rust + Python + TypeScript）代码行数 | ~6K |
-| 内置工具数量 | ToolRegistry 注册 108 个（含特性门控）|
+| 内置工具数量 | ToolRegistry 注册 121 个（含特性门控）|
 | AI 供应商数量 | 37 |
 | 技能市场数量 | 35 |
-| 单元测试数量 | `cargo test --lib` 实测 1659 通过（+ 集成套件，见下方验证状态）|
+| 单元测试数量 | `cargo test --lib` 实测 1802 通过（+ 集成套件，见下方验证状态）|
 | 三语国际化覆盖 | en / zh-CN / zh-TW（约 95%）|
 
 ## 构建配置
@@ -306,7 +309,7 @@ cargo build --no-default-features --features full
 
 所有 4 种构建配置零 clippy 警告通过。最近一次完整 `cargo test --all-targets` 运行全部通过、零失败（最新计数见 `CHANGELOG.md` 最新一节）。GUI 和 VS Code 插件同样零错误编译通过。
 
-统计表中的 lib 数字为**实测执行数**：`cargo test --lib` → **1659 通过 / 0 失败**。作为参考，`src/` 下 `#[test]` / `#[tokio::test...]` 属性声明数为 1737；`tests/` 下为 160（不含 `chaos-testing` 特性门控的 `chaos_drill` 套件 6 个）。实测数低于声明数，因部分声明位于默认（local）profile 未启用的特性门控之后。
+统计表中的 lib 数字为**实测执行数**：`cargo test --lib` → **1802 通过 / 0 失败**。作为参考，`src/` 下 `#[test]` / `#[tokio::test...]` 属性声明数为 1875；`tests/` 下为 160（不含 `chaos-testing` 特性门控的 `chaos_drill` 套件 6 个）。实测数低于声明数，因部分声明位于默认（local）profile 未启用的特性门控之后。
 
 用 `scripts/stats.sh` 刷新这些数字（加 `--check` 作为 CI 门禁：README 漂移时非零退出）。
 

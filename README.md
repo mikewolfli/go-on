@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.5.3
+  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.6.0
 </p>
 
 <p align="center">
@@ -23,7 +23,7 @@
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
 [![Providers](https://img.shields.io/badge/providers-37-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
-[![LOC](https://img.shields.io/badge/code-260K-blue)]()
+[![LOC](https://img.shields.io/badge/code-270K-blue)]()
 
 ## What is go-on?
 
@@ -37,7 +37,7 @@ go-on is a **local-first**, production-grade **AI agent orchestration runtime** 
 - 🔌 Connect AI models to MCP servers or act as an MCP server yourself
 - 🛡️ Enforce governance policies with RBAC, audit trails, and risk assessment
 - 📊 Monitor sub-agent executions and command outputs in real-time via SSE panels
-- 🧩 Extend via VS Code extension, Skill Marketplace (34 skills), or Rust/Python/TypeScript SDK
+- 🧩 Extend via VS Code extension, Skill Marketplace (35 skills), or Rust/Python/TypeScript SDK
 
 ## Quick Start
 
@@ -104,7 +104,7 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **Cross-entry parity** — consistent stop_reason and round count across ACP/CLI/MCP
 
 ### Tool System
-- **108 built-in tools** — read/write/search/apply_patch/run_tests/inspect_git_diff/shell_exec/http_request/grep/search_files/git/cargo_check/cargo_test/list_directory/file_move/file_delete/compress/decompress/date_time/dns_lookup/ping/port_scan/skill_list/skill_execute + CAD/3D/GIS/barcode/SVG/office/image processing + document parsers (PDF/DOCX/PPT/HTML/Markdown/Excel)
+- **121 built-in tools** — read/write/search/apply_patch/run_tests/inspect_git_diff/shell_exec/http_request/grep/search_files/git/cargo_check/cargo_test/list_directory/file_move/file_delete/compress/decompress/date_time/dns_lookup/ping/port_scan/skill_list/skill_execute + CAD/3D/GIS/barcode/SVG/office/image processing + document parsers (PDF/DOCX/PPT/HTML/Markdown/Excel) + game/save/modding tools
 - **Tool pipeline** — serial/parallel/conditional execution with error handling
 - **Dynamic tool recommendation** — pattern + recency + co-occurrence based suggestions
 - **Mode-based tool restrictions** — allowed_tools and max_tool_calls enforced per mode
@@ -120,9 +120,10 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **Content safety checking** — SafeGuard mode for AI-powered risk assessment
 
 ### Performance
-- **Fast sub-second startup** — Reduced redundant SQLite initialization; HTTP server binds port in seconds
+- **Fast sub-second startup** — reduced redundant SQLite initialization; HTTP server binds port in seconds
+- **Concurrent execution** — role-based BinaryHeap dequeue (O(log n)), semaphore backpressure
 - **SSE buffer pool** — zero-allocation streaming event serialization
-- **DAG Join timeout** — prevents single slow tool from stalling the pipeline
+- **DAG Join timeout** — prevents a single slow tool from stalling the pipeline
 
 ### Resilience
 - **Fault-tolerance recovery** — 5 real recovery actions (RestartNode, FailoverToBackup, ScaleUp, Rebalance, NotifyOperator) dispatched by `FaultToleranceEngine`
@@ -156,8 +157,8 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **OTel** — distributed tracing via OTLP collector (default: `localhost:4317`)
 - **Trilingual i18n** — English, Simplified Chinese, Traditional Chinese (~95% coverage across backend, GUI, VS Code)
 
-### Skill Marketplace (34 skills)
-- **Marketplace catalog**: 34 built-in skill entries — api-docs-generator, api-tester, architecture-diagrammer, changelog-generator, ci-pipeline-generator, classify-text, code-execution-sandbox, code-review, context-summarizer, data-pipeline-optimizer, data-transformer, dockerfile-generator, env-config-validator, error-recovery-planner, knowledge-retriever, log-analyzer, note-taking, performance-analyzer, progress-tracker, project-analyzer, prompt-optimizer, refactoring-advisor, regex-builder, security-auditor, self-reviewer, semantic-diff, skill-creator, sql-query-helper, summarize-text, task-planner, test-generator, translate-text, web-scraper, workflow-optimizer (list matches the `skills/` directory; several entries are merged display names, e.g. analyze-text←classify-text, conventional-commits-toolkit←changelog-generator)
+### Skill Marketplace (35 skills)
+- **Marketplace catalog**: 35 built-in skill entries — api-docs-generator, api-tester, architecture-diagrammer, changelog-generator, ci-pipeline-generator, classify-text, code-execution-sandbox, code-review, context-summarizer, data-pipeline-optimizer, data-transformer, dockerfile-generator, env-config-validator, error-recovery-planner, knowledge-retriever, log-analyzer, note-taking, performance-analyzer, progress-tracker, project-analyzer, prompt-optimizer, refactoring-advisor, regex-builder, security-auditor, self-reviewer, semantic-diff, skill-creator, sql-query-helper, summarize-text, task-planner, test-generator, translate-text, web-scraper, workflow-optimizer (list matches the `skills/` directory; several entries are merged display names, e.g. analyze-text←classify-text, conventional-commits-toolkit←changelog-generator)
 - **Import from GitHub/URL/local** — SkillImportStore fetches and validates SKILL.md manifests
 - **Auto-discovery** — `~/.agents/skills/` directory scanned on startup
 
@@ -280,14 +281,14 @@ npm run compile
 
 | Metric | Value |
 |:-------|:------|
-| Rust backend LOC | ~213K (450 modules) |
+| Rust backend LOC | ~223K (528 modules) |
 | GUI (EGUI) LOC | ~24K |
 | VS Code addon (TypeScript) LOC | ~17K |
 | SDK (Rust + Python + TypeScript) LOC | ~6K |
-| Built-in tools | 108 registered in ToolRegistry (+ feature-gated) |
+| Built-in tools | 121 registered in ToolRegistry (+ feature-gated) |
 | AI providers | 37 |
 | Skills in marketplace | 35 |
-| Unit tests | 1659 executed via `cargo test --lib` (+ integration suites; see Verification below) |
+| Unit tests | 1802 executed via `cargo test --lib` (+ integration suites; see Verification below) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 
 ## Build Profiles
@@ -318,7 +319,7 @@ cargo build --no-default-features --features full
 
 All 4 build profiles compile with zero clippy warnings. The latest full `cargo test --all-targets` run passes every suite with zero failures (see the latest section of `CHANGELOG.md` for the current counts). The GUI and VS Code addon also compile cleanly with zero errors.
 
-The lib figure in the statistics table is the **executed** count measured via `cargo test --lib` (latest: **1,659 passed / 0 failed**). Declaration counts (`#[test]` / `#[tokio::test(...)]`) are **1,737 in `src/`** and **160 in `tests/`** (integration, excluding the `chaos-testing`-feature-gated `chaos_drill` suite of 6); the executed count is lower than the declaration count because some declarations sit behind feature gates not enabled in the default (local) profile.
+The lib figure in the statistics table is the **executed** count measured via `cargo test --lib` (latest: **1,802 passed / 0 failed**). Declaration counts (`#[test]` / `#[tokio::test(...)]`) are **1,875 in `src/`** and **160 in `tests/`** (integration, excluding the `chaos-testing`-feature-gated `chaos_drill` suite of 6); the executed count is lower than the declaration count because some declarations sit behind feature gates not enabled in the default (local) profile.
 
 Refresh these numbers with `scripts/stats.sh` (add `--check` as a CI gate: it exits non-zero when README.md has drifted).
 

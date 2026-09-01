@@ -357,10 +357,17 @@ pub struct AlertManagerStats {
 static ALERT_MANAGER: std::sync::OnceLock<Arc<StdMutex<AlertManager>>> = std::sync::OnceLock::new();
 
 /// Get or initialize the global AlertManager.
+///
+/// Single shared initialization: `alert_manager` (borrowed view) and
+/// `shared_alert_manager` (Arc clone) previously duplicated the `get_or_init`
+/// construction verbatim.
+fn global_alert_manager() -> &'static Arc<StdMutex<AlertManager>> {
+    ALERT_MANAGER.get_or_init(|| Arc::new(StdMutex::new(AlertManager::new(default_alert_rules()))))
+}
+
+/// Borrow the process-global AlertManager.
 pub fn alert_manager() -> &'static StdMutex<AlertManager> {
-    ALERT_MANAGER
-        .get_or_init(|| Arc::new(StdMutex::new(AlertManager::new(default_alert_rules()))))
-        .as_ref()
+    global_alert_manager().as_ref()
 }
 
 /// Get an `Arc` handle to the process-global AlertManager.
@@ -369,9 +376,7 @@ pub fn alert_manager() -> &'static StdMutex<AlertManager> {
 /// alert consumption hit the same instance (previously two separate instances
 /// meant memory alerts were written to a manager nobody read).
 pub fn shared_alert_manager() -> Arc<StdMutex<AlertManager>> {
-    ALERT_MANAGER
-        .get_or_init(|| Arc::new(StdMutex::new(AlertManager::new(default_alert_rules()))))
-        .clone()
+    global_alert_manager().clone()
 }
 
 #[cfg(test)]

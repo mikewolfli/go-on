@@ -35,7 +35,10 @@ providers=$(grep -c 'ProviderSpec {' src/core/providers.rs | tr -d ' ')
 skills=$(ls skills | wc -l | tr -d ' ')
 # Registered tool count: every `register_with_profile(...)` call registers one
 # tool (feature-gated tools are included; the default profile enables fewer).
-tools=$(grep -c 'register_with_profile(' src/orchestration/tool/mod.rs | tr -d ' ')
+# Registrations live in the registration/ modules plus the feature-gated game
+# tools — counting only src/orchestration/tool/mod.rs would return 3.
+tools=$(grep -h 'register_with_profile(' src/orchestration/tool/registration/*.rs \
+  src/orchestration/tool/extended/game/mod.rs | wc -l | tr -d ' ')
 
 if [ "$RUN_TESTS" = 1 ]; then
   # Executed lib-test count: sum the "passed" figure across all test binaries.

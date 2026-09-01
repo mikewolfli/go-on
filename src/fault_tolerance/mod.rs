@@ -70,11 +70,11 @@ struct FaultToleranceSnapshot {
     heartbeats: HashMap<String, HeartbeatRecord>,
 }
 
-/// Persist snapshot to SQLite. Runs inside `spawn_blocking` — never call from
-/// async context directly.
-#[cfg(feature = "backend-sqlite")]
-fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
-    // Ensure parent directory exists
+/// Best-effort creation of a file's parent directory (warn-only on failure —
+/// persistence must not crash on a missing parent; the open/write below will
+/// surface the real error). Single shared implementation for the SQLite and
+/// JSON persistence arms (previously two byte-identical blocks).
+fn ensure_parent_dir_best_effort(path: &std::path::Path) {
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
             tracing::warn!(
@@ -84,6 +84,13 @@ fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
             );
         }
     }
+}
+
+/// Persist snapshot to SQLite. Runs inside `spawn_blocking` — never call from
+/// async context directly.
+#[cfg(feature = "backend-sqlite")]
+fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
+    ensure_parent_dir_best_effort(path);
 
     let conn = match rusqlite::Connection::open(path) {
         Ok(c) => c,
@@ -288,15 +295,7 @@ fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
 /// async context directly.
 #[cfg(not(feature = "backend-sqlite"))]
 fn persist_json(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            tracing::warn!(
-                "FaultToleranceEngine: failed to create parent dir {}: {}",
-                parent.display(),
-                e
-            );
-        }
-    }
+    ensure_parent_dir_best_effort(path);
 
     match serde_json::to_string_pretty(snapshot) {
         Ok(json) => {

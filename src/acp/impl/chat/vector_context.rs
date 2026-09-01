@@ -613,31 +613,52 @@ pub(crate) fn build_phase_summary(
     truncate_chars(&structured, max_chars)
 }
 
-fn collect_signal_lines(
-    messages: &[Message],
+/// Collect items (messages or lines) that contain any keyword, truncated to
+/// `max_chars`, capped at `limit`. Shared core of [`collect_signal_lines`] and
+/// [`collect_lines_from_text`] — the keyword match (case-insensitive contains
+/// OR case-sensitive contains) and the cap/truncate behavior were previously
+/// duplicated line-for-line.
+fn collect_matching_items<'a>(
+    items: impl Iterator<Item = &'a str>,
     keywords: &[&str],
     limit: usize,
     max_chars: usize,
 ) -> Vec<String> {
     let mut selected = Vec::new();
 
-    for message in messages.iter().rev() {
-        let text = message.content.trim();
-        if text.is_empty() {
+    for item in items {
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
             continue;
         }
-        let lower = text.to_ascii_lowercase();
-        if keywords
-            .iter()
-            .any(|keyword| lower.contains(&keyword.to_ascii_lowercase()) || text.contains(keyword))
-        {
-            selected.push(truncate_chars(text, max_chars));
+        let lower = trimmed.to_ascii_lowercase();
+        if keywords.iter().any(|keyword| {
+            lower.contains(&keyword.to_ascii_lowercase()) || trimmed.contains(keyword)
+        }) {
+            selected.push(truncate_chars(trimmed, max_chars));
         }
         if selected.len() >= limit {
             break;
         }
     }
 
+    selected
+}
+
+fn collect_signal_lines(
+    messages: &[Message],
+    keywords: &[&str],
+    limit: usize,
+    max_chars: usize,
+) -> Vec<String> {
+    // Walk messages newest-first, then restore chronological order: the
+    // retained lines are the LAST `limit` matches.
+    let mut selected = collect_matching_items(
+        messages.iter().rev().map(|m| m.content.as_str()),
+        keywords,
+        limit,
+        max_chars,
+    );
     selected.reverse();
     selected
 }
@@ -648,27 +669,7 @@ fn collect_lines_from_text(
     limit: usize,
     max_chars: usize,
 ) -> Vec<String> {
-    let mut selected = Vec::new();
-
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let lower = trimmed.to_ascii_lowercase();
-        if keywords.iter().any(|keyword| {
-            lower.contains(&keyword.to_ascii_lowercase()) || trimmed.contains(keyword)
-        }) {
-            selected.push(truncate_chars(trimmed, max_chars));
-        }
-
-        if selected.len() >= limit {
-            break;
-        }
-    }
-
-    selected
+    collect_matching_items(text.lines(), keywords, limit, max_chars)
 }
 
 fn parse_summary_field(text: &str, label: &str) -> Option<String> {

@@ -1,5 +1,14 @@
 # 更新日志
 
+## [1.6.0] - 2026-09-01
+
+### 版本升级 + 全项目精炼（多轮扫描 R63–R76）
+
+- 全平台版本统一为 **1.6.0**（workspace、GUI、VS Code 插件、rust/python/typescript SDK、crates、cookbook、README 徽章）。
+- **全项目去重合并（53 项修复）**：HTTP 状态短语表（3 处）、SSE 响应头（MCP/ACP）、JSON-RPC 错误构造（5 处）、URL 查询编码（3 处 + 多字节 UTF-8 截断修复）、控制模式映射、去重 helper（泛型化）、sha256_hex（2 实现）、信号行采集、依赖集构造（17 处）、AlertManager 单例、fault-tolerance 父目录创建等。
+- **接线/一致性修复**：MCP SSE 首次搜索自动建索引与模块文档一致（此前静默返回空结果）；hub HTTP 响应不再对 401/413/431 输出非标准短语；`status_text` 覆盖项目可能产生的全部状态码（补 408）。
+- 四个 profile（`local`/`simple-server`/`multi-users-server`/`full`）与 `cargo clippy --all-targets -D warnings` 零警告门禁全部保持。
+
 ## [1.5.3] - 2026-08-14
 
 ### 版本升级 + Zed agent-server 治理修复（2026-08-14，commit a25cfe0b）
