@@ -254,6 +254,11 @@ jobs:
       && inputs.publish_pages == 'true'
       && needs.validate.outputs.valid_count > '0'
     runs-on: ubuntu-latest
+    # Same concurrency group as docs.yml: both workflows deploy to the same
+    # Pages site, so serialize them to avoid racing the deployment API.
+    concurrency:
+      group: pages
+      cancel-in-progress: true
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
