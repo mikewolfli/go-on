@@ -560,7 +560,7 @@ async fn capability_bus_feedback(
             let phase_owned = phase_name.to_string();
             // Pre-allocate the second copy to avoid a clone inside the tuple constructor.
             let agent_owned2 = agent_owned.clone();
-            let phase_complete = format!("{}_complete", &phase_owned);
+            let phase_complete = format!("{}_complete", phase_owned);
             let _child = child_trace_context(trace, "evolve");
             tokio::spawn(async move {
                 cb.evolve(

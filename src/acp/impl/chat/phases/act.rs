@@ -189,7 +189,7 @@ pub(crate) async fn act_phase(
                         record_cache_bypass_for_execution();
                         TokenOutcome {
                             agent_entry: Some(
-                                json!({"agent": "cache", "ok": false, "refused": true, "level": format!("{level}")}),
+                                json!({"agent": "cache", "ok": false, "refused": true, "level": level}),
                             ),
                             ..Default::default()
                         }

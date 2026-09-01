@@ -270,7 +270,7 @@ impl Skill for PromptBasedSkill {
              3. The LLM provider configuration is missing from the config file.\n\
              Prompt template (first 120 chars): {}..",
             self.name,
-            &prompt.chars().take(120).collect::<String>()
+            prompt.chars().take(120).collect::<String>()
         )
     }
 }

@@ -277,7 +277,7 @@ pub fn show_sidebar(
                                     selected,
                                     format!(
                                         "\u{200B}{}\u{200B}{}",
-                                        idx, &chat.session_state.sessions[idx].name
+                                        idx, chat.session_state.sessions[idx].name
                                     ),
                                 );
                                 if resp.double_clicked() {

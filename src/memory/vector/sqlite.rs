@@ -652,8 +652,10 @@ impl VectorStore {
 
                 let embedding: Vec<f32> = match (embedding_blob, embedding_json) {
                     (Some(blob), _) => blob
-                        .chunks_exact(4)
-                        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| f32::from_le_bytes(*c))
                         .collect(),
                     (None, Some(json)) => match serde_json::from_str(&json) {
                         Ok(v) => v,

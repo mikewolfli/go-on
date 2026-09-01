@@ -372,11 +372,11 @@ impl SandboxExecutor {
     pub async fn apply_patch(&self, patch: &CodePatch) -> Result<u64, SandboxError> {
         // Check iteration budget — the decrement must not wrap: `fetch_sub(1)`
         // on an exhausted budget stores `u64::MAX`, silently re-enabling the
-        // cap for every later call. `fetch_update` returns `Err` once the
+        // cap for every later call. `try_update` returns `Err` once the
         // budget is zero, so exhaustion is permanent.
         let remaining =
             self.iteration_budget
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
                     if v == 0 {
                         None
                     } else {

@@ -355,7 +355,7 @@ mod tests {
                 .protocol_health
                 .write()
                 .expect("lock protocol_health for write");
-            for (_, v) in health.iter_mut() {
+            for v in health.values_mut() {
                 *v = false;
             }
         }

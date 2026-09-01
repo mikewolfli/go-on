@@ -44,8 +44,9 @@ impl Drop for ActiveGenerationGuard {
     fn drop(&mut self) {
         // NOTE: fetch_sub(1) wraps on 0 (unsigned overflow in release, panic in debug).
         // This would allow 18 quintillion concurrent generations if a double-free occurs.
-        // Use fetch_update with saturating_sub to safely clamp at zero instead of wrapping.
-        let _ = self.0.fetch_update(
+        // Use try_update (renamed from fetch_update) with saturating_sub to safely clamp
+        // at zero instead of wrapping.
+        let _ = self.0.try_update(
             std::sync::atomic::Ordering::Relaxed,
             std::sync::atomic::Ordering::Relaxed,
             |v| Some(v.saturating_sub(1)),
@@ -1383,9 +1384,7 @@ impl ChatView {
                                     // Zed-style: append to last Content segment or add new
                                     Self::append_segment(
                                         &mut m.segments,
-                                        crate::views::chat::types::MessageSegment::Content(
-                                            token,
-                                        ),
+                                        crate::views::chat::types::MessageSegment::Content(token),
                                     );
                                 }
                                 if !reasoning.is_empty() {

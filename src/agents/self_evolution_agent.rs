@@ -1068,7 +1068,7 @@ impl SelfEvolutionAgent {
                             if parts.len() >= 2 {
                                 lines[ln - 1] = format!(
                                     "    let _{}{}",
-                                    &parts[1],
+                                    parts[1],
                                     if parts.len() > 2 {
                                         let rest = parts[2..].join(" ");
                                         format!(" {}", rest)

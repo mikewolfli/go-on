@@ -31,43 +31,42 @@ pub(super) async fn handle_metrics_prometheus(server: &AcpServer) -> Result<Disp
     let status = server.get_status();
     let m = &status.metrics;
     let lines = vec![
-        format!("# HELP acp_review_gate_timeout_total ACP review gate timeout total"),
-        format!("# TYPE acp_review_gate_timeout_total counter"),
+        "# HELP acp_review_gate_timeout_total ACP review gate timeout total".to_string(),
+        "# TYPE acp_review_gate_timeout_total counter".to_string(),
         format!(
             "acp_review_gate_timeout_total {}",
             m.review_gate_timeout_total
         ),
-        format!("# HELP acp_review_gate_degraded_total ACP review gate degraded total"),
-        format!("# TYPE acp_review_gate_degraded_total counter"),
+        "# HELP acp_review_gate_degraded_total ACP review gate degraded total".to_string(),
+        "# TYPE acp_review_gate_degraded_total counter".to_string(),
         format!(
             "acp_review_gate_degraded_total {}",
             m.review_gate_degraded_total
         ),
-        format!(
-            "# HELP acp_review_gate_invalid_response_total ACP review gate invalid response total"
-        ),
-        format!("# TYPE acp_review_gate_invalid_response_total counter"),
+        "# HELP acp_review_gate_invalid_response_total ACP review gate invalid response total"
+            .to_string(),
+        "# TYPE acp_review_gate_invalid_response_total counter".to_string(),
         format!(
             "acp_review_gate_invalid_response_total {}",
             m.review_gate_invalid_response_total
         ),
-        format!("# HELP acp_chat_latency_seconds_count ACP chat latency sample count"),
-        format!("# TYPE acp_chat_latency_seconds_count counter"),
+        "# HELP acp_chat_latency_seconds_count ACP chat latency sample count".to_string(),
+        "# TYPE acp_chat_latency_seconds_count counter".to_string(),
         format!("acp_chat_latency_seconds_count {}", m.chat_requests_total),
-        format!("# HELP acp_agent_latency_seconds_count ACP agent latency sample count"),
-        format!("# TYPE acp_agent_latency_seconds_count counter"),
+        "# HELP acp_agent_latency_seconds_count ACP agent latency sample count".to_string(),
+        "# TYPE acp_agent_latency_seconds_count counter".to_string(),
         format!("acp_agent_latency_seconds_count {}", m.total_requests),
-        format!("# HELP acp_review_latency_seconds_count ACP review latency sample count"),
-        format!("# TYPE acp_review_latency_seconds_count counter"),
+        "# HELP acp_review_latency_seconds_count ACP review latency sample count".to_string(),
+        "# TYPE acp_review_latency_seconds_count counter".to_string(),
         format!("acp_review_latency_seconds_count {}", m.review_gate_total),
-        format!("# HELP go_on_chat_requests_total Total chat requests"),
-        format!("# TYPE go_on_chat_requests_total counter"),
+        "# HELP go_on_chat_requests_total Total chat requests".to_string(),
+        "# TYPE go_on_chat_requests_total counter".to_string(),
         format!("go_on_chat_requests_total {}", m.chat_requests_total),
-        format!("# HELP go_on_agent_failures_total Total agent failures"),
-        format!("# TYPE go_on_agent_failures_total counter"),
+        "# HELP go_on_agent_failures_total Total agent failures".to_string(),
+        "# TYPE go_on_agent_failures_total counter".to_string(),
         format!("go_on_agent_failures_total {}", m.failed_requests),
-        format!("# HELP go_on_review_gate_total Total review gates"),
-        format!("# TYPE go_on_review_gate_total counter"),
+        "# HELP go_on_review_gate_total Total review gates".to_string(),
+        "# TYPE go_on_review_gate_total counter".to_string(),
         format!("go_on_review_gate_total {}", m.review_gate_total),
     ];
     Ok(DispatchOutput::text(lines.join("\n") + "\n"))

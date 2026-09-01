@@ -295,18 +295,22 @@ impl eframe::App for GoOnApp {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let has_health = self.views.monitor_view.health.is_some();
-                        let status_color;
-                        let status_text;
-                        if !has_health {
-                            status_color = egui::Color32::from_rgb(180, 180, 60);
-                            status_text = self.i18n.t("app.connecting");
+                        let (status_color, status_text) = if !has_health {
+                            (
+                                egui::Color32::from_rgb(180, 180, 60),
+                                self.i18n.t("app.connecting"),
+                            )
                         } else if is_connected {
-                            status_color = egui::Color32::from_rgb(60, 180, 80);
-                            status_text = self.i18n.t("status.connected");
+                            (
+                                egui::Color32::from_rgb(60, 180, 80),
+                                self.i18n.t("status.connected"),
+                            )
                         } else {
-                            status_color = egui::Color32::from_rgb(220, 80, 80);
-                            status_text = self.i18n.t("status.disconnected");
-                        }
+                            (
+                                egui::Color32::from_rgb(220, 80, 80),
+                                self.i18n.t("status.disconnected"),
+                            )
+                        };
                         let pid_info = self
                             .connection
                             .backend_child
