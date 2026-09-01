@@ -73,26 +73,67 @@ struct HttpProcess {
 
 impl HttpProcess {
     fn spawn(mode: &str) -> Self {
-        let tmp = tempdir().expect("tempdir");
-        let cfg = tmp.path().join("config.toml");
-        write_echo_config(&cfg, mode);
+        // `find_free_port()` frees the port between selection and the child's
+        // bind. Under `cargo test --all-targets` every integration binary runs
+        // in parallel, so another spawned server can win the race: this child
+        // then exits with "address in use", and a later `wait_ready` connect
+        // can even hit a *different* server on that port (the observed flake
+        // in `mcp_raw_tcp_jsonrpc_roundtrip`). Detect the early exit / confirm
+        // the child actually bound the port, and respawn on a fresh port.
+        for _attempt in 0..3 {
+            let tmp = tempdir().expect("tempdir");
+            let cfg = tmp.path().join("config.toml");
+            write_echo_config(&cfg, mode);
 
-        let port = find_free_port();
-        let bind_addr = format!("127.0.0.1:{port}");
-        let child = Command::new(binary_path())
-            .arg("--config")
-            .arg(&cfg)
-            .arg("--protocol-mode")
-            .arg(mode)
-            .arg("--acp-http-bind")
-            .arg(&bind_addr)
-            .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("failed to spawn go-on");
-        Self { child, bind_addr }
+            let port = find_free_port();
+            let bind_addr = format!("127.0.0.1:{port}");
+            let mut child = Command::new(binary_path())
+                .arg("--config")
+                .arg(&cfg)
+                .arg("--protocol-mode")
+                .arg(mode)
+                .arg("--acp-http-bind")
+                .arg(&bind_addr)
+                .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("failed to spawn go-on");
+
+            // Wait for the child to either bind the port (connect succeeds
+            // while the child is still alive) or exit early (bind failure). A
+            // port holds exactly one listener, so connect-success + child-alive
+            // proves the child owns it; if the child dies within the settling
+            // window, the port belongs to another process and we retry.
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let mut bound = false;
+            loop {
+                if child.try_wait().ok().flatten().is_some() {
+                    break; // exited before binding — retry on a fresh port
+                }
+                if TcpStream::connect(&bind_addr).is_ok() {
+                    std::thread::sleep(Duration::from_millis(300));
+                    if child.try_wait().ok().flatten().is_none() {
+                        bound = true;
+                    }
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            if bound {
+                return Self { child, bind_addr };
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            tracing::warn!(
+                "spawn attempt for mode '{mode}' failed to bind {bind_addr}; retrying on a fresh port"
+            );
+        }
+        panic!("failed to spawn go-on (http mode '{mode}') after 3 attempts");
     }
 
     fn wait_ready(&self, timeout: Duration) {

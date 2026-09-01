@@ -94,6 +94,14 @@ jobs:
           cache: npm
           cache-dependency-path: vscode-addon/package-lock.json
 
+      - name: Install SDK (TypeScript) dependencies
+        # vscode-addon depends on `go-on-sdk-typescript` via `file:../sdk/typescript`,
+        # whose `prepare` script (`npm run build` → `tsc`) runs during the addon's
+        # `npm ci`. Without the SDK's own devDependencies installed first, that
+        # prepare fails with `tsc: not found` — the addon gate must install the
+        # SDK before the addon.
+        run: npm ci --prefix sdk/typescript
+
       - name: Install dependencies
         run: npm --prefix vscode-addon ci
       - name: Compile

@@ -326,7 +326,7 @@ minijinja = { version = "2", optional = true }
 zip = "2"
 tar = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-go-on-web-search = { path = "crates/go-on-web-search" }
+go-on-web-search = { path = "crates/go-on-web-search", version = "1.6.0" }
 schemars.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]

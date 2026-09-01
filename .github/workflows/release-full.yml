@@ -112,6 +112,9 @@ jobs:
       - name: Build VS Code addon
         shell: bash
         run: |
+          # The addon's `npm ci` runs the linked SDK's `prepare` (tsc); install
+          # the SDK's own devDependencies first so that build can succeed.
+          npm ci --prefix sdk/typescript
           cd vscode-addon
           npm ci
           npm run compile

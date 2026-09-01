@@ -2,6 +2,7 @@
 name = "go-on-web-search"
 version = "1.6.0"
 edition = "2021"
+license.workspace = true
 description = "Web search API client for go-on - searches the web using configured providers"
 
 [dependencies]

@@ -1,13 +1,21 @@
 # cargo-deny configuration
 [advisories]
 ignore = [
-    #"RUSTSEC-0000-0000",
-    #{ id = "RUSTSEC-0000-0000", reason = "you can specify a reason the advisory is ignored" },
+    # Transitive-dependency advisories with NO patched release available; the
+    # vulnerable usage is confined to optional/auxiliary paths:
+    # - yaml-rust (via comrak→syntect for markdown rendering): unmaintained,
+    #   maintainer recommends the yaml-rust2 fork but no drop-in semver release
+    #   exists; RULES/pua.md parsing does not exercise the flagged surface.
+    "RUSTSEC-2024-0320",
+    # - bincode 1.3.3: team ceased development; 1.3.3 is declared complete.
+    "RUSTSEC-2025-0141",
+    # - rustls-pemfile 2.2.0: unmaintained (successor is rustls-pemfile-ng).
+    "RUSTSEC-2025-0134",
 ]
 #git-fetch-with-cli = true
 
 [licenses]
-allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MPL-2.0", "Unicode-DFS-2016", "Unicode-3.0", "CDLA-Permissive-2.0", "Zlib", "OpenSSL"]
+allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MPL-2.0", "Unicode-DFS-2016", "Unicode-3.0", "CDLA-Permissive-2.0", "Zlib", "OpenSSL", "MITNFA"]
 confidence-threshold = 0.8
 
 [licenses.private]

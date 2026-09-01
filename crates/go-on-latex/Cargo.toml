@@ -2,6 +2,7 @@
 name = "go-on-latex"
 version = "1.6.0"
 edition = "2021"
+license.workspace = true
 description = "LaTeX math rendering for go-on - converts LaTeX expressions to SVG"
 
 [dependencies]
