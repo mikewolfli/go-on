@@ -82,21 +82,48 @@ impl Tool for CodeMetricsTool {
             });
         }
 
-        let mut all_metrics = Vec::new();
-        let mut total_lines = 0usize;
-
-        for path in &globber {
-            let metrics = analyze_file(path).unwrap_or_else(|e| {
-                json!({
-                    "file": path.to_string_lossy(),
-                    "error": e.to_string()
+        // Analyze files concurrently (bounded worker pool): up to 5,000 files
+        // were analyzed serially, each doing a capped read + line/complexity
+        // scan. Results keep the glob order (sorted by file index).
+        const METRICS_WORKERS: usize = 8;
+        let next_file = std::sync::atomic::AtomicUsize::new(0);
+        let (all_metrics, total_lines) = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..METRICS_WORKERS)
+                .map(|_| {
+                    s.spawn(|| {
+                        let mut out: Vec<(usize, Value)> = Vec::new();
+                        let mut lines = 0usize;
+                        loop {
+                            let idx = next_file.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(path) = globber.get(idx) else {
+                                break;
+                            };
+                            let metrics = analyze_file(path).unwrap_or_else(|e| {
+                                json!({
+                                    "file": path.to_string_lossy(),
+                                    "error": e.to_string()
+                                })
+                            });
+                            if let Some(n) = metrics.get("total_lines").and_then(|v| v.as_u64()) {
+                                lines += n as usize;
+                            }
+                            out.push((idx, metrics));
+                        }
+                        (out, lines)
+                    })
                 })
-            });
-            if let Some(lines) = metrics.get("total_lines").and_then(|v| v.as_u64()) {
-                total_lines += lines as usize;
+                .collect();
+            let mut all: Vec<(usize, Value)> = Vec::new();
+            let mut total = 0usize;
+            for handle in handles {
+                if let Ok((mut out, lines)) = handle.join() {
+                    all.append(&mut out);
+                    total += lines;
+                }
             }
-            all_metrics.push(metrics);
-        }
+            all.sort_by_key(|(idx, _)| *idx);
+            (all.into_iter().map(|(_, v)| v).collect::<Vec<_>>(), total)
+        });
 
         debug!(
             files = %all_metrics.len(),
@@ -246,28 +273,26 @@ fn estimate_max_function_size(content: &str, functions: &[&str]) -> usize {
             return 0;
         }
 
-        let mut max_size = 0usize;
-        for i in 0..fn_lines.len() {
-            let start = fn_lines[i];
-            let end = fn_lines.get(i + 1).copied().unwrap_or(lines.len());
-            let size = end.saturating_sub(start);
-            if size > max_size {
-                max_size = size;
-            }
-        }
-        max_size
+        max_function_size_between(&fn_lines, lines.len())
     } else {
-        let mut max_size = 0usize;
-        for i in 0..fn_line_numbers.len() {
-            let start = fn_line_numbers[i];
-            let end = fn_line_numbers.get(i + 1).copied().unwrap_or(lines.len());
-            let size = end.saturating_sub(start);
-            if size > max_size {
-                max_size = size;
-            }
-        }
-        max_size
+        max_function_size_between(&fn_line_numbers, lines.len())
     }
+}
+
+/// Largest gap between consecutive line markers (functions) up to the
+/// end-of-file line. Shared by both branches of `estimate_max_function_size`
+/// — the two loops were byte-identical.
+fn max_function_size_between(markers: &[usize], total_lines: usize) -> usize {
+    let mut max_size = 0usize;
+    for i in 0..markers.len() {
+        let start = markers[i];
+        let end = markers.get(i + 1).copied().unwrap_or(total_lines);
+        let size = end.saturating_sub(start);
+        if size > max_size {
+            max_size = size;
+        }
+    }
+    max_size
 }
 
 #[cfg(test)]

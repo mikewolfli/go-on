@@ -60,6 +60,26 @@ pub struct AccessSelection {
     pub selection_reason: &'static str,
 }
 
+impl AccessSelection {
+    /// Construct an access selection for an explicitly configured protocol
+    /// mode (single implementation shared by the four fixed-mode arms below).
+    fn fixed(
+        configured_mode: &str,
+        capability: ProtocolCapability,
+        dispatch: RequestDispatchMode,
+        transport: TransportMode,
+    ) -> Self {
+        Self {
+            configured_mode: configured_mode.to_string(),
+            protocol_capability: capability,
+            request_dispatch_mode: dispatch,
+            startup_transport: transport,
+            transport_strategy: "fixed_from_config",
+            selection_reason: "configured_explicit_mode",
+        }
+    }
+}
+
 pub fn normalize_protocol_mode(raw: &str) -> Option<&'static str> {
     ProtocolMode::parse_canonical(raw)
 }
@@ -124,38 +144,30 @@ pub fn resolve_access_selection(
                 }
             }
         }
-        "acp_stdio" => AccessSelection {
-            configured_mode: "acp_stdio".to_string(),
-            protocol_capability: ProtocolCapability::AcpOnly,
-            request_dispatch_mode: RequestDispatchMode::Acp,
-            startup_transport: TransportMode::Stdio,
-            transport_strategy: "fixed_from_config",
-            selection_reason: "configured_explicit_mode",
-        },
-        "acp_http" => AccessSelection {
-            configured_mode: "acp_http".to_string(),
-            protocol_capability: ProtocolCapability::AcpOnly,
-            request_dispatch_mode: RequestDispatchMode::Acp,
-            startup_transport: TransportMode::Http,
-            transport_strategy: "fixed_from_config",
-            selection_reason: "configured_explicit_mode",
-        },
-        "mcp_stdio" => AccessSelection {
-            configured_mode: "mcp_stdio".to_string(),
-            protocol_capability: ProtocolCapability::McpOnly,
-            request_dispatch_mode: RequestDispatchMode::Mcp,
-            startup_transport: TransportMode::Stdio,
-            transport_strategy: "fixed_from_config",
-            selection_reason: "configured_explicit_mode",
-        },
-        "mcp_http" => AccessSelection {
-            configured_mode: "mcp_http".to_string(),
-            protocol_capability: ProtocolCapability::McpOnly,
-            request_dispatch_mode: RequestDispatchMode::Mcp,
-            startup_transport: TransportMode::Http,
-            transport_strategy: "fixed_from_config",
-            selection_reason: "configured_explicit_mode",
-        },
+        "acp_stdio" => AccessSelection::fixed(
+            "acp_stdio",
+            ProtocolCapability::AcpOnly,
+            RequestDispatchMode::Acp,
+            TransportMode::Stdio,
+        ),
+        "acp_http" => AccessSelection::fixed(
+            "acp_http",
+            ProtocolCapability::AcpOnly,
+            RequestDispatchMode::Acp,
+            TransportMode::Http,
+        ),
+        "mcp_stdio" => AccessSelection::fixed(
+            "mcp_stdio",
+            ProtocolCapability::McpOnly,
+            RequestDispatchMode::Mcp,
+            TransportMode::Stdio,
+        ),
+        "mcp_http" => AccessSelection::fixed(
+            "mcp_http",
+            ProtocolCapability::McpOnly,
+            RequestDispatchMode::Mcp,
+            TransportMode::Http,
+        ),
         other => {
             warn!(
                 "unknown protocol mode '{}' — falling back to adaptive",

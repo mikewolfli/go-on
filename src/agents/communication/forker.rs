@@ -2,19 +2,20 @@
 //!
 //! Collects parent agent runtime state and creates ForkContext snapshots
 //! that child agents inherit: conversation summary, active principles,
-//! allowed file paths, inherited memories, and KV cache fingerprints.
+//! allowed file paths, and inherited memories.
 //!
 //! Architecture:
 //! - `ContextForker::fork()` is the single entry point for context inheritance.
-//! - Integrates with `KvCacheProvider` for model-specific cache reuse.
 //! - Produces `ForkContext` instances consumed by `SpawnAgentTool`.
+//!
+//! `fork()` always carries the full parent context: the BLUE70 §6.2 KV-cache
+//! reuse extension point (provider trait + fingerprint storage) was removed —
+//! it had no setter, no implementor and no reader, so its branch was dead in
+//! practice.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
-#[cfg(test)]
-use crate::agents::communication::context::NoOpKvCacheProvider;
-use crate::agents::communication::context::{ForkContext, KvCacheProvider};
+use crate::agents::communication::context::ForkContext;
 use crate::agents::communication::path::AgentPath;
 
 /// Context forking configuration.
@@ -28,8 +29,6 @@ pub struct ForkOptions {
     pub inherit_base_dir: bool,
     /// Whether to inherit the parent's memory summaries.
     pub inherit_memories: bool,
-    /// Whether to attempt KV cache reuse.
-    pub try_kv_cache_reuse: bool,
 }
 
 impl Default for ForkOptions {
@@ -39,7 +38,6 @@ impl Default for ForkOptions {
             inherit_principles: true,
             inherit_base_dir: true,
             inherit_memories: true,
-            try_kv_cache_reuse: true,
         }
     }
 }
@@ -49,14 +47,6 @@ impl Default for ForkOptions {
 /// Collects parent agent state and produces ForkContext snapshots
 /// that child agents use to inherit relevant runtime context.
 pub struct ContextForker {
-    /// Optional KV cache provider for cache reuse.
-    ///
-    /// BLUE70 §6.2 kv-cache reuse is not wired: there is no setter that ever
-    /// installs a provider, so `kv_cache_provider` is always `None` and the
-    /// `try_kv_cache_reuse` branch in `fork()` never executes — production
-    /// always forks with the full parent context (the fingerprint/attach path
-    /// below is dead in practice).
-    kv_cache_provider: Option<Arc<dyn KvCacheProvider>>,
     /// Default forking options.
     default_options: ForkOptions,
 }
@@ -65,7 +55,6 @@ impl ContextForker {
     /// Create a new ContextForker.
     pub fn new() -> Self {
         Self {
-            kv_cache_provider: None,
             default_options: ForkOptions::default(),
         }
     }
@@ -119,20 +108,6 @@ impl ContextForker {
         if opts.inherit_memories {
             for m in &parent_ctx.memories {
                 ctx = ctx.add_memory(m);
-            }
-        }
-
-        // Attempt KV cache reuse (BLUE70 §6.2).
-        // Never reached in production: `kv_cache_provider` is always None (no
-        // setter exists), so fork() always carries the full parent context.
-        if opts.try_kv_cache_reuse {
-            if let Some(ref provider) = self.kv_cache_provider {
-                let fingerprint = provider.cache_fingerprint();
-                if let Some(ref fp) = fingerprint {
-                    if provider.try_attach_cache(fp) {
-                        ctx = ctx.with_kv_cache_fingerprint(fp.clone());
-                    }
-                }
             }
         }
 
@@ -247,13 +222,6 @@ mod tests {
         let ctx = forker.quick_fork(&parent, &child);
         assert_eq!(ctx.parent_path, child);
         assert!(ctx.is_empty());
-    }
-
-    #[test]
-    fn test_noop_kv_provider() {
-        let provider = NoOpKvCacheProvider;
-        assert!(provider.cache_fingerprint().is_none());
-        assert!(!provider.try_attach_cache("test_fp"));
     }
 
     #[test]

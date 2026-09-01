@@ -2,44 +2,12 @@
 //!
 //! Captures a snapshot of the parent agent's runtime state so child agents
 //! inherit relevant context: conversation summary, active principles,
-//! allowed file paths, inherited memories, and KV cache fingerprints.
+//! allowed file paths, and inherited memories.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::agents::communication::path::AgentPath;
-
-// ── BLUE70 §6.2: Generic KV cache provider interface ───────────────
-
-/// Generic KV cache provider for prefix-based cache reuse across models.
-///
-/// Each model provider implements this trait to advertise cache fingerprints
-/// and attempt to attach cached prefixes:
-/// - DeepSeekProvider → native prefix caching
-/// - AnthropicProvider → Prompt Caching API
-/// - CacheBlendProvider → CacheBlend technique
-pub trait KvCacheProvider: Send + Sync {
-    /// Return the current cache fingerprint, if available.
-    fn cache_fingerprint(&self) -> Option<String>;
-    /// Try to attach a previously computed cache by fingerprint.
-    /// Returns true if the cache was successfully attached.
-    fn try_attach_cache(&self, fingerprint: &str) -> bool;
-}
-
-/// No-op KV cache provider that always returns None / false.
-/// Used as a default when no model-specific provider is configured.
-#[cfg(test)]
-pub struct NoOpKvCacheProvider;
-
-#[cfg(test)]
-impl KvCacheProvider for NoOpKvCacheProvider {
-    fn cache_fingerprint(&self) -> Option<String> {
-        None
-    }
-    fn try_attach_cache(&self, _fingerprint: &str) -> bool {
-        false
-    }
-}
 
 // ── ForkContext ───────────────────────────────────────────────────
 
@@ -47,7 +15,6 @@ impl KvCacheProvider for NoOpKvCacheProvider {
 ///
 /// Design notes:
 /// - Parent path is preserved for lineage tracing.
-/// - KV cache fingerprint uses a generic interface (not DeepSeek-specific).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForkContext {
     /// Parent agent's path in the agent tree.
@@ -60,8 +27,6 @@ pub struct ForkContext {
     pub allowed_base_dir: Option<PathBuf>,
     /// Inherited memory summaries (not full vector embeddings).
     pub inherited_memories: Vec<String>,
-    /// KV cache fingerprint — generic interface for cache reuse.
-    pub kv_cache_fingerprint: Option<String>,
 }
 
 impl ForkContext {
@@ -73,7 +38,6 @@ impl ForkContext {
             principles: Vec::new(),
             allowed_base_dir: None,
             inherited_memories: Vec::new(),
-            kv_cache_fingerprint: None,
         }
     }
 
@@ -101,19 +65,12 @@ impl ForkContext {
         self
     }
 
-    /// Set KV cache fingerprint.
-    pub fn with_kv_cache_fingerprint(mut self, fingerprint: String) -> Self {
-        self.kv_cache_fingerprint = Some(fingerprint);
-        self
-    }
-
     /// Whether this context has any inheritable state.
     pub fn is_empty(&self) -> bool {
         self.conversation_summary.is_none()
             && self.principles.is_empty()
             && self.allowed_base_dir.is_none()
             && self.inherited_memories.is_empty()
-            && self.kv_cache_fingerprint.is_none()
     }
 }
 
@@ -135,8 +92,7 @@ mod tests {
             .with_conversation_summary("Research completed".to_string())
             .add_principle("be concise")
             .add_principle("use evidence")
-            .add_memory("user prefers rust")
-            .with_kv_cache_fingerprint("fp_abc123".to_string());
+            .add_memory("user prefers rust");
 
         assert!(!ctx.is_empty());
         assert_eq!(
@@ -145,6 +101,5 @@ mod tests {
         );
         assert_eq!(ctx.principles.len(), 2);
         assert_eq!(ctx.inherited_memories.len(), 1);
-        assert_eq!(ctx.kv_cache_fingerprint.as_deref(), Some("fp_abc123"));
     }
 }

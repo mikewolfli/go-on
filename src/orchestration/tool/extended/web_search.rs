@@ -42,8 +42,8 @@ impl Tool for WebSearchTool {
 
         // Use the shared blocking runtime to run the async search synchronously.
         // Always uses the dedicated runtime to avoid block_on on an async thread;
-        // the guard serializes concurrent sync `run()` calls on the shared
-        // current-thread runtime.
+        // the multi-thread runtime allows concurrent sync `run()` calls to run
+        // in parallel.
         let result = crate::orchestration::tool::exec_common::with_blocking_runtime(|rt| {
             rt.block_on(self.search_impl(&query, max_results))
         })?;

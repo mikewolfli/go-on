@@ -16,13 +16,17 @@ use super::tcp_write_timeout;
 pub(crate) const SSE_FLUSH_INTERVAL: usize = 4;
 
 /// Write SSE response headers (Content-Type: text/event-stream) to a socket.
+///
+/// `connection` selects the `Connection` header value: `"keep-alive"` for
+/// long-lived MCP SSE sessions, `"close"` for one-shot ACP SSE streams.
 pub(crate) async fn write_sse_headers(
     socket: &mut (impl tokio::io::AsyncWrite + Unpin),
+    connection: &str,
     extra_headers: &str,
 ) -> Result<()> {
     let header_bytes = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nX-Accel-Buffering: no\r\n{}\r\n",
-        extra_headers
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: {}\r\nX-Accel-Buffering: no\r\n{}\r\n",
+        connection, extra_headers
     );
     tcp_write_timeout(socket, header_bytes.as_bytes()).await?;
     Ok(())
@@ -70,10 +74,13 @@ pub(crate) async fn write_sse_raw_event(
 /// Flush pending SSE data to the socket.
 /// Call this periodically during streaming (e.g. every 10 events or every 10ms).
 pub(crate) async fn flush_sse(socket: &mut (impl tokio::io::AsyncWrite + Unpin)) -> Result<()> {
-    tokio::time::timeout(crate::shared::http_timeouts::SSE_FLUSH_TIMEOUT, socket.flush())
-        .await
-        .map_err(|_| anyhow::anyhow!("timeout flushing socket"))?
-        .map_err(|e| anyhow::anyhow!("socket flush error: {e}"))?;
+    tokio::time::timeout(
+        crate::shared::http_timeouts::SSE_FLUSH_TIMEOUT,
+        socket.flush(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("timeout flushing socket"))?
+    .map_err(|e| anyhow::anyhow!("socket flush error: {e}"))?;
     Ok(())
 }
 

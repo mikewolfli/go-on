@@ -495,6 +495,9 @@ impl DocumentParser {
 
         let mut content = ParsedContent::default();
         let mut text_parts: Vec<String> = Vec::new();
+        // Embedded media (images/drawings) is not yet extracted; count + log
+        // the skips so the limitation is observable instead of silent.
+        let mut skipped_media: usize = 0;
 
         for child in docx.document.children {
             match child {
@@ -575,9 +578,21 @@ impl DocumentParser {
                     }
                     content.tables.push(table);
                 }
-                // Images / drawings — skipped: image extraction is not yet implemented
-                _ => {}
+                // Images / drawings — not yet implemented. Counted and logged
+                // (not silently dropped) so callers can observe that embedded
+                // media was not extracted.
+                _ => skipped_media += 1,
             }
+        }
+
+        if skipped_media > 0 {
+            tracing::debug!(
+                skipped_media,
+                "docx parse: embedded images/drawings skipped (extraction not implemented)"
+            );
+            content
+                .metadata
+                .insert("images_skipped".to_string(), skipped_media.to_string());
         }
 
         content.text_content = text_parts.join("\n");

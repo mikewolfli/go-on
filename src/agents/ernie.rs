@@ -281,13 +281,7 @@ impl Agent for BaiduErnieAgent {
             ErnieApi::Wenxin => "wenxin",
             ErnieApi::Qianfan => "qianfan",
         };
-        if let Some(spec) = crate::core::providers::provider_spec_by_name(spec_name) {
-            for id in &spec.model_suggestions {
-                if !models.iter().any(|m| &m.id == id) {
-                    models.push(crate::shared::default_model_info(id, self.model == *id));
-                }
-            }
-        }
+        crate::agents::merge_spec_model_suggestions(&mut models, spec_name, &self.model);
 
         models
     }

@@ -398,6 +398,195 @@ pub(crate) fn blocking_client() -> &'static reqwest::blocking::Client {
     })
 }
 
+/// Parsed HTTP request parts shared by the sync and async execution paths —
+/// single implementation for method/headers/auth/query handling (previously
+/// the two paths carried ~110 lines of near-identical request building).
+struct HttpRequestParts {
+    url: String,
+    method: String,
+    body: Option<String>,
+    headers: Vec<(String, String)>,
+    bearer: Option<String>,
+    query: Vec<(String, String)>,
+    timeout_ms: u64,
+}
+
+/// Extract the common request parts from the tool input (after the URL has
+/// been resolved and validated by the caller).
+fn parse_http_request_parts(input: &ToolInput, url: String) -> Result<HttpRequestParts> {
+    let method = input.payload["method"]
+        .as_str()
+        .unwrap_or("GET")
+        .to_string();
+    let body = input.payload["body"].as_str().map(|s| s.to_string());
+
+    let timeout_ms = input.payload["timeout_ms"]
+        .as_u64()
+        .or_else(|| {
+            std::env::var("GO_ON_HTTP_TIMEOUT_MS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+        })
+        .unwrap_or(15_000);
+
+    let mut headers = Vec::new();
+    if let Some(headers_obj) = input.payload["headers"].as_object() {
+        for (key, value) in headers_obj {
+            if let Some(val_str) = value.as_str() {
+                headers.push((key.clone(), val_str.to_string()));
+            }
+        }
+    }
+
+    let bearer = input.payload["auth"]
+        .as_object()
+        .and_then(|auth_obj| auth_obj.get("bearer").and_then(Value::as_str))
+        .map(|s| s.to_string());
+
+    let mut query = Vec::new();
+    if let Some(query_obj) = input.payload["query"].as_object() {
+        for (key, value) in query_obj {
+            let val_str = value
+                .as_str()
+                .map(|s| s.to_string())
+                .or_else(|| value.as_i64().map(|n| n.to_string()))
+                .or_else(|| value.as_f64().map(|n| n.to_string()))
+                .unwrap_or_default();
+            query.push((key.clone(), val_str));
+        }
+    }
+
+    Ok(HttpRequestParts {
+        url,
+        method,
+        body,
+        headers,
+        bearer,
+        query,
+        timeout_ms,
+    })
+}
+
+/// Map an HTTP method string to a `reqwest::Method`, preserving the original
+/// unsupported-method error message.
+fn request_method(method: &str) -> Result<reqwest::Method> {
+    match method.to_uppercase().as_str() {
+        "GET" => Ok(reqwest::Method::GET),
+        "POST" => Ok(reqwest::Method::POST),
+        "PUT" => Ok(reqwest::Method::PUT),
+        "DELETE" => Ok(reqwest::Method::DELETE),
+        "PATCH" => Ok(reqwest::Method::PATCH),
+        "HEAD" => Ok(reqwest::Method::HEAD),
+        "OPTIONS" => Ok(reqwest::Method::OPTIONS),
+        other => anyhow::bail!(
+            "{}",
+            tf("error.unsupported_http_method", &[("method", other)])
+        ),
+    }
+}
+
+/// Common request-builder operations implemented by both the async and the
+/// blocking reqwest builders, so the sync/async tool paths share one build step.
+trait RequestBuilderOps {
+    fn body(self, body: String) -> Self;
+    fn header(self, name: reqwest::header::HeaderName, value: reqwest::header::HeaderValue)
+        -> Self;
+    fn bearer_auth(self, token: &str) -> Self;
+    fn query(self, pairs: &[(String, String)]) -> Self;
+    fn timeout(self, duration: Duration) -> Self;
+}
+
+impl RequestBuilderOps for reqwest::RequestBuilder {
+    fn body(self, body: String) -> Self {
+        self.body(body)
+    }
+    fn header(
+        self,
+        name: reqwest::header::HeaderName,
+        value: reqwest::header::HeaderValue,
+    ) -> Self {
+        self.header(name, value)
+    }
+    fn bearer_auth(self, token: &str) -> Self {
+        self.bearer_auth(token)
+    }
+    fn query(self, pairs: &[(String, String)]) -> Self {
+        self.query(pairs)
+    }
+    fn timeout(self, duration: Duration) -> Self {
+        self.timeout(duration)
+    }
+}
+
+impl RequestBuilderOps for reqwest::blocking::RequestBuilder {
+    fn body(self, body: String) -> Self {
+        self.body(body)
+    }
+    fn header(
+        self,
+        name: reqwest::header::HeaderName,
+        value: reqwest::header::HeaderValue,
+    ) -> Self {
+        self.header(name, value)
+    }
+    fn bearer_auth(self, token: &str) -> Self {
+        self.bearer_auth(token)
+    }
+    fn query(self, pairs: &[(String, String)]) -> Self {
+        self.query(pairs)
+    }
+    fn timeout(self, duration: Duration) -> Self {
+        self.timeout(duration)
+    }
+}
+
+/// Clients that can build a request for a method + URL (async and blocking
+/// reqwest clients share the same `request` shape).
+trait HttpClientLike {
+    type Builder: RequestBuilderOps;
+    fn request(&self, method: reqwest::Method, url: &str) -> Self::Builder;
+}
+
+impl HttpClientLike for reqwest::Client {
+    type Builder = reqwest::RequestBuilder;
+    fn request(&self, method: reqwest::Method, url: &str) -> Self::Builder {
+        self.request(method, url)
+    }
+}
+
+impl HttpClientLike for reqwest::blocking::Client {
+    type Builder = reqwest::blocking::RequestBuilder;
+    fn request(&self, method: reqwest::Method, url: &str) -> Self::Builder {
+        self.request(method, url)
+    }
+}
+
+/// Build the request (method match + body + headers + bearer + query + timeout)
+/// once for both execution paths.
+fn build_request<C: HttpClientLike>(client: &C, parts: &HttpRequestParts) -> Result<C::Builder> {
+    let method = request_method(&parts.method)?;
+    let mut builder = client.request(method, &parts.url);
+    if let Some(body) = &parts.body {
+        builder = builder.body(body.clone());
+    }
+    builder = builder.timeout(Duration::from_millis(parts.timeout_ms));
+    for (key, value) in &parts.headers {
+        if let (Ok(header_name), Ok(header_value)) = (
+            reqwest::header::HeaderName::from_bytes(key.as_bytes()),
+            reqwest::header::HeaderValue::from_str(value),
+        ) {
+            builder = builder.header(header_name, header_value);
+        }
+    }
+    if let Some(bearer) = &parts.bearer {
+        builder = builder.bearer_auth(bearer);
+    }
+    if !parts.query.is_empty() {
+        builder = builder.query(&parts.query);
+    }
+    Ok(builder)
+}
+
 pub struct HttpRequestTool;
 
 impl Tool for HttpRequestTool {
@@ -432,114 +621,16 @@ impl Tool for HttpRequestTool {
                 e
             })?;
 
-            let method = input.payload["method"]
-                .as_str()
-                .unwrap_or("GET")
-                .to_string();
-            let body = input.payload["body"].as_str().map(|s| s.to_string());
+            let parts = parse_http_request_parts(&input, url)?;
+            let method = parts.method.clone();
 
-            // ── 3. Timeout ────────────────────────────────────────────
-            let timeout_ms = input.payload["timeout_ms"]
-                .as_u64()
-                .or_else(|| {
-                    std::env::var("GO_ON_HTTP_TIMEOUT_MS")
-                        .ok()
-                        .and_then(|v| v.parse::<u64>().ok())
-                })
-                .unwrap_or(15_000);
-
-            debug!(method = %method, url = %url, timeout_ms = %timeout_ms, "http_request: executing");
+            debug!(method = %method, url = %parts.url, timeout_ms = %parts.timeout_ms, "http_request: executing");
 
             // ── 4. Max response size (from UrlPolicyConfig, LAYER 3) ──
             let max_response_bytes: usize = url_policy().max_response_bytes;
 
             let client = http_client();
-
-            let mut request_builder: reqwest::RequestBuilder = match method.to_uppercase().as_str()
-            {
-                "GET" => client.get(&url),
-                "POST" => {
-                    let mut builder = client.post(&url);
-                    if let Some(ref body_text) = body {
-                        builder = builder.body(body_text.clone());
-                    }
-                    builder
-                }
-                "PUT" => {
-                    let mut builder = client.put(&url);
-                    if let Some(ref body_text) = body {
-                        builder = builder.body(body_text.clone());
-                    }
-                    builder
-                }
-                "DELETE" => {
-                    let mut builder = client.delete(&url);
-                    if let Some(ref body_text) = body {
-                        builder = builder.body(body_text.clone());
-                    }
-                    builder
-                }
-                "PATCH" => {
-                    let mut builder = client.patch(&url);
-                    if let Some(ref body_text) = body {
-                        builder = builder.body(body_text.clone());
-                    }
-                    builder
-                }
-                "HEAD" => client.head(&url),
-                "OPTIONS" => {
-                    let mut builder = client.request(reqwest::Method::OPTIONS, &url);
-                    if let Some(ref body_text) = body {
-                        builder = builder.body(body_text.clone());
-                    }
-                    builder
-                }
-                other => {
-                    anyhow::bail!(
-                        "{}",
-                        tf("error.unsupported_http_method", &[("method", other)])
-                    );
-                }
-            };
-
-            // Per-request timeout on the pooled client.
-            request_builder = request_builder.timeout(Duration::from_millis(timeout_ms));
-
-            // ── 5. Custom headers ─────────────────────────────────────
-            if let Some(headers_obj) = input.payload["headers"].as_object() {
-                for (key, value) in headers_obj {
-                    if let Some(val_str) = value.as_str() {
-                        if let (Ok(header_name), Ok(header_value)) = (
-                            reqwest::header::HeaderName::from_bytes(key.as_bytes()),
-                            reqwest::header::HeaderValue::from_str(val_str),
-                        ) {
-                            request_builder = request_builder.header(header_name, header_value);
-                        }
-                    }
-                }
-            }
-
-            // ── 6. Bearer auth ────────────────────────────────────────
-            if let Some(auth_obj) = input.payload["auth"].as_object() {
-                if let Some(bearer_token) = auth_obj.get("bearer").and_then(Value::as_str) {
-                    request_builder = request_builder.bearer_auth(bearer_token);
-                }
-            }
-
-            // ── 7. Query parameters ───────────────────────────────────
-            if let Some(query_obj) = input.payload["query"].as_object() {
-                let mut query_pairs: Vec<(String, String)> = Vec::new();
-                for (key, value) in query_obj {
-                    let val_str = value
-                        .as_str()
-                        .map(|s| s.to_string())
-                        .or_else(|| value.as_i64().map(|n| n.to_string()))
-                        .or_else(|| value.as_f64().map(|n| n.to_string()))
-                        .unwrap_or_default();
-                    query_pairs.push((key.clone(), val_str));
-                }
-                request_builder = request_builder.query(&query_pairs);
-            }
+            let request_builder: reqwest::RequestBuilder = build_request(client, &parts)?;
 
             // ── 8. Execute request (async) ────────────────────────────
             let response = request_builder
@@ -563,7 +654,7 @@ impl Tool for HttpRequestTool {
                         "http_request BLOCKED (response too large): declared {} bytes > {} max — url={}",
                         declared,
                         max_bytes,
-                        url
+                        parts.url
                     );
                     anyhow::bail!(
                         "{}",
@@ -608,7 +699,7 @@ impl Tool for HttpRequestTool {
                     "http_request BLOCKED (response too large): {} bytes > {} max — url={}",
                     body_bytes.len(),
                     max_bytes,
-                    url
+                    parts.url
                 );
                 return Err(e);
             }
@@ -620,7 +711,7 @@ impl Tool for HttpRequestTool {
             debug!(
                 "http_request AUDIT: {} {} -> {} ({} bytes, success={})",
                 method,
-                url,
+                parts.url,
                 status,
                 response_body.len(),
                 success
@@ -631,7 +722,7 @@ impl Tool for HttpRequestTool {
                 result: Some(serde_json::json!({
                     "status": status,
                     "body": response_body,
-                    "url": url,
+                    "url": parts.url,
                     "method": method,
                 })),
                 error: (!success).then(|| format!("HTTP status {}", status)),
@@ -639,7 +730,7 @@ impl Tool for HttpRequestTool {
                 audit_log: Some(format!(
                     "HTTP {} {} -> {} ({} bytes)",
                     method,
-                    url,
+                    parts.url,
                     status,
                     response_body.len()
                 )),
@@ -668,101 +759,11 @@ impl HttpRequestTool {
             e
         })?;
 
-        let method = input.payload["method"].as_str().unwrap_or("GET");
-        let body = input.payload["body"].as_str();
-
-        let timeout_ms = input.payload["timeout_ms"]
-            .as_u64()
-            .or_else(|| {
-                std::env::var("GO_ON_HTTP_TIMEOUT_MS")
-                    .ok()
-                    .and_then(|v| v.parse::<u64>().ok())
-            })
-            .unwrap_or(15_000);
+        let parts = parse_http_request_parts(input, url)?;
+        let method = parts.method.clone();
 
         let client = blocking_client();
-
-        let mut request_builder = match method.to_uppercase().as_str() {
-            "GET" => client.get(&url),
-            "POST" => {
-                let mut builder = client.post(&url);
-                if let Some(body_text) = body {
-                    builder = builder.body(body_text.to_string());
-                }
-                builder
-            }
-            "PUT" => {
-                let mut builder = client.put(&url);
-                if let Some(body_text) = body {
-                    builder = builder.body(body_text.to_string());
-                }
-                builder
-            }
-            "DELETE" => {
-                let mut builder = client.delete(&url);
-                if let Some(body_text) = body {
-                    builder = builder.body(body_text.to_string());
-                }
-                builder
-            }
-            "PATCH" => {
-                let mut builder = client.patch(&url);
-                if let Some(body_text) = body {
-                    builder = builder.body(body_text.to_string());
-                }
-                builder
-            }
-            "HEAD" => client.head(&url),
-            "OPTIONS" => {
-                let mut builder = client.request(reqwest::Method::OPTIONS, &url);
-                if let Some(body_text) = body {
-                    builder = builder.body(body_text.to_string());
-                }
-                builder
-            }
-            other => {
-                anyhow::bail!(
-                    "{}",
-                    tf("error.unsupported_http_method", &[("method", other)])
-                );
-            }
-        };
-
-        // Per-request timeout on the pooled blocking client.
-        request_builder = request_builder.timeout(Duration::from_millis(timeout_ms));
-
-        if let Some(headers_obj) = input.payload["headers"].as_object() {
-            for (key, value) in headers_obj {
-                if let Some(val_str) = value.as_str() {
-                    if let (Ok(header_name), Ok(header_value)) = (
-                        reqwest::header::HeaderName::from_bytes(key.as_bytes()),
-                        reqwest::header::HeaderValue::from_str(val_str),
-                    ) {
-                        request_builder = request_builder.header(header_name, header_value);
-                    }
-                }
-            }
-        }
-
-        if let Some(auth_obj) = input.payload["auth"].as_object() {
-            if let Some(bearer_token) = auth_obj.get("bearer").and_then(Value::as_str) {
-                request_builder = request_builder.bearer_auth(bearer_token);
-            }
-        }
-
-        if let Some(query_obj) = input.payload["query"].as_object() {
-            let mut query_pairs: Vec<(String, String)> = Vec::new();
-            for (key, value) in query_obj {
-                let val_str = value
-                    .as_str()
-                    .map(|s| s.to_string())
-                    .or_else(|| value.as_i64().map(|n| n.to_string()))
-                    .or_else(|| value.as_f64().map(|n| n.to_string()))
-                    .unwrap_or_default();
-                query_pairs.push((key.clone(), val_str));
-            }
-            request_builder = request_builder.query(&query_pairs);
-        }
+        let request_builder = build_request(client, &parts)?;
 
         let response = request_builder.send().context("HTTP request failed")?;
         let status = response.status().as_u16();
@@ -771,7 +772,7 @@ impl HttpRequestTool {
         // Shared capped reader (content-length pre-check + `Read::take`), so
         // a huge response is never fully buffered.
         let mut response = response;
-        let body_bytes = read_blocking_body_capped(&mut response, &url)?;
+        let body_bytes = read_blocking_body_capped(&mut response, &parts.url)?;
         let response_body = String::from_utf8_lossy(&body_bytes).into_owned();
 
         let success = (200..400).contains(&status);
@@ -779,7 +780,7 @@ impl HttpRequestTool {
         debug!(
             "http_request AUDIT: {} {} -> {} ({} bytes, success={})",
             method,
-            url,
+            parts.url,
             status,
             response_body.len(),
             success
@@ -790,7 +791,7 @@ impl HttpRequestTool {
             result: Some(serde_json::json!({
                 "status": status,
                 "body": response_body,
-                "url": url,
+                "url": parts.url,
                 "method": method,
             })),
             error: (!success).then(|| format!("HTTP status {}", status)),
@@ -798,7 +799,7 @@ impl HttpRequestTool {
             audit_log: Some(format!(
                 "HTTP {} {} -> {} ({} bytes)",
                 method,
-                url,
+                parts.url,
                 status,
                 response_body.len()
             )),

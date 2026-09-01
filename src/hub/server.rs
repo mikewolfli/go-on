@@ -33,6 +33,7 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use super::discovery::HubDiscovery;
+use crate::acp::r#impl::runtime::http::status_text;
 use crate::mcp::error_codes::{INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR};
 
 /// Hub JSON-RPC server.
@@ -434,15 +435,9 @@ async fn handle_rpc(
 /// Write an HTTP JSON response.
 async fn write_json(stream: &mut TcpStream, status: u16, body: Value) -> Result<()> {
     let body_str = serde_json::to_string(&body)?;
-    let status_text = match status {
-        200 => "OK",
-        400 => "Bad Request",
-        405 => "Method Not Allowed",
-        _ => "Error",
-    };
     let response = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        status, status_text, body_str.len(), body_str
+        status, status_text(status), body_str.len(), body_str
     );
     stream.write_all(response.as_bytes()).await?;
     stream.flush().await?;

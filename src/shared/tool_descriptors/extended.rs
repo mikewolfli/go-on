@@ -4,7 +4,7 @@ use crate::mcp::McpTool;
 use serde_json::json;
 
 /// Returns the MCP tool descriptor for a known extended tool name, or `None`.
-pub(super) fn descriptor(name: &'static str) -> Option<McpTool> {
+pub(super) fn descriptor(name: &str) -> Option<McpTool> {
     match name {
         // ── Extended tools with full descriptors ────────────────
         "shell_exec" => Some(McpTool {
@@ -296,10 +296,10 @@ pub(super) fn descriptor(name: &'static str) -> Option<McpTool> {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "File path to read from"},
-                    "start_line": {"type": "integer", "description": "Starting line number (1-based)"},
-                    "end_line": {"type": "integer", "description": "Ending line number (inclusive)"}
+                    "start_line": {"type": "integer", "description": "First line number to read (1-based, inclusive)", "default": 1},
+                    "end_line": {"type": "integer", "description": "Last line number to read (1-based, inclusive)", "default": 50}
                 },
-                "required": ["path", "start_line", "end_line"]
+                "required": ["path"]
             })),
         }),
         "file_diff" => Some(McpTool {
@@ -388,7 +388,7 @@ pub(super) fn descriptor(name: &'static str) -> Option<McpTool> {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Path to the JSONL file"},
-                    "limit": {"type": "integer", "description": "Maximum number of lines to read (default: all)"}
+                    "limit": {"type": "integer", "description": "Maximum number of lines to read (default: 1000)"}
                 },
                 "required": ["path"]
             })),

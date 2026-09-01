@@ -54,12 +54,6 @@ pub struct HealthResponse {
     /// `runtime.health` exposes `stats` / `review_gate` / `timeouts` instead.
     #[serde(default)]
     pub metrics: Option<Value>,
-    /// Compatibility alias — the backend does not emit this field.
-    #[serde(default)]
-    pub status: Option<String>,
-    /// Compatibility alias — the backend does not emit this field.
-    #[serde(default)]
-    pub uptime_seconds: Option<u64>,
     /// Module health probes — present only on `runtime.health` (JSON-RPC);
     /// `GET /health` (ServerStatus) does not emit this field.
     #[serde(default)]

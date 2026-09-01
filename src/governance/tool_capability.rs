@@ -696,12 +696,6 @@ const TOOL_CLASSIFICATIONS: &[ToolClassification] = &[
         None,
     ),
     (
-        "game_online_status",
-        ToolOperation::Network,
-        GovernanceAction::Network,
-        None,
-    ),
-    (
         "goon_provider_test_connection",
         ToolOperation::Network,
         GovernanceAction::Network,
@@ -1067,12 +1061,6 @@ const TOOL_CLASSIFICATIONS: &[ToolClassification] = &[
     ),
     (
         "game_mod_install",
-        ToolOperation::Write,
-        GovernanceAction::Write,
-        None,
-    ),
-    (
-        "game_state_modify",
         ToolOperation::Write,
         GovernanceAction::Write,
         None,

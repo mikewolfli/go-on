@@ -308,68 +308,25 @@ impl DateTimeTool {
 }
 
 /// Format a Unix timestamp as ISO 8601 (e.g. "2024-01-15T10:30:00Z").
-/// Uses only stdlib date/time calculations.
 ///
-/// Input is clamped to a sane range (≈ 1970-01-01 .. 2239-01-01): a hostile
-/// u64::MAX timestamp would otherwise loop ~5.8e11 years (minute-scale hang).
+/// Converged on the single canonical epoch→date conversion
+/// (`security::security_advisor::unix_ts_to_ymd`, Hinnant O(1)); the previous
+/// day-loop here was the third copy of that logic (audit.rs / memory / this
+/// tool). Input is clamped to the same sane range the day-loop used
+/// (≈ 1970-01-01 .. 2239-01-01) so a hostile `u64::MAX` timestamp maps to the
+/// same ceiling as before.
 fn iso_from_unix(unix_secs: u64) -> String {
     const MAX_UNIX_SECS: u64 = 8_500_000_000; // ≈ 2239-01-01
-    let unix_secs = unix_secs.min(MAX_UNIX_SECS);
-    let days_since_epoch = unix_secs / 86400;
-    let remaining_secs = unix_secs % 86400;
-
+    let secs = unix_secs.min(MAX_UNIX_SECS) as i64;
+    let (y, m, d) = crate::security::security_advisor::unix_ts_to_ymd(secs);
+    let remaining_secs = secs.rem_euclid(86_400);
     let hours = remaining_secs / 3600;
     let minutes = (remaining_secs % 3600) / 60;
     let seconds = remaining_secs % 60;
-
-    // Compute year/month/day from days since 1970-01-01
-    let mut y = 1970i64;
-    let mut remaining_days = days_since_epoch as i64;
-
-    loop {
-        let days_this_year = if is_leap(y) { 366 } else { 365 };
-        if remaining_days < days_this_year {
-            break;
-        }
-        remaining_days -= days_this_year;
-        y += 1;
-    }
-
-    let year = y as u64;
-    let month_days = [
-        31,
-        if is_leap(y) { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-
-    let mut m = 1u64;
-    let mut day_of_month = remaining_days as u64 + 1;
-    for &md in &month_days {
-        if day_of_month > md {
-            day_of_month -= md;
-            m += 1;
-        } else {
-            break;
-        }
-    }
-
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, m, day_of_month, hours, minutes, seconds
+        y, m, d, hours, minutes, seconds
     )
-}
-
-fn is_leap(y: i64) -> bool {
-    y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
 }
 
 #[cfg(test)]

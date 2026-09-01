@@ -230,7 +230,11 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
         .to_ascii_lowercase();
     let infer_multi_user_from_target = matches!(
         deployment_target.as_str(),
-        "managed-service" | "managed_service" | "managed" | "multi-user-server"
+        "managed-service"
+            | "managed_service"
+            | "managed"
+            | "multi-user-server"
+            | "multi-users-server"
     );
 
     let explicit_server_mode = params

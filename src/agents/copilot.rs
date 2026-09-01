@@ -17,12 +17,26 @@ use tokio::time::sleep;
 use tracing::warn;
 
 use crate::agent::{resolve_secret, Agent, Message, ModelInfo};
-use crate::agents::agent::{
-    is_non_retryable_4xx, is_rate_limit_error, request_failed_msg, retry_backoff_secs,
-};
+use crate::agents::agent::{is_non_retryable_4xx, request_failed_msg, retry_backoff_secs};
 use crate::agents::{apply_openai_common_options, check_api_response, option_string};
 use crate::i18n::runtime::tf;
 use crate::orchestration::autonomy_runtime::build_model_used_token;
+
+/// Apply the retry-with-backoff decision for a transient failure.
+///
+/// Returns `true` when the same attempt budget remains (backoff sleep
+/// applied — retry the same model), `false` when the 3-attempt budget is
+/// exhausted (the caller moves to the next candidate / returns the recorded
+/// error). Previously the copilot chat loop inlined this decision in four
+/// near-identical branches.
+async fn retry_or_exhaust(attempt: u64) -> bool {
+    if attempt < 2 {
+        sleep(Duration::from_secs(retry_backoff_secs(attempt as u32))).await;
+        true
+    } else {
+        false
+    }
+}
 
 pub(crate) const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
 pub(crate) const COPILOT_MODELS_URL: &str = "https://api.githubcopilot.com/models";
@@ -561,56 +575,36 @@ impl Agent for CopilotAgent {
                         let err_text = err.to_string();
                         let err_text_lower = err_text.to_ascii_lowercase();
 
-                        // Non-retryable 4xx (except 429) → skip model or fail
-                        if is_non_retryable_4xx(&err_text_lower) {
-                            if is_auto {
-                                continue 'models;
-                            }
-                            return Err(err.into());
-                        }
-
-                        // Unsupported model (non-retryable) → skip model or fail
-                        if err_text_lower.contains("model_not_supported")
+                        // Fatal errors (non-retryable 4xx except 429, and
+                        // unsupported-model responses): auto mode moves to the
+                        // next candidate, an explicitly configured model fails
+                        // now. (The 4xx and unsupported branches were
+                        // byte-identical and are merged.)
+                        if is_non_retryable_4xx(&err_text_lower)
+                            || err_text_lower.contains("model_not_supported")
                             || err_text_lower.contains("not supported")
                         {
                             if is_auto {
-                                // Try next model
                                 continue 'models;
                             }
-                            // Non-auto: fail immediately
                             return Err(err.into());
                         }
 
-                        // Quota/rate-limit (transient) → retry with backoff
-                        if is_rate_limit_error(&err_text_lower) {
-                            if is_auto {
-                                // For auto mode with multiple candidates,
-                                // still try next model after exhausting retries
-                                if attempt < 2 {
-                                    last_error = Some(err);
-                                    sleep(Duration::from_secs(retry_backoff_secs(attempt as u32)))
-                                        .await;
-                                    continue;
-                                }
-                                continue 'models;
-                            }
-                            // Non-auto: retry with backoff
-                            if attempt < 2 {
-                                last_error = Some(err);
-                                sleep(Duration::from_secs(retry_backoff_secs(attempt as u32)))
-                                    .await;
-                            } else {
-                                last_error = Some(err);
-                            }
+                        // Rate-limit / other transient errors: retry the same
+                        // model with backoff for up to 3 attempts, then move to
+                        // the next candidate (auto) or exhaust the single
+                        // candidate (explicit). Rate-limit and generic
+                        // transient handling are behaviorally identical, so
+                        // they share one branch.
+                        last_error = Some(err);
+                        if retry_or_exhaust(attempt).await {
                             continue;
                         }
-                        // Transient error → retry
-                        if attempt < 2 {
-                            last_error = Some(err);
-                            sleep(Duration::from_secs(retry_backoff_secs(attempt as u32))).await;
-                        } else {
-                            last_error = Some(err);
+                        if is_auto {
+                            continue 'models;
                         }
+                        // Non-auto: attempt budget exhausted; `last_error` is
+                        // returned after the loops.
                     }
                 }
             }

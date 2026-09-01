@@ -48,6 +48,29 @@ fn invalid_params(msg: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(McpParamError(msg.into()))
 }
 
+/// Build a JSON-RPC error response echoing the request's id.
+///
+/// Single shared construction for the request-rejection paths (control
+/// characters, cancelled request, not-initialized, unknown method) —
+/// previously each inline block repeated the same 7-line struct literal.
+fn error_response(
+    id: Option<Value>,
+    code: i32,
+    message: impl Into<String>,
+    data: Option<Value>,
+) -> JsonRpcResponse {
+    JsonRpcResponse {
+        jsonrpc: JSONRPC_VERSION.to_string(),
+        result: None,
+        error: Some(JsonRpcError {
+            code,
+            message: message.into(),
+            data,
+        }),
+        id,
+    }
+}
+
 /// Human-readable text for an MCP tool result: prefers the structured
 /// payload's `message` string (set by the workflow tools), otherwise falls
 /// back to the serialized JSON payload.
@@ -252,16 +275,12 @@ impl McpServer {
         // logs without escaping, so C0/C1 control characters (especially
         // \n / \r) from an unauthenticated client could forge log lines.
         if request.method.chars().any(char::is_control) {
-            return Ok(JsonRpcResponse {
-                jsonrpc: JSONRPC_VERSION.to_string(),
-                result: None,
-                error: Some(JsonRpcError {
-                    code: super::error_codes::INVALID_REQUEST,
-                    message: "Method contains control characters".to_string(),
-                    data: None,
-                }),
-                id: request.id,
-            });
+            return Ok(error_response(
+                request.id,
+                super::error_codes::INVALID_REQUEST,
+                "Method contains control characters",
+                None,
+            ));
         }
         if let Some(Value::String(id_str)) = &request.id {
             if id_str.chars().any(char::is_control) {
@@ -270,16 +289,12 @@ impl McpServer {
                 // echoing lets the transport deliver the error instead of
                 // misclassifying it as a notification (which would make the
                 // client wait forever). The id is not logged here.
-                return Ok(JsonRpcResponse {
-                    jsonrpc: JSONRPC_VERSION.to_string(),
-                    result: None,
-                    error: Some(JsonRpcError {
-                        code: super::error_codes::INVALID_REQUEST,
-                        message: "Request id contains control characters".to_string(),
-                        data: None,
-                    }),
-                    id: request.id,
-                });
+                return Ok(error_response(
+                    request.id,
+                    super::error_codes::INVALID_REQUEST,
+                    "Request id contains control characters",
+                    None,
+                ));
             }
         }
 
@@ -291,16 +306,12 @@ impl McpServer {
                         json!({ "requestId": id }),
                         request.method.as_str(),
                     );
-                    return Ok(JsonRpcResponse {
-                        jsonrpc: JSONRPC_VERSION.to_string(),
-                        result: None,
-                        error: Some(JsonRpcError {
-                            code: error_code_for(&err),
-                            message: err.to_string(),
-                            data: Some(error_data),
-                        }),
-                        id: request.id,
-                    });
+                    return Ok(error_response(
+                        request.id,
+                        error_code_for(&err),
+                        err.to_string(),
+                        Some(error_data),
+                    ));
                 }
             }
         }
@@ -313,18 +324,14 @@ impl McpServer {
             let method = request.method.as_str();
             let allowed = ["initialize", "ping", "notifications/cancelled"];
             if !allowed.contains(&method) {
-                return Ok(JsonRpcResponse {
-                    jsonrpc: JSONRPC_VERSION.to_string(),
-                    result: None,
-                    error: Some(JsonRpcError {
-                        code: super::error_codes::SERVER_NOT_INITIALIZED,
-                        message: "Server not initialized. Send `initialize` first.".to_string(),
-                        data: Some(json!({
-                            "method": request.method,
-                        })),
-                    }),
-                    id: request.id,
-                });
+                return Ok(error_response(
+                    request.id,
+                    super::error_codes::SERVER_NOT_INITIALIZED,
+                    "Server not initialized. Send `initialize` first.",
+                    Some(json!({
+                        "method": request.method,
+                    })),
+                ));
             }
         }
 
@@ -559,16 +566,12 @@ impl McpServer {
                 warn!("MCP: unknown method '{}'", request.method);
                 let error_data =
                     inject_platform_profiles_if_absent(json!({}), "mcp.unknown_method");
-                return Ok(JsonRpcResponse {
-                    jsonrpc: JSONRPC_VERSION.to_string(),
-                    result: None,
-                    error: Some(JsonRpcError {
-                        code: super::error_codes::METHOD_NOT_FOUND,
-                        message: format!("Unknown method: {}", request.method),
-                        data: Some(error_data),
-                    }),
-                    id: request.id,
-                });
+                return Ok(error_response(
+                    request.id,
+                    super::error_codes::METHOD_NOT_FOUND,
+                    format!("Unknown method: {}", request.method),
+                    Some(error_data),
+                ));
             }
         };
 

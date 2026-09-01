@@ -32,6 +32,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::info;
 
+use crate::acp::r#impl::runtime::http::status_text;
 use crate::config::AppConfig;
 use crate::gateway::adapter::{InboundMessage, PlatformAdapter};
 use crate::gateway::ledger::DeliveryLedger;
@@ -372,17 +373,6 @@ async fn handle_connection(
             );
             write_error(&mut socket, 500, "internal error").await
         }
-    }
-}
-
-fn status_text(status: u16) -> &'static str {
-    match status {
-        200 => "OK",
-        400 => "Bad Request",
-        404 => "Not Found",
-        405 => "Method Not Allowed",
-        409 => "Conflict",
-        _ => "Internal Server Error",
     }
 }
 

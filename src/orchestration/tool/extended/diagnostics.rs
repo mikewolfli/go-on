@@ -31,24 +31,26 @@ impl Tool for DiagnosticsTool {
         debug!(directory = %directory, "tool: diagnostics");
 
         // Run `cargo check` (a command executor, so it goes through the OS
-        // sandbox) and capture stderr (where diagnostics appear).
-        let (output, _sandbox_applied) =
-            crate::orchestration::tool::exec_common::run_sandboxed_output(
-                &current_dir,
-                "cargo",
-                &["check".to_string(), "--message-format=short".to_string()],
-                |_| {},
-            )
-            .context("failed to execute `cargo check` — is cargo installed?")?;
+        // sandbox) and capture stderr (where diagnostics appear). Output is
+        // byte-capped like every other command tool — a large workspace's
+        // compiler output would otherwise be buffered unboundedly.
+        let output = crate::orchestration::tool::exec_common::run_sandboxed_capped(
+            &current_dir,
+            "cargo",
+            &["check".to_string(), "--message-format=short".to_string()],
+            crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+            |_| {},
+        )
+        .context("failed to execute `cargo check` — is cargo installed?")?;
 
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = output.stderr_lossy();
+        let stdout = output.stdout_lossy();
 
         // Count diagnostics by parsing lines with typical patterns.
         let error_count = stderr.lines().filter(|l| l.contains("error")).count();
         let warning_count = stderr.lines().filter(|l| l.contains("warning")).count();
 
-        let success = output.status.success();
+        let success = output.status == Some(0);
 
         // Collect relevant diagnostic lines (first 100 to avoid huge payloads).
         let diagnostic_lines: Vec<String> =
@@ -56,7 +58,7 @@ impl Tool for DiagnosticsTool {
 
         let result = serde_json::json!({
             "success": success,
-            "exit_code": output.status.code().unwrap_or(-1),
+            "exit_code": output.status.unwrap_or(-1),
             "error_count": error_count,
             "warning_count": warning_count,
             "diagnostics": diagnostic_lines,
@@ -91,7 +93,7 @@ impl Tool for DiagnosticsTool {
                 "diagnostics: {} errors, {} warnings, exit={}",
                 error_count,
                 warning_count,
-                output.status.code().unwrap_or(-1)
+                output.status.unwrap_or(-1)
             )),
             pua_report: Some(tool_execution_report(
                 "diagnostics",

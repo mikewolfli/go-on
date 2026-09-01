@@ -5,7 +5,7 @@ use crate::mcp::McpTool;
 use serde_json::json;
 
 /// Returns the MCP tool descriptor for a known build/ops tool name, or `None`.
-pub(super) fn descriptor(name: &'static str) -> Option<McpTool> {
+pub(super) fn descriptor(name: &str) -> Option<McpTool> {
     match name {
         // ── Build/lint/dependency tools (P1) ─────────────────────
         "build_run" => Some(McpTool {

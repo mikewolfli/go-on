@@ -99,6 +99,11 @@ pub struct SkillRegistry {
     /// excluded from model-facing discovery exactly like hidden skills.
     /// Runtime-only: the flag is not persisted across restarts.
     archived_skills: HashSet<String>,
+    /// M4.2 bundle configuration keyed by skill name (skills whose SKILL.md
+    /// carries a `[goon.bundle]` section): allowed-tools whitelist and
+    /// context fragments, parsed at discovery time and exposed through
+    /// [`Self::bundle_config`] / the skill descriptor.
+    bundles: HashMap<String, super::bundle::SkillBundleConfig>,
 }
 
 impl std::fmt::Debug for SkillRegistry {
@@ -142,6 +147,9 @@ pub struct SkillDescriptor {
     pub hidden: bool,
     /// Optional policy for implicit invocation and product gating.
     pub policy: Option<crate::orchestration::skill::execution::SkillPolicy>,
+    /// M4.2 bundle configuration (`[goon.bundle]` in the SKILL.md):
+    /// allowed-tools whitelist + context fragments. `None` for plain skills.
+    pub bundle: Option<super::bundle::SkillBundleConfig>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -280,6 +288,32 @@ impl SkillRegistry {
         self.validate_and_insert(skill, None)?;
         self.set_hidden(&name, true);
         Ok(())
+    }
+
+    /// Register the M4.2 bundle configuration (the `[goon.bundle]` table of a
+    /// SKILL.md) for a skill, keyed by the validated bundle name. The
+    /// allowed-tools whitelist and context fragments become queryable via
+    /// [`Self::bundle_config`] and appear on the skill descriptor / `skill_list`
+    /// output.
+    pub fn register_bundle_metadata(
+        &mut self,
+        config: super::bundle::SkillBundleConfig,
+    ) -> Result<()> {
+        validate_skill_name_rule(&config.name)?;
+        self.bundles.insert(config.name.clone(), config);
+        Ok(())
+    }
+
+    /// The bundle configuration for a skill, if its SKILL.md carries a
+    /// `[goon.bundle]` section.
+    pub fn bundle_config(&self, name: &str) -> Option<&super::bundle::SkillBundleConfig> {
+        self.bundles.get(name)
+    }
+
+    /// All registered bundle configurations keyed by skill name — the
+    /// observable view for tooling / status endpoints.
+    pub fn bundle_configs(&self) -> &HashMap<String, super::bundle::SkillBundleConfig> {
+        &self.bundles
     }
 
     /// Set the namespace for an already-registered skill.
@@ -486,6 +520,7 @@ impl SkillRegistry {
             self.provenances.remove(internal_name);
             self.namespaces.remove(internal_name);
             self.archived_skills.remove(internal_name);
+            self.bundles.remove(internal_name);
             // Persist the change if prompt skill persistence is enabled.
             if self.persistence_path.is_some() {
                 let _ = self.save_prompt_skills_to_disk();
@@ -571,6 +606,7 @@ impl SkillRegistry {
             provenance: self.provenances.get(name).cloned(),
             hidden,
             policy: skill.policy().cloned(),
+            bundle: self.bundles.get(name).cloned(),
         }
     }
 
@@ -804,9 +840,32 @@ impl SkillRegistry {
             policy,
         };
 
-        // Compute content digest from the raw SKILL.md bytes for provenance tracking
+        // Compute content digest from the raw SKILL.md bytes for provenance
+        // tracking, and parse the M4.2 `[goon.bundle]` section (if present) so
+        // bundled skills expose their allowed-tools whitelist + context
+        // fragments from discovery time.
         let content_digest = {
             let content = fs::read(&pf.md_path).unwrap_or_default();
+            if super::bundle::is_bundle_document(&String::from_utf8_lossy(&content)) {
+                match super::bundle::parse_bundle(&String::from_utf8_lossy(&content)) {
+                    Ok(config) => {
+                        if let Err(e) = self.register_bundle_metadata(config) {
+                            warn!(
+                                skill = %pf.manifest.name,
+                                error = %e,
+                                "failed to register bundle metadata for skill"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            skill = %pf.manifest.name,
+                            error = %e,
+                            "failed to parse [goon.bundle] section; skill registered without bundle config"
+                        );
+                    }
+                }
+            }
             Some(crate::shared::sha256_hex(&content))
         };
 
@@ -1301,18 +1360,25 @@ pub fn spawn_skill_refresh_task(
 /// stop-word list; `execution::tokenize_text` is the no-stop-word variant, so
 /// the two skill-module tokenizers share one rule (B3).
 pub fn tokenize(text: &str) -> HashSet<String> {
-    const STOP_WORDS: &[&str] = &[
-        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
-        "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "shall",
-        "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "through",
-        "during", "before", "after", "above", "below", "between", "out", "off", "over", "under",
-        "again", "further", "then", "once", "here", "there", "when", "where", "why", "how", "all",
-        "each", "every", "both", "few", "more", "most", "other", "some", "such", "no", "nor",
-        "not", "only", "own", "same", "so", "than", "too", "very", "just", "because", "but", "and",
-        "or", "if", "while", "that", "this", "these", "those", "it", "its",
-    ];
-    let stop_words: HashSet<&str> = STOP_WORDS.iter().copied().collect();
-    tokenize_with_stopwords(text, 3, &stop_words)
+    // Stop-word set is static: it was rebuilt (a ~90-element HashSet) on every
+    // call, and `discover_skills` calls this once per candidate skill.
+    static STOP_WORDS: std::sync::LazyLock<HashSet<&'static str>> =
+        std::sync::LazyLock::new(|| {
+            [
+                "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has",
+                "had", "do", "does", "did", "will", "would", "could", "should", "may", "might",
+                "can", "shall", "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
+                "into", "through", "during", "before", "after", "above", "below", "between", "out",
+                "off", "over", "under", "again", "further", "then", "once", "here", "there",
+                "when", "where", "why", "how", "all", "each", "every", "both", "few", "more",
+                "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so",
+                "than", "too", "very", "just", "because", "but", "and", "or", "if", "while",
+                "that", "this", "these", "those", "it", "its",
+            ]
+            .into_iter()
+            .collect()
+        });
+    tokenize_with_stopwords(text, 3, &STOP_WORDS)
         .into_iter()
         .collect()
 }
@@ -1333,6 +1399,51 @@ mod tests {
             disable_model_invocation: false,
             policy: None,
         })
+    }
+
+    /// M4.2: a SKILL.md with a `[goon.bundle]` section discovered from the
+    /// local skills directory registers the skill AND its bundle metadata
+    /// (allowed-tools whitelist + context fragments) at discovery time.
+    #[test]
+    fn discover_registers_bundle_metadata_from_bundled_skill() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let skill_dir = dir.path().join("demo-bundle");
+        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+        let mut md = std::fs::File::create(skill_dir.join("SKILL.md")).expect("create SKILL.md");
+        write!(
+            md,
+            "---\nname: demo-bundle\ndescription: demo bundled skill\n---\n\
+             # Body\n\
+             Do the thing.\n\
+             [goon.bundle]\n\
+             allowed_tools = [\"read_file\", \"search_files\"]\n\
+             context_fragments = [\"fragment one\"]\n"
+        )
+        .expect("write SKILL.md");
+
+        let mut registry = SkillRegistry::default();
+        let summary = registry
+            .discover_and_register_local_skills(Some(dir.path()))
+            .expect("discovery should succeed");
+        assert_eq!(summary.registered, 1, "bundled skill must register");
+
+        let bundle = registry
+            .bundle_config("demo-bundle")
+            .expect("bundle metadata must be parsed at discovery");
+        assert_eq!(bundle.allowed_tools, vec!["read_file", "search_files"]);
+        assert_eq!(bundle.context_fragments, vec!["fragment one"]);
+
+        // The descriptor (skill_list view) carries the whitelist.
+        let descriptor = registry
+            .descriptor("demo-bundle")
+            .expect("descriptor exists");
+        let bundle = descriptor.bundle.expect("descriptor carries bundle config");
+        assert_eq!(bundle.allowed_tools, vec!["read_file", "search_files"]);
+
+        // Unregister removes the bundle metadata too.
+        assert!(registry.unregister("demo-bundle"));
+        assert!(registry.bundle_config("demo-bundle").is_none());
     }
 
     #[test]

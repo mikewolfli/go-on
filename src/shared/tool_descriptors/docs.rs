@@ -4,7 +4,7 @@ use crate::mcp::McpTool;
 use serde_json::json;
 
 /// Returns the MCP tool descriptor for a known document/office tool name, or `None`.
-pub(super) fn descriptor(name: &'static str) -> Option<McpTool> {
+pub(super) fn descriptor(name: &str) -> Option<McpTool> {
     match name {
         // ── Document / office tools ────────────────────────────────
         "read_docx" => Some(McpTool {

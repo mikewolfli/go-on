@@ -291,7 +291,7 @@ impl TaskRouter {
         // Recommend safeguards
         let mut recommended_safeguards = Self::recommend_safeguards(characteristics, &risk_factors);
         recommended_safeguards.extend(pua_enforcement.mandatory_safeguards.clone());
-        crate::shared::vec_utils::dedupe_strings(&mut recommended_safeguards);
+        crate::shared::vec_utils::dedupe(&mut recommended_safeguards);
 
         RoutingDecision {
             roles,

@@ -1048,28 +1048,30 @@ impl Tool for ApplyCodeActionTool {
                 }
                 let dir = file_path.parent().unwrap_or_else(|| Path::new("."));
                 // clippy --fix mutates the workspace, so it runs inside the OS
-                // sandbox (workspace writable, host filesystem hidden).
-                let (output, _applied) =
-                    crate::orchestration::tool::exec_common::run_sandboxed_output(
-                        dir,
-                        "cargo",
-                        &[
-                            "clippy".to_string(),
-                            "--fix".to_string(),
-                            "--allow-dirty".to_string(),
-                            "--allow-staged".to_string(),
-                        ],
-                        |_| {},
-                    )
-                    .context("failed to run cargo clippy --fix")?;
+                // sandbox (workspace writable, host filesystem hidden). Output
+                // is byte-capped like every other command tool (clippy on a
+                // large workspace can emit megabytes of diagnostics).
+                let output = crate::orchestration::tool::exec_common::run_sandboxed_capped(
+                    dir,
+                    "cargo",
+                    &[
+                        "clippy".to_string(),
+                        "--fix".to_string(),
+                        "--allow-dirty".to_string(),
+                        "--allow-staged".to_string(),
+                    ],
+                    crate::orchestration::tool::exec_common::MAX_OUTPUT_BYTES,
+                    |_| {},
+                )
+                .context("failed to run cargo clippy --fix")?;
                 Ok(ToolOutput {
-                    success: output.status.success(),
+                    success: output.status == Some(0),
                     result: Some(json!({
                         "action": "auto_fix_diagnostic",
                         "path": file_path.to_string_lossy(),
-                        "exit_code": output.status.code(),
-                        "stdout": String::from_utf8_lossy(&output.stdout).to_string(),
-                        "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
+                        "exit_code": output.status,
+                        "stdout": output.stdout_lossy(),
+                        "stderr": output.stderr_lossy(),
                     })),
                     error: None,
                     verification: Some("code_action_applied".to_string()),

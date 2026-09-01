@@ -35,6 +35,22 @@ pub enum CircuitBreakerState {
 /// Short alias used throughout the engine.
 pub use self::CircuitBreakerState as CircuitState;
 
+impl CircuitBreakerState {
+    /// Wire-facing label for the state (single source of truth).
+    ///
+    /// Both the ACP snapshot registry (`acp::prelude::circuit_breaker`) and the
+    /// health endpoint (`acp::impl::request::health_pack`) previously mapped
+    /// the same enum with two different spellings (`"halfopen"` vs
+    /// `"half-open"`); this method is the single mapping.
+    pub fn as_label(self) -> &'static str {
+        match self {
+            CircuitBreakerState::Closed => "closed",
+            CircuitBreakerState::Open => "open",
+            CircuitBreakerState::HalfOpen => "half-open",
+        }
+    }
+}
+
 /// Health status of a monitored service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HealthStatus {

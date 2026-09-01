@@ -686,7 +686,7 @@ pub fn build_enforcement_plan(
     if has_safety_concerns || complexity >= 4 || lower.contains("review") {
         mandatory_roles.push(AgentRole::Reviewer);
     }
-    dedupe_roles(&mut mandatory_roles);
+    crate::shared::vec_utils::dedupe(&mut mandatory_roles);
 
     let mut safeguards = vec![
         "Reject placeholder implementations and empty TODO-only branches".to_string(),
@@ -905,7 +905,7 @@ pub fn merge_phase_principles(
         _ => principles.push("Delivery must include quality-compass coverage".to_string()),
     }
 
-    crate::shared::vec_utils::dedupe_strings(&mut principles);
+    crate::shared::vec_utils::dedupe(&mut principles);
     if principles.is_empty() {
         None
     } else {
@@ -985,16 +985,6 @@ pub fn review_gate_prompt() -> String {
 \
          Your job is just to confirm: did the user ask for this?"
         .to_string()
-}
-
-fn dedupe_roles(values: &mut Vec<AgentRole>) {
-    let mut deduped = Vec::new();
-    for value in values.drain(..) {
-        if !deduped.contains(&value) {
-            deduped.push(value);
-        }
-    }
-    *values = deduped;
 }
 
 fn parse_escalation_level(level: &str) -> u8 {

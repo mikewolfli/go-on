@@ -67,17 +67,6 @@ pub fn record_file_change(task_id: &str, phase: &str, event: &FileChangeEvent) {
     });
 }
 
-/// SHA-256 of `data` as a lowercase hex string.
-///
-/// Uses the `sha2` crate, already a direct dependency of this crate (0.11) —
-/// the same crate backing `crate::shared::sha256_hex`, the audit hash chain
-/// (`security::audit_integrity`) and the memory bus — so content hashing
-/// introduces no new dependency.
-pub fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    hex::encode(Sha256::digest(data))
-}
-
 /// Content hash of `path`, or `None` when the file does not exist.
 ///
 /// Reads are capped at [`MAX_HASH_FILE_BYTES`]; a file above the cap (or one
@@ -90,22 +79,12 @@ pub fn file_hash(path: &Path) -> Result<Option<String>> {
     }
     let data =
         crate::orchestration::tool::exec_common::read_file_capped(path, MAX_HASH_FILE_BYTES)?;
-    Ok(Some(sha256_hex(&data)))
+    Ok(Some(crate::shared::sha256_hex(&data)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sha256_hex_is_stable_and_distinguishes_inputs() {
-        let a = sha256_hex(b"hello world");
-        let b = sha256_hex(b"hello world");
-        let c = sha256_hex(b"hello worlD");
-        assert_eq!(a, b, "same bytes must hash identically");
-        assert_ne!(a, c, "different bytes must hash differently");
-        assert_eq!(a.len(), 64, "sha256 hex is 64 characters");
-    }
 
     #[test]
     fn file_hash_none_for_missing_some_for_existing() {
@@ -123,7 +102,7 @@ mod tests {
         let hash = file_hash(&path)
             .expect("existing file hashes to Ok(Some)")
             .expect("existing file yields Some hash");
-        assert_eq!(hash, sha256_hex(b"payload bytes"));
+        assert_eq!(hash, crate::shared::sha256_hex(b"payload bytes"));
     }
 
     #[test]

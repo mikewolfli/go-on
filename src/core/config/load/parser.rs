@@ -324,162 +324,99 @@ fn sync_legacy_flat_keys(cfg: &mut AppConfig, normalized: &str) {
     }
     let section_keys: HashSet<&str> = section_values.keys().copied().collect();
 
-    // All legacy top-level keys that mirror a [runtime] field.
-    const LEGACY_KEYS: &[&str] = &[
-        "entry_auth_enabled",
-        "entry_auth_api_key_env",
-        "entry_rate_limit_rpm",
-        "entry_rate_limit_burst",
-        "user_auth_enabled",
-        "user_auth_token_secret",
-        "user_auth_token_secret_env",
-        "user_auth_token_ttl_seconds",
-        "request_signing_enabled",
-        "request_signing_public_key",
-        "request_signing_hmac_secret",
-        "mtls_enabled",
-        "mtls_ca_cert_path",
-        "mtls_server_cert_path",
-        "mtls_server_key_path",
-        "mtls_require_client_cert",
-        "mtls_allowed_cns",
-        "governance_enabled",
-        "governance_policy_mode",
-        "skills_enabled",
-        "skills_import_enabled",
-        "skills_allowed_sources",
-        "skills_require_sha256",
-        "skills_allow_floating_ref",
-        "skills_cache_dir",
-        "enable_dag_execution",
-        "enable_agent_reroute",
-        "enable_metacognitive_feedback",
-        "enable_delphi_debate",
+    // All legacy top-level keys that mirror a [runtime] field, as one table:
+    // the key list and its sync rules live together (previously the
+    // `LEGACY_KEYS` presence list and the 29 per-key macro invocations were
+    // maintained separately and could drift). Each rule assigns
+    // `runtime.<field>` from the raw TOML value via serde round-trip — the
+    // same typed conversion the per-key macro used.
+    macro_rules! legacy_rules {
+        ($(($key:literal, $field:ident)),* $(,)?) => {
+            &[
+                $(LegacyKeyRule {
+                    key: $key,
+                    apply: |r: &mut crate::config::RuntimeConfig, v: &toml::Value| {
+                        let json = serde_json::to_value(v).unwrap_or_default();
+                        if let Ok(typed) = serde_json::from_value(json) {
+                            r.$field = typed;
+                        }
+                    },
+                }),*
+            ]
+        };
+    }
+    static LEGACY_SYNC_RULES: &[LegacyKeyRule] = legacy_rules![
+        // SecurityConfig -> RuntimeConfig
+        ("entry_auth_enabled", entry_auth_enabled),
+        ("entry_auth_api_key_env", entry_auth_api_key_env),
+        ("entry_rate_limit_rpm", entry_rate_limit_rpm),
+        ("entry_rate_limit_burst", entry_rate_limit_burst),
+        ("user_auth_enabled", user_auth_enabled),
+        ("user_auth_token_secret", user_auth_token_secret),
+        ("user_auth_token_secret_env", user_auth_token_secret_env),
+        ("user_auth_token_ttl_seconds", user_auth_token_ttl_seconds),
+        ("request_signing_enabled", request_signing_enabled),
+        ("request_signing_public_key", request_signing_public_key),
+        ("request_signing_hmac_secret", request_signing_hmac_secret),
+        ("mtls_enabled", mtls_enabled),
+        ("mtls_ca_cert_path", mtls_ca_cert_path),
+        ("mtls_server_cert_path", mtls_server_cert_path),
+        ("mtls_server_key_path", mtls_server_key_path),
+        ("mtls_require_client_cert", mtls_require_client_cert),
+        ("mtls_allowed_cns", mtls_allowed_cns),
+        // FeatureConfig -> RuntimeConfig
+        ("governance_enabled", governance_enabled),
+        ("governance_policy_mode", governance_policy_mode),
+        ("skills_enabled", skills_enabled),
+        ("skills_import_enabled", skills_import_enabled),
+        ("skills_allowed_sources", skills_allowed_sources),
+        ("skills_require_sha256", skills_require_sha256),
+        ("skills_allow_floating_ref", skills_allow_floating_ref),
+        ("skills_cache_dir", skills_cache_dir),
+        ("enable_dag_execution", enable_dag_execution),
+        ("enable_agent_reroute", enable_agent_reroute),
+        (
+            "enable_metacognitive_feedback",
+            enable_metacognitive_feedback
+        ),
+        ("enable_delphi_debate", enable_delphi_debate),
     ];
 
     // When no legacy key is present (top-level or inside [security]/[feature]
     // sections), leave cfg.runtime untouched (None stays None) so the config
     // shape is preserved for None-vs-Some callers.
-    if !LEGACY_KEYS
+    if !LEGACY_SYNC_RULES
         .iter()
-        .any(|key| top.contains_key(*key) || section_keys.contains(key))
+        .any(|rule| top.contains_key(rule.key) || section_keys.contains(rule.key))
     {
         return;
     }
 
     let runtime = cfg.runtime.get_or_insert_with(Default::default);
 
-    macro_rules! sync_from_legacy {
-        ($key:literal, $src:expr, $field:ident) => {
-            if (top.contains_key($key) || section_keys.contains($key))
-                && !runtime_explicit.contains($key)
+    for rule in LEGACY_SYNC_RULES {
+        // Top-level legacy layout wins; otherwise take the raw TOML value from
+        // the [security]/[feature] section (the flattened structs never
+        // received it). An explicit [runtime] key always wins over both.
+        if (top.contains_key(rule.key) || section_keys.contains(rule.key))
+            && !runtime_explicit.contains(rule.key)
+        {
+            if let Some(value) = top
+                .get(rule.key)
+                .or_else(|| section_values.get(rule.key).copied())
             {
-                // Top-level legacy layout wins; otherwise take the raw TOML
-                // value from the [security]/[feature] section (the flattened
-                // structs never received it, so `$src.$field` is the default).
-                let value = top.get($key).or_else(|| section_values.get($key).copied());
-                match value {
-                    Some(value) => {
-                        let json = serde_json::to_value(value).unwrap_or_default();
-                        // `typed`'s type is inferred from the assignment target
-                        // (`runtime.$field`), so the raw TOML value round-trips
-                        // into whatever runtime field type the key maps to.
-                        if let Ok(typed) = serde_json::from_value(json) {
-                            runtime.$field = typed;
-                        }
-                    }
-                    None => {
-                        runtime.$field = $src.$field.clone();
-                    }
-                }
+                (rule.apply)(runtime, value);
             }
-        };
+        }
     }
+}
 
-    // SecurityConfig -> RuntimeConfig
-    sync_from_legacy!("entry_auth_enabled", cfg.security, entry_auth_enabled);
-    sync_from_legacy!(
-        "entry_auth_api_key_env",
-        cfg.security,
-        entry_auth_api_key_env
-    );
-    sync_from_legacy!("entry_rate_limit_rpm", cfg.security, entry_rate_limit_rpm);
-    sync_from_legacy!(
-        "entry_rate_limit_burst",
-        cfg.security,
-        entry_rate_limit_burst
-    );
-    sync_from_legacy!("user_auth_enabled", cfg.security, user_auth_enabled);
-    sync_from_legacy!(
-        "user_auth_token_secret",
-        cfg.security,
-        user_auth_token_secret
-    );
-    sync_from_legacy!(
-        "user_auth_token_secret_env",
-        cfg.security,
-        user_auth_token_secret_env
-    );
-    sync_from_legacy!(
-        "user_auth_token_ttl_seconds",
-        cfg.security,
-        user_auth_token_ttl_seconds
-    );
-    sync_from_legacy!(
-        "request_signing_enabled",
-        cfg.security,
-        request_signing_enabled
-    );
-    sync_from_legacy!(
-        "request_signing_public_key",
-        cfg.security,
-        request_signing_public_key
-    );
-    sync_from_legacy!(
-        "request_signing_hmac_secret",
-        cfg.security,
-        request_signing_hmac_secret
-    );
-    sync_from_legacy!("mtls_enabled", cfg.security, mtls_enabled);
-    sync_from_legacy!("mtls_ca_cert_path", cfg.security, mtls_ca_cert_path);
-    sync_from_legacy!("mtls_server_cert_path", cfg.security, mtls_server_cert_path);
-    sync_from_legacy!("mtls_server_key_path", cfg.security, mtls_server_key_path);
-    sync_from_legacy!(
-        "mtls_require_client_cert",
-        cfg.security,
-        mtls_require_client_cert
-    );
-    sync_from_legacy!("mtls_allowed_cns", cfg.security, mtls_allowed_cns);
-
-    // FeatureConfig -> RuntimeConfig
-    sync_from_legacy!("governance_enabled", cfg.feature, governance_enabled);
-    sync_from_legacy!(
-        "governance_policy_mode",
-        cfg.feature,
-        governance_policy_mode
-    );
-    sync_from_legacy!("skills_enabled", cfg.feature, skills_enabled);
-    sync_from_legacy!("skills_import_enabled", cfg.feature, skills_import_enabled);
-    sync_from_legacy!(
-        "skills_allowed_sources",
-        cfg.feature,
-        skills_allowed_sources
-    );
-    sync_from_legacy!("skills_require_sha256", cfg.feature, skills_require_sha256);
-    sync_from_legacy!(
-        "skills_allow_floating_ref",
-        cfg.feature,
-        skills_allow_floating_ref
-    );
-    sync_from_legacy!("skills_cache_dir", cfg.feature, skills_cache_dir);
-    sync_from_legacy!("enable_dag_execution", cfg.feature, enable_dag_execution);
-    sync_from_legacy!("enable_agent_reroute", cfg.feature, enable_agent_reroute);
-    sync_from_legacy!(
-        "enable_metacognitive_feedback",
-        cfg.feature,
-        enable_metacognitive_feedback
-    );
-    sync_from_legacy!("enable_delphi_debate", cfg.feature, enable_delphi_debate);
+/// One legacy key → `[runtime]` field sync rule (see [`sync_legacy_flat_keys`]).
+struct LegacyKeyRule {
+    key: &'static str,
+    /// Assign the runtime field from the raw TOML value (serde round-trip,
+    /// target type inferred from the field).
+    apply: fn(&mut crate::config::RuntimeConfig, &toml::Value),
 }
 
 #[cfg(test)]

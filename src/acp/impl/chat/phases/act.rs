@@ -554,11 +554,58 @@ pub(crate) async fn act_phase(
         );
     }
 
-    // Persistence + post-execute verification — run for ALL successful execution
-    // paths (autonomy loop, fallback, or cache hit). Previously this was only
-    // reachable via the fallback branch, so autonomy-loop chats never persisted
-    // knowledge / checkpoints / distillation / vector memory.
+    // Stream completion events (telemetry + done) — emitted for ALL successful
+    // execution paths (autonomy loop, fallback, or cache hit) and BEFORE the
+    // persistence block, so the client sees `done` without waiting for the
+    // knowledge/checkpoint/summary persistence (a phase-summary LLM call could
+    // previously delay `done` by its full timeout even though every chunk was
+    // already sent). The high-risk vote path already emits chunk+done in-block.
+    //
+    // Persistence + post-execute verification run for the same paths, AFTER the
+    // events, and even when the stream events failed (client gone) — knowledge /
+    // checkpoints are never lost to a dropped connection.
+    let mut emit_err: Option<anyhow::Error> = None;
     if !selected_agent.is_empty() && !response_text.is_empty() && last_err.is_none() {
+        if let Some(ref observer) = stream_observer {
+            let meta = StreamEventMeta {
+                agent_name: &selected_agent,
+                phase_name: &resolve_out.phase_name,
+                trace_id: &trace.trace_id,
+                mode: Some(&params.mode),
+                risk_score: None,
+                degrade_policy: None,
+            };
+            if let Err(e) = emit_stream_token_economy(
+                server,
+                Some(observer),
+                meta,
+                &estimate_token_economy(&params.messages, &response_text),
+            )
+            .await
+            {
+                emit_err = Some(e);
+            } else if !emit_final_vote && !stream_done_emitted {
+                let total_chars = response_text.chars().count();
+                if let Err(e) = emit_stream_done(
+                    server,
+                    Some(observer),
+                    meta,
+                    1,
+                    total_chars,
+                    started.elapsed().as_millis() as u64,
+                    selected_model_name.clone(),
+                    Some(&response_text),
+                )
+                .await
+                {
+                    emit_err = Some(e);
+                }
+            }
+        }
+
+        // Persistence + post-execute verification. Previously this was only
+        // reachable via the fallback branch, so autonomy-loop chats never
+        // persisted knowledge / checkpoints / distillation / vector memory.
         let mut msgs = params.messages.clone();
         msgs.push(Message {
             role: "assistant".to_string(),
@@ -639,42 +686,10 @@ pub(crate) async fn act_phase(
         }
     }
 
-    // Stream completion events (telemetry + done) — emitted for ALL successful
-    // execution paths (autonomy loop, fallback, or cache hit). Previously these
-    // only fired inside the fallback branch, so autonomy-loop chats never sent
-    // telemetry/done. The high-risk vote path already emits chunk+done in-block.
-    if !selected_agent.is_empty() && !response_text.is_empty() && last_err.is_none() {
-        if let Some(ref observer) = stream_observer {
-            let meta = StreamEventMeta {
-                agent_name: &selected_agent,
-                phase_name: &resolve_out.phase_name,
-                trace_id: &trace.trace_id,
-                mode: Some(&params.mode),
-                risk_score: None,
-                degrade_policy: None,
-            };
-            emit_stream_token_economy(
-                server,
-                Some(observer),
-                meta,
-                &estimate_token_economy(&params.messages, &response_text),
-            )
-            .await?;
-            if !emit_final_vote && !stream_done_emitted {
-                let total_chars = response_text.chars().count();
-                emit_stream_done(
-                    server,
-                    Some(observer),
-                    meta,
-                    1,
-                    total_chars,
-                    started.elapsed().as_millis() as u64,
-                    selected_model_name.clone(),
-                    Some(&response_text),
-                )
-                .await?;
-            }
-        }
+    // Surface stream-emission failures after persistence ran (previously the
+    // `?` in the emit block skipped persistence on a dropped client).
+    if let Some(e) = emit_err {
+        return Err(e);
     }
 
     // Trace event — recorded for ALL successful execution paths (autonomy loop,

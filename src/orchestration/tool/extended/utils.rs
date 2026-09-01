@@ -198,7 +198,7 @@ impl Tool for EncodeDecodeTool {
                     .context("Failed to decode hex string")?;
                 String::from_utf8(bytes).context("Hex decoded data is not valid UTF-8")?
             }
-            "url_encode" => url::form_urlencoded::byte_serialize(input_str.as_bytes()).collect(),
+            "url_encode" => crate::shared::url_encode::form_url_encode(input_str),
             "url_decode" => percent_decode_url(input_str).context(
                 "Failed to URL-decode input: invalid UTF-8 or malformed percent encoding",
             )?,

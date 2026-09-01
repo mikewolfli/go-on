@@ -146,6 +146,16 @@ struct BundleTomlSection {
 /// The TOML table header that introduces the go-on bundle extension section.
 const BUNDLE_TABLE_HEADER: &str = "[goon.bundle]";
 
+/// Whether a SKILL.md carries a go-on bundle extension section.
+///
+/// Cheap line scan (no parse); callers use it to decide whether the file
+/// should be treated as a bundle before invoking the full [`parse_bundle`].
+pub fn is_bundle_document(skill_md: &str) -> bool {
+    skill_md
+        .lines()
+        .any(|line| line.trim() == BUNDLE_TABLE_HEADER)
+}
+
 /// Extract the raw YAML frontmatter (the text between the leading `---` and
 /// the closing `---` line) from a SKILL.md, if present. Mirrors the delimiter
 /// handling of `skill_import::parse_skill_md`.

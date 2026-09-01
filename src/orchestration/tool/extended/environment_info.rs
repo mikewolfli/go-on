@@ -52,13 +52,18 @@ impl Tool for EnvironmentInfoTool {
         let project_structure = summarize_directory(project_root);
 
         // ── Available tooling checks ──────────────────────────────────
-        let has_cargo = which("cargo");
-        let has_git = which("git");
-        let has_node = which("node");
-        let has_python = which("python3") || which("python");
-        let has_make = which("make");
-        let has_docker = which("docker");
-        let has_rustup = which("rustup");
+        // Single `which` invocation for all tools (previously seven serial
+        // subprocess spawns, one per tool).
+        let present = which_all(&[
+            "cargo", "git", "node", "python3", "python", "make", "docker", "rustup",
+        ]);
+        let has_cargo = present.contains("cargo");
+        let has_git = present.contains("git");
+        let has_node = present.contains("node");
+        let has_python = present.contains("python3") || present.contains("python");
+        let has_make = present.contains("make");
+        let has_docker = present.contains("docker");
+        let has_rustup = present.contains("rustup");
 
         let result = serde_json::json!({
             "os": {
@@ -107,13 +112,22 @@ impl Tool for EnvironmentInfoTool {
     }
 }
 
-/// Check if a command is available on PATH.
-fn which(name: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(name)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+/// Check which of the given commands are available on PATH with a single
+/// `which` invocation (each name printed on its own line when found).
+fn which_all(names: &[&str]) -> std::collections::HashSet<String> {
+    let mut found = std::collections::HashSet::new();
+    let output = std::process::Command::new("which").args(names).output();
+    if let Ok(output) = output {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let line = line.trim();
+            if let Some(name) = line.rsplit('/').next() {
+                if !name.is_empty() {
+                    found.insert(name.to_string());
+                }
+            }
+        }
+    }
+    found
 }
 
 /// Summarise the top-level entries of a directory.

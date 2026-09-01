@@ -69,11 +69,7 @@ fn health_status_label(status: crate::resilience::hyper_resilience::HealthStatus
 fn circuit_state_label(
     state: crate::resilience::hyper_resilience::CircuitBreakerState,
 ) -> &'static str {
-    match state {
-        crate::resilience::hyper_resilience::CircuitBreakerState::Closed => "closed",
-        crate::resilience::hyper_resilience::CircuitBreakerState::Open => "open",
-        crate::resilience::hyper_resilience::CircuitBreakerState::HalfOpen => "half-open",
-    }
+    state.as_label()
 }
 
 fn degradation_level_label(

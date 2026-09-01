@@ -498,7 +498,7 @@ async fn stream_openai_sse(
             .record_request_outcome(success, started.elapsed().as_millis() as f64);
     };
 
-    write_sse_headers(socket, cors_headers).await?;
+    write_sse_headers(socket, "close", cors_headers).await?;
     // Out-of-band SSE transport requires a plain TCP stream (fd clone); on the
     // TLS arm no out-of-band transport is set.
     let out_of_band_transport = if let HttpStream::Plain(plain) = socket {

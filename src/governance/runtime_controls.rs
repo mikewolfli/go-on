@@ -84,6 +84,30 @@ const ONLINE_CONTROLLER_BANDIT_EXPLORATION: f64 = 1.4;
 /// convention as the agent selector's DEFAULT_REPUTATION_SCORE).
 const DEFAULT_PHASE_RELIABILITY: f64 = 0.5;
 
+/// Push a signal into a bounded ring window, keeping the most recent
+/// [`ONLINE_CONTROLLER_WINDOW`] entries (`true` = failure).
+///
+/// Single shared implementation: `AgentSignalWindow::record` and
+/// `OnlineControllerState::record` previously duplicated the trim+push logic.
+fn push_signal(window: &mut VecDeque<bool>, success: bool) {
+    if window.len() >= ONLINE_CONTROLLER_WINDOW {
+        window.pop_front();
+    }
+    window.push_back(!success);
+}
+
+/// Fraction of failure entries (`true`) in a bounded signal window.
+///
+/// Single shared implementation: previously duplicated as
+/// `AgentSignalWindow::failure_rate` and `OnlineControllerState::failure_rate`.
+fn window_failure_rate(window: &VecDeque<bool>) -> f64 {
+    if window.is_empty() {
+        return 0.0;
+    }
+    let failures = window.iter().filter(|failed| **failed).count();
+    failures as f64 / window.len() as f64
+}
+
 #[derive(Debug, Default, Clone)]
 struct AgentSignalWindow {
     recent_failures: VecDeque<bool>,
@@ -124,25 +148,14 @@ impl PhaseBanditArm {
 
 impl AgentSignalWindow {
     fn record(&mut self, success: bool, duration_ms: u64) {
-        if self.recent_failures.len() >= ONLINE_CONTROLLER_WINDOW {
-            self.recent_failures.pop_front();
-        }
-        self.recent_failures.push_back(!success);
+        push_signal(&mut self.recent_failures, success);
 
         self.latency_estimator.record(duration_ms as f64);
         self.attempts = self.attempts.saturating_add(1);
     }
 
     fn failure_rate(&self) -> f64 {
-        if self.recent_failures.is_empty() {
-            return 0.0;
-        }
-        let failures = self
-            .recent_failures
-            .iter()
-            .filter(|failed| **failed)
-            .count();
-        failures as f64 / self.recent_failures.len() as f64
+        window_failure_rate(&self.recent_failures)
     }
 
     fn latency_p95_ms(&self) -> u64 {
@@ -201,10 +214,7 @@ impl OnlineControllerState {
     }
 
     pub(crate) fn record(&mut self, success: bool, duration_ms: u64) {
-        if self.recent_failures.len() >= ONLINE_CONTROLLER_WINDOW {
-            self.recent_failures.pop_front();
-        }
-        self.recent_failures.push_back(!success);
+        push_signal(&mut self.recent_failures, success);
 
         self.latency_estimator.record(duration_ms as f64);
     }
@@ -423,15 +433,7 @@ impl OnlineControllerState {
     }
 
     pub(crate) fn failure_rate(&self) -> f64 {
-        if self.recent_failures.is_empty() {
-            return 0.0;
-        }
-        let failures = self
-            .recent_failures
-            .iter()
-            .filter(|failed| **failed)
-            .count();
-        failures as f64 / self.recent_failures.len() as f64
+        window_failure_rate(&self.recent_failures)
     }
 
     pub(crate) fn latency_p95_ms(&self) -> u64 {

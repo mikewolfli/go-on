@@ -4,7 +4,7 @@ use crate::mcp::McpTool;
 use serde_json::json;
 
 /// Returns the MCP tool descriptor for a known image tool name, or `None`.
-pub(super) fn descriptor(name: &'static str) -> Option<McpTool> {
+pub(super) fn descriptor(name: &str) -> Option<McpTool> {
     match name {
         // ── Image tools ──────────────────────────────────────────────
         "image_analyze" => Some(McpTool {

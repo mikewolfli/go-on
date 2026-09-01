@@ -4,7 +4,7 @@
 
 use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
@@ -262,29 +262,53 @@ impl Tool for PortScanTool {
         );
 
         let start = Instant::now();
-        let mut open_ports: Vec<serde_json::Value> = Vec::new();
 
-        for &port in &ports {
-            let addr = format!("{}:{}", host, port);
-            match TcpStream::connect_timeout(
-                &addr
-                    .to_socket_addrs()?
-                    .next()
-                    .context("failed to resolve address")?,
-                timeout,
-            ) {
-                Ok(_) => {
-                    debug!(host = %host, port = %port, "tool: port is open");
-                    open_ports.push(serde_json::json!({
-                        "port": port,
-                        "state": "open",
-                    }));
-                }
-                Err(_) => {
-                    // Port is closed/filtered — ignore silently
-                }
-            }
-        }
+        // Parallel scan: ports are probed concurrently (bounded worker pool),
+        // so a slow/filtered host's per-port timeout is paid once instead of
+        // once per port. Previously each port was probed serially — 24 default
+        // ports × 3s timeout ≈ worst-case 72s. Result order is sorted by port
+        // (the concurrent collection is unordered).
+        const SCAN_WORKERS: usize = 24;
+        let next_port = std::sync::atomic::AtomicUsize::new(0);
+        let open_ports: Vec<serde_json::Value> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..SCAN_WORKERS)
+                .map(|_| {
+                    s.spawn(|| {
+                        let mut found: Vec<(u16, serde_json::Value)> = Vec::new();
+                        loop {
+                            let idx = next_port.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(&port) = ports.get(idx) else {
+                                break;
+                            };
+                            let addr = format!("{}:{}", host, port);
+                            let resolved =
+                                match addr.to_socket_addrs().ok().and_then(|mut it| it.next()) {
+                                    Some(addr) => addr,
+                                    None => continue,
+                                };
+                            if TcpStream::connect_timeout(&resolved, timeout).is_ok() {
+                                debug!(host = %host, port = %port, "tool: port is open");
+                                found.push((
+                                    port,
+                                    serde_json::json!({
+                                        "port": port,
+                                        "state": "open",
+                                    }),
+                                ));
+                            }
+                        }
+                        found
+                    })
+                })
+                .collect();
+            let mut all: Vec<(u16, serde_json::Value)> = handles
+                .into_iter()
+                .filter_map(|h| h.join().ok())
+                .flatten()
+                .collect();
+            all.sort_by_key(|(port, _)| *port);
+            all.into_iter().map(|(_, v)| v).collect()
+        });
 
         let elapsed = start.elapsed();
 

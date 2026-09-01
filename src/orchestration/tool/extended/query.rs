@@ -94,6 +94,114 @@ fn tokenize_path(path: &str) -> Vec<PathToken> {
     tokens
 }
 
+/// Shared implementation for the JSON/YAML query tools: resolve + sanitize the
+/// path, read it under the byte cap, parse with the caller's parser, and build
+/// the common found/not-found result envelope. The two tools previously
+/// duplicated ~85 lines differing only in parser and labels.
+fn query_structured_file(
+    input: &ToolInput,
+    tool_name: &'static str,
+    format_label: &'static str,
+    read: impl Fn(&std::path::Path) -> Result<String>,
+    parse: impl Fn(&str) -> Result<Value>,
+) -> Result<ToolOutput> {
+    let path = input.payload["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing required field: path"))?;
+
+    let query = input.payload["query"].as_str().unwrap_or(".");
+
+    let file_path = sanitize_path(input, path)?;
+    let query_str = query.to_string();
+
+    debug!(
+        path = %file_path.display(),
+        query = %query_str,
+        tool = %tool_name,
+        "tool: querying structured file"
+    );
+
+    let content = read(&file_path).with_context(|| {
+        format!(
+            "failed to read {format_label} file '{}'",
+            file_path.display()
+        )
+    })?;
+
+    let parsed: Value = parse(&content).with_context(|| {
+        format!(
+            "failed to parse {format_label} from '{}'",
+            file_path.display()
+        )
+    })?;
+
+    let result = query_json_path(&parsed, &query_str);
+
+    match result {
+        Some(value) => {
+            debug!(
+                path = %file_path.display(),
+                query = %query_str,
+                tool = %tool_name,
+                "tool: query found result"
+            );
+            Ok(ToolOutput {
+                success: true,
+                result: Some(json!({
+                    "path": path,
+                    "query": query_str,
+                    "found": true,
+                    "value": value,
+                    "value_type": json_type_name(value),
+                })),
+                error: None,
+                verification: Some(format!("{tool_name}_success")),
+                audit_log: Some(format!(
+                    "{tool_name} '{}' with query '{}'",
+                    file_path.display(),
+                    query_str
+                )),
+                pua_report: Some(tool_execution_report(
+                    tool_name,
+                    Some(&format!("{tool_name}_success")),
+                )),
+            })
+        }
+        None => {
+            debug!(
+                path = %file_path.display(),
+                query = %query_str,
+                tool = %tool_name,
+                "tool: query path not found"
+            );
+            Ok(ToolOutput {
+                success: false,
+                result: Some(json!({
+                    "path": path,
+                    "query": query_str,
+                    "found": false,
+                    "value": null,
+                })),
+                error: Some(format!(
+                    "path '{}' not found in {} document",
+                    query_str,
+                    format_label.to_ascii_uppercase()
+                )),
+                verification: Some(format!("{tool_name}_not_found")),
+                audit_log: Some(format!(
+                    "{tool_name} '{}' query '{}' not found",
+                    file_path.display(),
+                    query_str
+                )),
+                pua_report: Some(tool_execution_report(
+                    tool_name,
+                    Some(&format!("{tool_name}_not_found")),
+                )),
+            })
+        }
+    }
+}
+
 // ── JsonQueryTool ──────────────────────────────────────────────────────────
 
 pub struct JsonQueryTool;
@@ -103,91 +211,21 @@ impl Tool for JsonQueryTool {
         "json_query"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
-        let path = input.payload["path"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing required field: path"))?;
-
-        let query = input.payload["query"].as_str().unwrap_or(".");
-
-        let file_path = sanitize_path(input, path)?;
-        let query_str = query.to_string();
-
-        debug!(
-            path = %file_path.display(),
-            query = %query_str,
-            "tool: json_query reading file"
-        );
-
-        // Byte cap (input-side OOM guard, same limit as read_file).
-        let content =
-            String::from_utf8_lossy(&crate::orchestration::tool::exec_common::read_file_capped(
-                &file_path,
-                crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
-            )?)
-            .into_owned();
-
-        let parsed: Value = serde_json::from_str(&content)
-            .with_context(|| format!("failed to parse JSON from '{}'", file_path.display()))?;
-
-        let result = query_json_path(&parsed, &query_str);
-
-        match result {
-            Some(value) => {
-                debug!(
-                    path = %file_path.display(),
-                    query = %query_str,
-                    "tool: json_query found result"
-                );
-                Ok(ToolOutput {
-                    success: true,
-                    result: Some(json!({
-                        "path": path,
-                        "query": query_str,
-                        "found": true,
-                        "value": value,
-                        "value_type": json_type_name(value),
-                    })),
-                    error: None,
-                    verification: Some("json_query_success".to_string()),
-                    audit_log: Some(format!(
-                        "json_query '{}' with query '{}'",
-                        file_path.display(),
-                        query_str
-                    )),
-                    pua_report: Some(tool_execution_report(
-                        "json_query",
-                        Some("json_query_success"),
-                    )),
-                })
-            }
-            None => {
-                debug!(
-                    path = %file_path.display(),
-                    query = %query_str,
-                    "tool: json_query path not found"
-                );
-                Ok(ToolOutput {
-                    success: false,
-                    result: Some(json!({
-                        "path": path,
-                        "query": query_str,
-                        "found": false,
-                        "value": null,
-                    })),
-                    error: Some(format!("path '{}' not found in JSON document", query_str)),
-                    verification: Some("json_query_not_found".to_string()),
-                    audit_log: Some(format!(
-                        "json_query '{}' query '{}' not found",
-                        file_path.display(),
-                        query_str
-                    )),
-                    pua_report: Some(tool_execution_report(
-                        "json_query",
-                        Some("json_query_not_found"),
-                    )),
-                })
-            }
-        }
+        query_structured_file(
+            input,
+            "json_query",
+            "JSON",
+            |p| {
+                Ok(String::from_utf8_lossy(
+                    &crate::orchestration::tool::exec_common::read_file_capped(
+                        p,
+                        crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+                    )?,
+                )
+                .into_owned())
+            },
+            |s| serde_json::from_str(s).map_err(anyhow::Error::from),
+        )
     }
 }
 
@@ -214,89 +252,18 @@ impl Tool for YamlQueryTool {
         "yaml_query"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
-        let path = input.payload["path"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing required field: path"))?;
-
-        let query = input.payload["query"].as_str().unwrap_or(".");
-
-        let file_path = sanitize_path(input, path)?;
-        let query_str = query.to_string();
-
-        debug!(
-            path = %file_path.display(),
-            query = %query_str,
-            "tool: yaml_query reading file"
-        );
-
-        let content = crate::orchestration::tool::exec_common::read_text_capped(
-            &file_path,
-            crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+        query_structured_file(
+            input,
+            "yaml_query",
+            "YAML",
+            |p| {
+                crate::orchestration::tool::exec_common::read_text_capped(
+                    p,
+                    crate::orchestration::tool::exec_common::MAX_TOOL_FILE_READ_BYTES,
+                )
+            },
+            |s| serde_yaml::from_str(s).map_err(anyhow::Error::from),
         )
-        .with_context(|| format!("failed to read YAML file '{}'", file_path.display()))?;
-
-        let parsed: Value = serde_yaml::from_str(&content)
-            .with_context(|| format!("failed to parse YAML from '{}'", file_path.display()))?;
-
-        let result = query_json_path(&parsed, &query_str);
-
-        match result {
-            Some(value) => {
-                debug!(
-                    path = %file_path.display(),
-                    query = %query_str,
-                    "tool: yaml_query found result"
-                );
-                Ok(ToolOutput {
-                    success: true,
-                    result: Some(json!({
-                        "path": path,
-                        "query": query_str,
-                        "found": true,
-                        "value": value,
-                        "value_type": json_type_name(value),
-                    })),
-                    error: None,
-                    verification: Some("yaml_query_success".to_string()),
-                    audit_log: Some(format!(
-                        "yaml_query '{}' with query '{}'",
-                        file_path.display(),
-                        query_str
-                    )),
-                    pua_report: Some(tool_execution_report(
-                        "yaml_query",
-                        Some("yaml_query_success"),
-                    )),
-                })
-            }
-            None => {
-                debug!(
-                    path = %file_path.display(),
-                    query = %query_str,
-                    "tool: yaml_query path not found"
-                );
-                Ok(ToolOutput {
-                    success: false,
-                    result: Some(json!({
-                        "path": path,
-                        "query": query_str,
-                        "found": false,
-                        "value": null,
-                    })),
-                    error: Some(format!("path '{}' not found in YAML document", query_str)),
-                    verification: Some("yaml_query_not_found".to_string()),
-                    audit_log: Some(format!(
-                        "yaml_query '{}' query '{}' not found",
-                        file_path.display(),
-                        query_str
-                    )),
-                    pua_report: Some(tool_execution_report(
-                        "yaml_query",
-                        Some("yaml_query_not_found"),
-                    )),
-                })
-            }
-        }
     }
 }
 

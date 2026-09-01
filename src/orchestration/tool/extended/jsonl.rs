@@ -21,7 +21,8 @@ impl Tool for JsonlReadTool {
         let path = input.payload["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
-        let max_lines = input.payload["max_lines"].as_u64().unwrap_or(1000) as usize;
+        // Param name follows the descriptor table (`limit`, not `max_lines`).
+        let max_lines = input.payload["limit"].as_u64().unwrap_or(1000) as usize;
 
         let validated = sanitize_path(input, path)?;
         // Byte cap (input-side OOM guard, same limit as read_file): a
@@ -90,10 +91,14 @@ impl Tool for JsonlWriteTool {
         let path = input.payload["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
-        let records = input.payload["records"]
+        // Param name follows the descriptor table (`data`, not `records`).
+        let records = input.payload["data"]
             .as_array()
-            .ok_or_else(|| anyhow::anyhow!("missing 'records' array"))?;
-        let validated = sanitize_path(input, path)?;
+            .ok_or_else(|| anyhow::anyhow!("missing 'data' array"))?;
+        // Write path uses the shared write-sandbox pattern (containment +
+        // disk-exhaustion cap + system-path blocklist), matching write_file /
+        // edit_file — previously only read-path containment was enforced.
+        let validated = crate::orchestration::tool::sanitize_path_for_write(input, path)?;
 
         let mut output = String::new();
         for record in records {
@@ -102,6 +107,9 @@ impl Tool for JsonlWriteTool {
             output.push_str(&line);
             output.push('\n');
         }
+
+        crate::orchestration::tool::enforce_write_sandbox(&validated, &output)?;
+        let _lock = crate::orchestration::tool::acquire_tool_write_lock(&validated)?;
 
         fs::write(&validated, &output)
             .with_context(|| format!("failed to write JSONL: {}", validated.display()))?;

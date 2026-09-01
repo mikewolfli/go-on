@@ -774,11 +774,19 @@ pub struct HardeningDecision {
 }
 
 /// Resolve policy bundle from deployment target.
+///
+/// Accepts both the sandbox-hint values passed by `PolicyEvaluator`
+/// (`local-dev`/`ci`/`managed-service`/`production`) and the documented
+/// config `deployment_target` profile names (`simple-server`/
+/// `multi-users-server`) — previously a production config using the profile
+/// names silently fell through to `local_dev` (no sandbox, no write approval).
 pub fn policy_bundle_for_target(target: Option<&str>) -> PolicyBundle {
     match target.unwrap_or("local-dev").to_ascii_lowercase().as_str() {
-        "ci" | "ci-pipeline" => PolicyBundle::ci_pipeline(),
+        "ci" | "ci-pipeline" | "simple-server" | "simple" => PolicyBundle::ci_pipeline(),
         "managed-service" | "managed" => PolicyBundle::managed_service(),
-        "production" | "prod" => PolicyBundle::production_hardened(),
+        "production" | "prod" | "multi-users-server" | "multi-user-server" | "multi" => {
+            PolicyBundle::production_hardened()
+        }
         _ => PolicyBundle::local_dev(),
     }
 }
@@ -841,6 +849,28 @@ mod tests {
         assert_eq!(
             policy_bundle_for_target(Some("managed-service")).sandbox_level,
             SandboxLevel::Strict
+        );
+    }
+
+    #[test]
+    fn policy_bundle_for_target_maps_config_profile_names() {
+        // The documented config `deployment_target` profile names must not fall
+        // through to local_dev (no sandbox, no write approval) on a server.
+        assert_eq!(
+            policy_bundle_for_target(Some("simple-server")).sandbox_level,
+            SandboxLevel::Basic
+        );
+        assert_eq!(
+            policy_bundle_for_target(Some("multi-users-server")).sandbox_level,
+            SandboxLevel::Isolated
+        );
+        assert_eq!(
+            policy_bundle_for_target(Some("multi-user-server")).sandbox_level,
+            SandboxLevel::Isolated
+        );
+        assert_eq!(
+            policy_bundle_for_target(Some("production")).sandbox_level,
+            SandboxLevel::Isolated
         );
     }
 

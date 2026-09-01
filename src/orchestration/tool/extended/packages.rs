@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use tracing::debug;
 
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
+use crate::shared::url_encode::form_url_encode;
 
 /// Lazy re-export of the process-global blocking client for synchronous
 /// package-registry searches (connection pooling shared with all subsystems;
@@ -41,20 +42,31 @@ impl Tool for SearchPackagesTool {
             "pypi" => ("pypi", search_pypi(client, query)?),
             "go" => ("go", search_go_proxy(client, query)?),
             _ => {
-                // auto: try crates.io first, then npm, then pypi
-                match search_crates_io(client, query, max_results) {
+                // auto: probe all three registries concurrently and take the
+                // first non-empty result in preference order (crates.io > npm
+                // > pypi). Previously the registries were probed serially — a
+                // dead registry cost a full timeout before the next one was
+                // tried. `client` is 'static, so it can be shared across
+                // threads.
+                let query_crates = query.to_string();
+                let query_npm = query.to_string();
+                let crates_handle = std::thread::spawn(move || {
+                    search_crates_io(client, &query_crates, max_results)
+                });
+                let npm_handle =
+                    std::thread::spawn(move || search_npm(client, &query_npm, max_results));
+                let pypi_result = search_pypi(client, query);
+                let crates_result = crates_handle.join().unwrap_or_else(|_| Ok(Vec::new()));
+                let npm_result = npm_handle.join().unwrap_or_else(|_| Ok(Vec::new()));
+                match crates_result {
                     Ok(results) if !results.is_empty() => ("crates.io", results),
-                    _ => {
-                        debug!("crates.io returned no results, trying npm");
-                        match search_npm(client, query, max_results) {
-                            Ok(results) if !results.is_empty() => ("npm", results),
-                            _ => {
-                                debug!("npm returned no results, trying pypi");
-                                let results = search_pypi(client, query)?;
-                                ("pypi", results)
-                            }
+                    _ => match npm_result {
+                        Ok(results) if !results.is_empty() => ("npm", results),
+                        _ => {
+                            debug!("crates.io + npm returned no results, using pypi");
+                            ("pypi", pypi_result?)
                         }
-                    }
+                    },
                 }
             }
         };
@@ -83,11 +95,6 @@ impl Tool for SearchPackagesTool {
     }
 }
 
-/// Percent-encode a string for use in URL query parameters.
-fn url_encode(s: &str) -> String {
-    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
-}
-
 /// Read a blocking response body under the shared policy cap and parse it as
 /// JSON (OOM guard for package-registry responses — the registries can return
 /// large bodies for popular packages).
@@ -106,7 +113,7 @@ fn search_crates_io(
     let per_page = max_results.clamp(1, 50);
     let url = format!(
         "https://crates.io/api/v1/crates?q={}&per_page={}",
-        url_encode(query),
+        form_url_encode(query),
         per_page
     );
     let mut resp = client
@@ -143,7 +150,7 @@ fn search_npm(
     let size = max_results.clamp(1, 20);
     let url = format!(
         "https://registry.npmjs.org/-/v1/search?text={}&size={}",
-        url_encode(query),
+        form_url_encode(query),
         size
     );
     let mut resp = client
@@ -177,7 +184,7 @@ fn search_pypi(client: &reqwest::blocking::Client, query: &str) -> Result<Vec<Va
     // PyPI's XML-RPC API is deprecated; use the Warehouse JSON API
     let json_url = format!(
         "https://pypi.org/simple/search/?q={}&per_page=10",
-        url_encode(query)
+        form_url_encode(query)
     );
     let mut resp = client
         .get(&json_url)
@@ -224,7 +231,7 @@ fn search_pypi(client: &reqwest::blocking::Client, query: &str) -> Result<Vec<Va
 
 /// Fetch detailed info about a specific PyPI package.
 fn fetch_pypi_detail(client: &reqwest::blocking::Client, name: &str) -> Result<Value> {
-    let url = format!("https://pypi.org/pypi/{}/json", url_encode(name));
+    let url = format!("https://pypi.org/pypi/{}/json", form_url_encode(name));
     let mut resp = client
         .get(&url)
         .send()
@@ -251,12 +258,22 @@ fn search_go_proxy(client: &reqwest::blocking::Client, query: &str) -> Result<Ve
     // Go module proxy uses a simple list endpoint
     // The standard proxy (proxy.golang.org) does not provide search.
     // Use the pkg.go.dev search endpoint instead.
-    let url = format!("https://proxy.golang.org/{}/@v/list", url_encode(query));
+    let url = format!(
+        "https://proxy.golang.org/{}/@v/list",
+        form_url_encode(query)
+    );
     let resp = client.get(&url).send();
 
     match resp {
         Ok(resp) if resp.status().is_success() => {
-            let body = resp.text().context("Failed to read Go proxy response")?;
+            // Byte-capped read (same guard as every other registry response) —
+            // the go proxy list endpoint can grow large for popular modules.
+            let mut resp = resp;
+            let body = crate::orchestration::tool::extended::http::read_blocking_body_capped(
+                &mut resp, "Go proxy",
+            )
+            .context("Failed to read Go proxy response")?;
+            let body = String::from_utf8_lossy(&body);
             let versions: Vec<&str> = body.lines().collect();
             let latest = versions.last().copied().unwrap_or("unknown");
             Ok(vec![json!({
@@ -306,12 +323,5 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("requires arguments.query"));
-    }
-
-    #[test]
-    fn url_encode_replaces_spaces() {
-        let encoded = url_encode("hello world");
-        // form-urlencoded uses "+" for spaces (also valid in query strings)
-        assert!(encoded == "hello%20world" || encoded == "hello+world");
     }
 }

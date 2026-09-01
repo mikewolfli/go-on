@@ -19,7 +19,7 @@ use tracing::{debug, info, warn};
 
 use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
 use crate::acp::r#impl::runtime::protocol::{parse_http_request, ParsedHttpRequest};
-use crate::acp::r#impl::runtime::sse::write_sse_raw_event;
+use crate::acp::r#impl::runtime::sse::{write_sse_headers, write_sse_raw_event};
 use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
 use crate::governance::rbac::{AccessDecision, Permission, Principal};
@@ -42,8 +42,6 @@ pub(crate) const MAX_BATCH_SIZE: usize = 100;
 
 /// Timeout for reading the remaining HTTP request body (30s).
 const HTTP_BODY_READ_TIMEOUT: Duration = crate::shared::http_timeouts::HTTP_BODY_READ_TIMEOUT;
-/// Timeout for writing the SSE response header (30s).
-const SSE_HEADER_WRITE_TIMEOUT: Duration = crate::shared::http_timeouts::SOCKET_WRITE_TIMEOUT;
 /// SSE heartbeat interval (30s) — clients use it to detect dead connections.
 pub(crate) const SSE_HEARTBEAT_INTERVAL: Duration =
     crate::shared::http_timeouts::SSE_HEARTBEAT_INTERVAL;
@@ -1302,16 +1300,9 @@ async fn handle_mcp_sse_connection(
     // the POST endpoint URL and keep the connection alive. CORS headers are
     // the same config-driven ones as every other MCP response (previously a
     // hardcoded `Access-Control-Allow-Origin: *` bypassed the whitelist).
-    let header = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n{}\r\n\r\n",
-        cors_headers
-    );
-    tokio::time::timeout(
-        SSE_HEADER_WRITE_TIMEOUT,
-        socket.write_all(header.as_bytes()),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("timeout writing SSE headers"))??;
+    // Header frame shared with the ACP SSE runtime; MCP keeps the connection
+    // alive (`keep-alive`) while one-shot ACP SSE streams use `close`.
+    write_sse_headers(socket, "keep-alive", cors_headers).await?;
     socket.flush().await?;
 
     // ── Initial endpoint event ─────────────────────────────────────────

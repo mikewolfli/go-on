@@ -19,6 +19,7 @@ pub mod token_bucket;
 pub mod token_estimator;
 pub mod tool_descriptors;
 pub mod truncate;
+pub mod url_encode;
 pub mod url_join;
 pub mod vec_utils;
 

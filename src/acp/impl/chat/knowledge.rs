@@ -5,6 +5,7 @@
 //! `chat.rs` to reduce the monolithic file size.
 
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tracing::warn;
 
 use crate::acp::server::AcpServer;
@@ -178,24 +179,52 @@ pub(crate) async fn persist_vector_memory(
     }
 
     if settings.summary_enabled && params.messages.len() >= settings.summary_trigger_messages {
-        let summary_text = generate_phase_summary_text(
-            server,
-            phase_name,
-            phase_options,
-            selected_agent,
-            &params.messages,
-            response_text,
-            settings.summary_max_chars,
-        )
-        .await
-        .unwrap_or_else(|| {
-            build_phase_summary(&params.messages, response_text, settings.summary_max_chars)
-        });
-        if !summary_text.is_empty() {
-            if let Err(err) = store.upsert_phase_summary(phase_name, &summary_text).await {
-                warn!(phase = phase_name, error = %err, "phase summary upsert failed");
-            } else {
-                server.observability.metrics.record_summary_store();
+        // Fire-and-forget: the LLM summary (bounded by
+        // `llm_summary_timeout_seconds`) must not delay the streamed `done`
+        // event on the response path — the client previously saw every chunk
+        // and then silently waited up to ~12s for `done` while the summary
+        // LLM round trip completed. The server is fetched from the process
+        // registry (same pattern as `executor.rs` / `autonomy_loop.rs`); when
+        // no server is registered (unit-test contexts) the deterministic
+        // extractive fallback is used inline so summaries still persist.
+        if let Some(server_arc) = crate::acp::server::current_acp_server() {
+            let store = store.clone();
+            let phase_name = phase_name.to_string();
+            let selected_agent = selected_agent.to_string();
+            let messages = params.messages.clone();
+            let response_text = response_text.to_string();
+            let phase_options = phase_options.cloned();
+            let max_chars = settings.summary_max_chars;
+            let metrics = Arc::clone(&server_arc.observability.metrics);
+            tokio::spawn(async move {
+                let summary_text = generate_phase_summary_text(
+                    &server_arc,
+                    &phase_name,
+                    phase_options.as_ref(),
+                    &selected_agent,
+                    &messages,
+                    &response_text,
+                    max_chars,
+                )
+                .await
+                .unwrap_or_else(|| build_phase_summary(&messages, &response_text, max_chars));
+                if !summary_text.is_empty() {
+                    if let Err(err) = store.upsert_phase_summary(&phase_name, &summary_text).await {
+                        warn!(phase = %phase_name, error = %err, "phase summary upsert failed");
+                    } else {
+                        metrics.record_summary_store();
+                    }
+                }
+            });
+        } else {
+            let summary_text =
+                build_phase_summary(&params.messages, response_text, settings.summary_max_chars);
+            if !summary_text.is_empty() {
+                if let Err(err) = store.upsert_phase_summary(phase_name, &summary_text).await {
+                    warn!(phase = %phase_name, error = %err, "phase summary upsert failed");
+                } else {
+                    server.observability.metrics.record_summary_store();
+                }
             }
         }
     }

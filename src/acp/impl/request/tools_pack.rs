@@ -316,14 +316,6 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
     // fallback for the server-less path. The MCP and LLM channels now show
     // the same text/schema for these tools (previously the MCP baseline
     // carried hand-written copies that had already drifted).
-    const BRIDGE_TABLE_TOOLS: &[&str] = &[
-        "workflow_execute",
-        "workflow_ask",
-        "workflow_generate",
-        "import_skill",
-        "github_search_skills",
-        "skill-creator",
-    ];
     tools.extend(BRIDGE_TABLE_TOOLS.iter().map(|name| {
         let v = crate::shared::tool_descriptors::tool_descriptor_value(name);
         let description = v
@@ -356,9 +348,23 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
     tools
 }
 
+/// Bridge-only special tools whose canonical description + schema live in the
+/// shared `tool_descriptors` table (the same table the LLM function-calling
+/// channel reads). Single source for the MCP descriptor listing, the
+/// known-tool gate (`is_bridge_special_tool`) and the consistency test — the
+/// name list previously appeared in three places that could drift.
+const BRIDGE_TABLE_TOOLS: &[&str] = &[
+    "workflow_execute",
+    "workflow_ask",
+    "workflow_generate",
+    "import_skill",
+    "github_search_skills",
+    "skill-creator",
+];
+
 /// Returns true if the tool name is handled by the built-in bridge-only
 /// special-tool match arm (acp_trace_get, goon_*, prompts_*, skill-finder,
-/// import_skill, github_search_skills, …). These are not registered `Tool`
+/// and the [`BRIDGE_TABLE_TOOLS`]). These are not registered `Tool`
 /// implementations but are executed by the match in `execute_tool_call`.
 pub(crate) fn is_bridge_special_tool(name: &str) -> bool {
     matches!(
@@ -381,12 +387,7 @@ pub(crate) fn is_bridge_special_tool(name: &str) -> bool {
             | "prompts_list"
             | "prompts_get"
             | "skill-finder"
-            | "import_skill"
-            | "github_search_skills"
-            | "workflow_execute"
-            | "workflow_ask"
-            | "workflow_generate"
-    )
+    ) || BRIDGE_TABLE_TOOLS.contains(&name)
 }
 
 /// Returns true if the name resolves through the server's skill registry
@@ -1069,7 +1070,7 @@ pub(super) fn governance_action_for_tool(name: &str) -> GovernanceAction {
     crate::governance::tool_capability::ToolCapabilityRegistry::action(name)
 }
 
-pub(super) fn local_tool_descriptor(name: &'static str) -> Value {
+pub(super) fn local_tool_descriptor(name: &str) -> Value {
     crate::shared::tool_descriptors::tool_descriptor_value(name)
 }
 
@@ -1171,25 +1172,24 @@ mod tests {
         // the bridge-only special tools (single source = tool_descriptors
         // table). Regression: the hand-written MCP baseline had drifted.
         let tools = build_mcp_tool_descriptors(None);
-        for name in [
-            "workflow_execute",
-            "workflow_ask",
-            "workflow_generate",
-            "import_skill",
-            "github_search_skills",
-            "skill-creator",
-        ] {
+        for name in BRIDGE_TABLE_TOOLS {
             let entry = tools
                 .iter()
                 .find(|t| t.get("name").and_then(Value::as_str) == Some(name))
                 .unwrap_or_else(|| panic!("{name} missing from MCP descriptors"));
-            let desc = entry.get("description").and_then(Value::as_str).unwrap_or("");
+            let desc = entry
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let table_value = crate::shared::tool_descriptors::tool_descriptor_value(name);
             let table_desc = table_value
                 .get("description")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            assert_eq!(desc, table_desc, "{name} description drifted from the table");
+            assert_eq!(
+                desc, table_desc,
+                "{name} description drifted from the table"
+            );
         }
     }
 

@@ -23,29 +23,6 @@ impl Tool for ReadFileLinesTool {
         "read_file_lines"
     }
 
-    fn input_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file to read"
-                },
-                "start_line": {
-                    "type": "integer",
-                    "description": "First line number to read (1-based, inclusive)",
-                    "default": 1
-                },
-                "end_line": {
-                    "type": "integer",
-                    "description": "Last line number to read (1-based, inclusive)",
-                    "default": 50
-                }
-            },
-            "required": ["path"]
-        })
-    }
-
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()

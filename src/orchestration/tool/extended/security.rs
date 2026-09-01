@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -27,7 +28,6 @@ struct OsvCacheEntry {
 /// Simple JSON file-based cache for OSV queries.
 struct OsvCache {
     path: PathBuf,
-    ttl_secs: u64,
     entries: HashMap<String, OsvCacheEntry>,
 }
 
@@ -36,7 +36,7 @@ struct OsvCache {
 const MAX_OSV_CACHE_ENTRIES: usize = 5_000;
 
 impl OsvCache {
-    fn load_or_create(ttl_hours: u64) -> Self {
+    fn load() -> Self {
         let path = osv_cache_path();
         // Cap the read: the cache is self-written, but a corrupt/huge file on
         // disk must not OOM the tool (same input-side guard as the lock-file
@@ -48,20 +48,16 @@ impl OsvCache {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-        Self {
-            path,
-            ttl_secs: ttl_hours * 3600,
-            entries,
-        }
+        Self { path, entries }
     }
 
-    fn get(&self, key: &str) -> Option<Vec<Value>> {
+    fn get(&self, key: &str, ttl_secs: u64) -> Option<Vec<Value>> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
         self.entries.get(key).and_then(|entry| {
-            if now - entry.cached_at < self.ttl_secs {
+            if now - entry.cached_at < ttl_secs {
                 Some(entry.results.clone())
             } else {
                 None // expired
@@ -69,7 +65,9 @@ impl OsvCache {
         })
     }
 
-    fn set(&mut self, key: String, results: Vec<Value>) {
+    /// Insert/update an entry in memory (no disk I/O). The parallel query
+    /// workers call this per package; the caller persists once after the scan.
+    fn set_memory(&mut self, key: String, results: Vec<Value>) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -83,7 +81,7 @@ impl OsvCache {
         );
         // Bounded cache: evict the oldest entry when over capacity so a
         // long-running scanner (many ecosystems/packages) cannot grow the
-        // cache file without bound (each `set` rewrites the whole file).
+        // cache without bound.
         if self.entries.len() > MAX_OSV_CACHE_ENTRIES {
             if let Some(oldest) = self
                 .entries
@@ -94,8 +92,14 @@ impl OsvCache {
                 self.entries.remove(&oldest);
             }
         }
-        // Persist to disk; a write failure is logged (not silent) so a cache
-        // that silently stops persisting is observable.
+    }
+
+    /// Persist the whole cache to disk once. A write failure is logged (not
+    /// silent) so a cache that silently stops persisting is observable.
+    /// Previously `set` rewrote the entire cache file per package — with a
+    /// few hundred dependencies that meant a few hundred full-file writes per
+    /// scan.
+    fn persist(&self) {
         if let Ok(data) = serde_json::to_string(&self.entries) {
             if let Some(parent) = self.path.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -109,6 +113,15 @@ impl OsvCache {
             }
         }
     }
+}
+
+/// Process-level OSV cache: loaded once per process and shared across scans
+/// (previously every `security_scan` call re-read the whole cache file). TTL
+/// is applied per lookup (`get` takes the caller's `cache_ttl_hours`), so a
+/// per-run TTL still governs freshness without reloading the file.
+fn osv_cache() -> &'static std::sync::Mutex<OsvCache> {
+    static CACHE: OnceLock<std::sync::Mutex<OsvCache>> = OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(OsvCache::load()))
 }
 
 /// Determine the OSV cache file path (~/.cache/go-on/osv-cache.json).
@@ -198,38 +211,71 @@ impl Tool for SecurityScanTool {
             });
         }
 
-        // Initialize OSV cache.
-        let mut cache = OsvCache::load_or_create(cache_ttl_hours);
+        // Process-level OSV cache, shared by the parallel query workers below
+        // (behind a mutex — workers check the cache first and only query the
+        // API on a miss). Loaded once per process; persisted once per scan.
+        let cache = osv_cache();
+        let ttl_secs = cache_ttl_hours * 3600;
 
-        // Query OSV API for each package (batched to avoid excessive requests),
-        // using the local cache to avoid redundant HTTP queries.
-        let mut vulnerabilities: Vec<Value> = Vec::new();
-        for pkg in &all_packages {
-            let cache_key = format!(
-                "{}:{}@{}",
-                pkg.ecosystem,
-                pkg.name,
-                pkg.version.as_deref().unwrap_or("*")
-            );
+        // Query OSV concurrently (bounded worker pool): previously every
+        // uncached package was queried serially, so a project with hundreds of
+        // dependencies paid the per-request network latency (up to 15s each)
+        // one after another. Cache hits stay on the fast path.
+        const OSV_WORKERS: usize = 8;
+        let next_pkg = std::sync::atomic::AtomicUsize::new(0);
+        let vulnerabilities: Vec<Value> = std::thread::scope(|s| {
+            let mut handles = Vec::new();
+            for _ in 0..OSV_WORKERS {
+                handles.push(s.spawn(|| {
+                    let mut out: Vec<Value> = Vec::new();
+                    loop {
+                        let idx = next_pkg.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(pkg) = all_packages.get(idx) else {
+                            break;
+                        };
+                        let cache_key = format!(
+                            "{}:{}@{}",
+                            pkg.ecosystem,
+                            pkg.name,
+                            pkg.version.as_deref().unwrap_or("*")
+                        );
 
-            // Check cache first
-            if let Some(cached) = cache.get(&cache_key) {
-                debug!(package = %pkg.name, cached = %cached.len(), "cache hit for OSV query");
-                vulnerabilities.extend(cached);
-                continue;
+                        // Check cache first (clone out of the guard so the
+                        // lock is not held across the network call).
+                        let cached = { cache.lock().ok().and_then(|c| c.get(&cache_key, ttl_secs)) };
+                        if let Some(cached) = cached {
+                            debug!(package = %pkg.name, cached = %cached.len(), "cache hit for OSV query");
+                            out.extend(cached);
+                            continue;
+                        }
+
+                        debug!(package = %pkg.name, ecosystem = %pkg.ecosystem, "querying OSV");
+                        match query_osv(pkg) {
+                            Ok(mut vulns) => {
+                                let to_cache = vulns.clone();
+                                if let Ok(mut c) = cache.lock() {
+                                    c.set_memory(cache_key, to_cache);
+                                }
+                                out.append(&mut vulns);
+                            }
+                            Err(e) => {
+                                debug!(package = %pkg.name, error = %e, "OSV query failed");
+                            }
+                        }
+                    }
+                    out
+                }));
             }
+            handles
+                .into_iter()
+                .filter_map(|h| h.join().ok())
+                .flatten()
+                .collect()
+        });
 
-            debug!(package = %pkg.name, ecosystem = %pkg.ecosystem, "querying OSV");
-            match query_osv(pkg) {
-                Ok(mut vulns) => {
-                    // Store in cache for future lookups
-                    cache.set(cache_key, vulns.clone());
-                    vulnerabilities.append(&mut vulns);
-                }
-                Err(e) => {
-                    debug!(package = %pkg.name, error = %e, "OSV query failed");
-                }
-            }
+        // Persist the updated cache once (batch) instead of once per package.
+        if let Ok(c) = cache.lock() {
+            c.persist();
         }
 
         debug!(

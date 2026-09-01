@@ -19,14 +19,6 @@ use super::*;
 use crate::acp::server::AcpServer;
 use crate::rpc_protocol::RequestTraceContext;
 
-fn normalize_control_mode(mode: &str) -> &'static str {
-    match mode.to_ascii_lowercase().as_str() {
-        "full_auto" | "autonomous" => "autonomous",
-        "agent" | "safeguard" | "assisted" => "assisted",
-        _ => "manual",
-    }
-}
-
 fn build_runtime_cycle_patch_set(
     records: &[crate::reinforcement::PlannedSubtaskRecord],
 ) -> Vec<Value> {
@@ -961,7 +953,9 @@ pub(crate) async fn handle_workflow_execute(
         "plan_artifact_path": plan_artifact_path.display().to_string(),
         "workflow_artifact_path": workflow_artifact_path.display().to_string(),
         "execution_mode": "runtime_execute",
-        "run_mode": normalize_control_mode(&execution_context.adaptive_defaults.applied_mode),
+        "run_mode": super::super::util::normalize_control_mode(
+            &execution_context.adaptive_defaults.applied_mode
+        ),
         "autonomy_contract": autonomy_contract,
         "total_rounds": 1 + repair_context.cycle_reports.len(),
         "stop_reason": stop_reason,

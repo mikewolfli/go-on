@@ -23,8 +23,9 @@ use serde::Serialize;
 pub struct CircuitBreakerSnapshot {
     /// Circuit breaker name
     pub name: String,
-    /// Current state ("open"/"closed"/"halfopen" from the live source;
-    /// "unknown" when no live source is attached — never a fake "closed").
+    /// Current state label ("open"/"closed"/"half-open" from the live
+    /// source; "unknown" when no live source is attached — never a fake
+    /// "closed").
     pub state: String,
     /// Failure count
     pub failure_count: u32,
@@ -104,17 +105,7 @@ impl CircuitBreakerRegistry {
                 .map(|(name, state, failures, total, successes, last_change)| {
                     CircuitBreakerSnapshot {
                         name,
-                        state: match state {
-                            crate::resilience::hyper_resilience::CircuitState::Open => {
-                                "open".to_string()
-                            }
-                            crate::resilience::hyper_resilience::CircuitState::HalfOpen => {
-                                "halfopen".to_string()
-                            }
-                            crate::resilience::hyper_resilience::CircuitState::Closed => {
-                                "closed".to_string()
-                            }
-                        },
+                        state: state.as_label().to_string(),
                         failure_count: failures as u32,
                         success_count: successes as u32,
                         // Real transition timestamp from the breaker; the

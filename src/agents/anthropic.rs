@@ -593,13 +593,7 @@ impl Agent for AnthropicAgent {
         // the GUI's model dropdown, so every suggestion must also be listable
         // here. Hand-curated entries above keep their capability/context
         // enrichment; suggestions with no curated entry get a default shape.
-        if let Some(spec) = crate::core::providers::provider_spec_by_name("anthropic") {
-            for id in &spec.model_suggestions {
-                if !models.iter().any(|m| &m.id == id) {
-                    models.push(crate::shared::default_model_info(id, self.model == *id));
-                }
-            }
-        }
+        crate::agents::merge_spec_model_suggestions(&mut models, "anthropic", &self.model);
 
         models
     }

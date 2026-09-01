@@ -423,7 +423,7 @@ async fn route_http_get(
 /// On each event, serializes and sends the event as an SSE frame. On disconnect,
 /// the socket write will fail and the loop exits gracefully.
 async fn handle_state_events_sse(socket: &mut HttpStream, cors_headers: &str) -> Result<()> {
-    write_sse_headers(socket, cors_headers).await?;
+    write_sse_headers(socket, "close", cors_headers).await?;
 
     let mut rx = crate::protocol::state_sync::subscribe();
     let mut heartbeat_interval =
@@ -729,7 +729,7 @@ async fn route_http_post(
                         };
                     apply_legacy_chat_top_level_params(&mut params);
                     use super::sse::{flush_sse, write_sse_event, write_sse_headers};
-                    write_sse_headers(socket, cors_headers).await?;
+                    write_sse_headers(socket, "close", cors_headers).await?;
                     // Out-of-band SSE transport requires an fd-cloneable plain TCP
                     // stream; on the TLS arm no out-of-band transport is set
                     // (matches the pre-merge TLS behavior — notifications are not
@@ -1094,8 +1094,10 @@ pub(crate) fn status_text(status: u16) -> &'static str {
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
         413 => "Payload Too Large",
         429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
         501 => "Not Implemented",
         502 => "Bad Gateway",

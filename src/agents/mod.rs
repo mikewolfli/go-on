@@ -143,6 +143,30 @@ pub fn system_text_with_extra(principles: &Option<Vec<String>>, extra: &str) -> 
     text
 }
 
+/// Merge the provider spec's `model_suggestions` into an `available_models`
+/// list (single source of truth for the GUI model dropdown).
+///
+/// Previously five providers (anthropic/deepseek/ernie/gemini/cohere)
+/// copy-pasted the same 7-line block; suggestions with no curated entry in the
+/// provider's hand-written list get a default shape, flagged as default when
+/// they match the configured model.
+pub(crate) fn merge_spec_model_suggestions(
+    models: &mut Vec<crate::agent::ModelInfo>,
+    spec_name: &str,
+    configured_model: &str,
+) {
+    if let Some(spec) = crate::core::providers::provider_spec_by_name(spec_name) {
+        for id in &spec.model_suggestions {
+            if !models.iter().any(|m| &m.id == id) {
+                models.push(crate::shared::default_model_info(
+                    id,
+                    configured_model == *id,
+                ));
+            }
+        }
+    }
+}
+
 /// Shared cache for short-lived auth tokens with expiry-based auto-refresh.
 ///
 /// Unified from `BaiduAuthClient` and `CopilotAgent`, which each maintained a

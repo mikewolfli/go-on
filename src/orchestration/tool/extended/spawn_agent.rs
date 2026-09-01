@@ -176,9 +176,9 @@ impl Tool for SpawnAgentTool {
 
         // Always use the dedicated blocking runtime. Never `Handle::try_current()`
         // + `handle.block_on()` here — when `run()` is invoked from within an
-        // existing tokio runtime that would block a worker thread. The guard
-        // serializes concurrent sync `run()` calls on the shared
-        // current-thread runtime.
+        // existing tokio runtime that would block a worker thread. The
+        // multi-thread runtime allows concurrent sync `run()` calls to run in
+        // parallel.
         crate::orchestration::tool::exec_common::with_blocking_runtime(|rt| {
             rt.block_on(execute_spawn(
                 registry,

@@ -1,13 +1,5 @@
 use super::*;
 
-fn normalize_plan_control_mode(mode: Option<&str>) -> &'static str {
-    match mode.unwrap_or("assisted").to_ascii_lowercase().as_str() {
-        "full_auto" | "autonomous" => "autonomous",
-        "agent" | "safeguard" | "assisted" => "assisted",
-        _ => "manual",
-    }
-}
-
 fn task_keywords(task: &str) -> Vec<String> {
     task.to_ascii_lowercase()
         .split(|ch: char| !ch.is_ascii_alphanumeric())
@@ -942,7 +934,9 @@ pub(super) async fn task_plan_payload(
         "knowledge_refinement": knowledge_refinement,
         "plan": plan,
         "artifact_path": artifact_path.display().to_string(),
-        "run_mode": normalize_plan_control_mode(params.get("mode").and_then(Value::as_str)),
+        "run_mode": super::util::normalize_control_mode(
+            params.get("mode").and_then(Value::as_str).unwrap_or("assisted")
+        ),
         "memory_graph": memory_graph,
         "memory_recall": memory_recall,
         "execution_cycle": execution_cycle,

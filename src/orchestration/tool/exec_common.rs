@@ -265,30 +265,31 @@ fn gnu_timeout_available() -> bool {
 /// Shared dedicated blocking tokio runtime for synchronous tool `run()`
 /// paths. Tools must never call `block_on` on an async worker; this runtime
 /// is created once and reused so each tool does not build its own runtime.
+///
+/// The runtime is multi-threaded: concurrent sync tool `run()` calls (which
+/// execute on separate blocking-pool threads) can each `block_on` without
+/// serializing. Previously this was a current-thread runtime guarded by a
+/// process-wide mutex (`with_blocking_runtime`), which made one slow
+/// sync-only tool (e.g. `shell_exec`, up to 60s) block every other sync tool
+/// in the process.
 pub fn blocking_runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
     RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_current_thread()
+        tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .expect("failed to build shared blocking tool runtime")
     })
 }
 
-/// Run `f` with exclusive access to the shared blocking runtime.
+/// Run `f` on the shared blocking runtime.
 ///
-/// A current-thread runtime must not be driven concurrently from multiple OS
-/// threads: parallel tool calls (e.g. two LSP queries in one tool batch) run
-/// on separate blocking-pool threads, and tokio treats concurrent `block_on`
-/// on the same runtime as UB/deadlock. The mutex is held only for the
-/// duration of `f`. All sync `run()` paths must use this instead of calling
-/// `blocking_runtime().block_on(...)` directly.
+/// Concurrent sync tool calls may drive the shared multi-thread runtime in
+/// parallel — tokio supports concurrent `block_on` from multiple OS threads on
+/// a multi-thread runtime (each parks its own driver), so no global mutex is
+/// needed (the previous current-thread runtime + mutex serialized all sync
+/// tools process-wide).
 pub fn with_blocking_runtime<T>(f: impl FnOnce(&tokio::runtime::Runtime) -> T) -> T {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    let _guard = LOCK
-        .get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     f(blocking_runtime())
 }
 

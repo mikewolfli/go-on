@@ -24,7 +24,7 @@ pub use validate::validate_required_arguments;
 ///
 /// Returns a fully populated `McpTool` with name, description, and input schema.
 /// For unknown tool names, returns a generic descriptor.
-pub fn tool_descriptor(name: &'static str) -> McpTool {
+pub fn tool_descriptor(name: &str) -> McpTool {
     core::descriptor(name)
         .or_else(|| extended::descriptor(name))
         .or_else(|| build::descriptor(name))
@@ -45,7 +45,7 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
 /// This is a convenience wrapper around `tool_descriptor` that returns the
 /// serialized JSON value. It is used by the ACP request handler in `request.rs`
 /// for building MCP tool descriptor lists.
-pub fn tool_descriptor_value(name: &'static str) -> Value {
+pub fn tool_descriptor_value(name: &str) -> Value {
     let tool = tool_descriptor(name);
     serde_json::to_value(tool).unwrap_or_else(|_| {
         json!({

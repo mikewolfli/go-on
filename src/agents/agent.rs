@@ -215,14 +215,6 @@ pub struct AgentTaskEnvelope {
 pub enum AgentError {
     #[error("Agent runtime error: {0}")]
     Runtime(String),
-    #[error("Configuration error: {0}")]
-    Config(String),
-    #[error("Network error: {0}")]
-    Network(String),
-    #[error("Timeout error: {0}")]
-    Timeout(String),
-    #[error("Unknown error: {0}")]
-    Unknown(String),
 }
 
 impl From<anyhow::Error> for AgentError {
@@ -661,28 +653,9 @@ pub trait Agent: Send + Sync {
     /// response, and wraps it in an `AgentTaskResult`.  Agents that need
     /// custom task logic can override this method.
     async fn run_task(&self, envelope: AgentTaskEnvelope) -> AppResult<AgentTaskResult> {
-        // Build messages from the task envelope (mirrors build_chat_messages).
-        let mut messages = Vec::new();
-
-        if let Some(evidence) = &envelope.evidence {
-            if !evidence.is_empty() {
-                messages.push(Message {
-                    role: "system".to_string(),
-                    content: format!("Context/Evidence:\n{}", evidence),
-                });
-            }
-        }
-
-        let mut user_content = format!("Objective: {}\n", envelope.objective);
-        if let Some(constraints) = &envelope.constraints {
-            user_content.push_str(&format!("Constraints: {}\n", constraints));
-        }
-        user_content.push_str("\nPlease complete this task and provide the result.");
-
-        messages.push(Message {
-            role: "user".to_string(),
-            content: user_content,
-        });
+        // Build messages from the task envelope via the shared implementation
+        // (was previously an inline mirror of `mode::build_chat_messages`).
+        let messages = crate::orchestration::mode::build_chat_messages(&envelope);
 
         // Create a standalone channel for collecting the chat response.
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();

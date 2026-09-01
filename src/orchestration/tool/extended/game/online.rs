@@ -177,7 +177,7 @@ impl Tool for GamePriceTrackerTool {
                 // Use Steam Store API: search for app
                 let search_url = format!(
                     "https://store.steampowered.com/api/storesearch/?term={}&cc=US&l=en",
-                    urlencoding(game)
+                    crate::shared::url_encode::form_url_encode(game)
                 );
                 let client = crate::shared::http_client::blocking_http_client()
                     .context("failed to build HTTP client")?;
@@ -324,16 +324,4 @@ fn steam_current_players(app_id: u64) -> Option<u64> {
         .ok()?;
     let body: serde_json::Value = resp.json().ok()?;
     body["response"]["player_count"].as_u64()
-}
-
-/// URL-encode a string for use in HTTP queries.
-#[cfg(feature = "game-online")]
-fn urlencoding(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-            ' ' => "+".to_string(),
-            other => format!("%{:02X}", other as u8),
-        })
-        .collect()
 }

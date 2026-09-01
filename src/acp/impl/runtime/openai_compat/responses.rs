@@ -23,12 +23,12 @@ use crate::agent::Message;
 use crate::i18n::runtime::{t, tf};
 use crate::rpc_protocol::RequestTraceContext;
 
-use super::chat_completions::{degraded_openai_message, is_setup_or_upstream_unavailable};
 use super::super::http::{
     clone_tcp_stream, http_trace_context, write_http_json_response,
     write_http_json_response_with_context, HttpStream,
 };
 use super::super::sse::{write_openai_sse_done, write_sse_event, write_sse_headers};
+use super::chat_completions::{degraded_openai_message, is_setup_or_upstream_unavailable};
 
 /// Responses API (Phase R1 baseline) request schema.
 /// Maps `input` (string or array of message objects) instead of `messages`.
@@ -1283,7 +1283,7 @@ async fn handle_response_stream(
         "incomplete_details": null,
     });
 
-    write_sse_headers(socket, cors_headers).await?;
+    write_sse_headers(socket, "close", cors_headers).await?;
     // Out-of-band SSE transport requires a plain TCP stream (fd clone); on the
     // TLS arm no out-of-band transport is set.
     let out_of_band_transport = if let HttpStream::Plain(plain) = socket {

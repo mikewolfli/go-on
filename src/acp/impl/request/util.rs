@@ -7,6 +7,19 @@ use crate::i18n::runtime::tf;
 use crate::memory::vector::VectorStore;
 use std::sync::Arc;
 
+/// Normalize an execution/plan control-mode string to its canonical value.
+///
+/// Single shared mapping for `handle_workflow_execute` (runtime mode) and
+/// `task_plan_payload` (plan mode) — previously two byte-identical match
+/// arms, one wrapping `Option` with an `"assisted"` default.
+pub(crate) fn normalize_control_mode(mode: &str) -> &'static str {
+    match mode.to_ascii_lowercase().as_str() {
+        "full_auto" | "autonomous" => "autonomous",
+        "agent" | "safeguard" | "assisted" => "assisted",
+        _ => "manual",
+    }
+}
+
 /// Collect relevant context snippets from the vector store by searching
 /// across multiple phases (execution phase and semantic phase).
 ///

@@ -84,12 +84,16 @@ document-markdown = ["dep:comrak", "dep:scraper"]
 document-excel = ["dep:calamine"]
 document-ppt = ["dep:quick-xml"]
 document-excel-write = ["dep:rust_xlsxwriter"]
+# Pure dependency aggregator: pulls the document-* backends into the
+# production profiles. No code cfg-gates on `sub-bus-multimodal` itself — the
+# multimodal modules gate on the individual document-* features.
 sub-bus-multimodal = [
     "document-pdf",
     "document-docx",
     "document-html",
     "document-markdown",
     "document-excel",
+    "document-excel-write",
     "document-ppt",
 ]
 
@@ -177,7 +181,12 @@ template-engine = ["dep:minijinja"]
 # (charting, data-collection, image-extra — reserved for future use, not yet implemented)
 
 # Full-feature profile for local development and CI testing
-# Includes EVERY feature for maximum coverage
+# Includes EVERY production feature for maximum coverage (all feature-gated
+# tools and subsystems, plus the template-engine Jinja2 renderer). The
+# chaos-testing feature is deliberately NOT included: it is a testing-only
+# opt-in (fault injection via GO_ON_CHAOS_ENABLED) whose drill scenario
+# helpers are only used by tests, so a non-test build would emit dead-code
+# warnings and fail the release-gate clippy check.
 full = [
     "backend-sqlite",
     "sub-bus-tool",
@@ -208,6 +217,7 @@ full = [
     "barcode-tools",
     "cam-gcode",
     "gis-gpx",
+    "template-engine",
     # (charting, data-collection, image-extra — reserved, not yet implemented)
     "game-online",
     "game-process",

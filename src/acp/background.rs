@@ -974,7 +974,10 @@ async fn run_cron_job(store: std::sync::Arc<CronStore>, job: CronJob, started_at
             (false, "no live ACP server registered".to_string())
         }
     };
-    let truncated = truncate_run_output(&summary);
+    // Truncate for storage/audit: full outputs are already persisted in the
+    // workflow artifact ledger, so the cron row keeps a bounded excerpt
+    // (shared char-based truncation, append-style ellipsis).
+    let truncated = crate::shared::truncate::truncate_chars(&summary, 500, "...[truncated]");
     if let Err(e) = store.finish_run(&job.id, started_at, ok, &truncated) {
         tracing::warn!("cron: could not finalize run for job {}: {e}", job.id);
     }
@@ -1015,17 +1018,4 @@ fn summarize_dispatch_output(output: &DispatchOutput) -> String {
         DispatchOutput::Silent => "silent".to_string(),
         DispatchOutput::Stream { .. } => "stream".to_string(),
     }
-}
-
-/// Truncate a run summary for storage/audit: full outputs are already persisted
-/// in the workflow artifact ledger, so the cron row keeps a bounded excerpt.
-#[cfg(feature = "backend-sqlite")]
-fn truncate_run_output(summary: &str) -> String {
-    const MAX_CHARS: usize = 500;
-    if summary.chars().count() <= MAX_CHARS {
-        return summary.to_string();
-    }
-    let mut truncated: String = summary.chars().take(MAX_CHARS).collect();
-    truncated.push_str("...[truncated]");
-    truncated
 }

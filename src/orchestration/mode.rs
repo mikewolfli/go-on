@@ -30,95 +30,104 @@ use tracing::{info, warn};
 ///   SafeGuard ReadOnly degraded set (it can mutate remote state).
 /// - `web_search` / `security_scan` are SafeGuard ReadOnly tools that are
 ///   not part of the Plan tool surface.
-fn plan_tools() -> Vec<&'static str> {
-    READ_ONLY_TOOL_NAMES
-        .iter()
-        .copied()
-        .filter(|t| *t != "web_search" && *t != "security_scan")
-        .chain(std::iter::once("http_request"))
-        .collect()
+///
+/// Computed once (static) so per-tool-batch policy checks do not rebuild the
+/// list on every call.
+fn plan_tools() -> &'static [&'static str] {
+    static PLAN_TOOL_NAMES: std::sync::LazyLock<Vec<&'static str>> =
+        std::sync::LazyLock::new(|| {
+            READ_ONLY_TOOL_NAMES
+                .iter()
+                .copied()
+                .filter(|t| *t != "web_search" && *t != "security_scan")
+                .chain(std::iter::once("http_request"))
+                .collect()
+        });
+    &PLAN_TOOL_NAMES
 }
 
 /// Full execution tool set (Edit / FullAuto / SafeGuard non-readonly).
-fn all_exec_tools() -> Vec<&'static str> {
-    vec![
-        // ── File tools ──
-        "read_file",
-        "read_file_lines",
-        "write_file",
-        "edit_file",
-        "apply_patch",
-        "move_path",
-        "delete_path",
-        "copy_path",
-        "create_directory",
-        "format_code",
-        "hash_file",
-        "file_watch",
-        // ── Search tools ──
-        "search_files",
-        "grep",
-        "code_index_search",
-        "go_to_definition",
-        "find_references",
-        // ── Git / Diff ──
-        "inspect_git_diff",
-        "file_diff",
-        "git",
-        // ── Build / Test / Lint ──
-        "cargo_check",
-        "cargo_test",
-        "run_tests",
-        "build_run",
-        "lint_run",
-        "diagnostics",
-        // ── Shell / Execution ──
-        "shell_exec",
-        // ── Directory ──
-        "list_directory",
-        // ── Archive ──
-        "archive_inspect",
-        "archive_extract",
-        "compress",
-        "decompress",
-        // ── Network ──
-        "http_request",
-        "web_search",
-        "dns_lookup",
-        "ping",
-        "port_scan",
-        // ── Data ──
-        "jsonl_read",
-        "jsonl_write",
-        "json_query",
-        "rss_read",
-        // ── Docker ──
-        "docker_ps",
-        "docker_logs",
-        "docker_exec",
-        "docker_build",
-        "docker_push",
-        "docker_compose",
-        // ── Utility ──
-        "date_time",
-        "environment_info",
-        "uuid_gen",
-        "random_token",
-        "encode_decode",
-        "template_render",
-        "code_metrics",
-        "security_scan",
-        "search_packages",
-        "dependency_add",
-        // ── Agent tools ──
-        "spawn_agent",
-        "apply_code_action",
-        // ── Skill tools (always available) ──
-        "skill_list",
-        "skill_execute",
-        "skill_create",
-        "skill_reload",
-    ]
+static ALL_EXEC_TOOL_NAMES: &[&str] = &[
+    // ── File tools ──
+    "read_file",
+    "read_file_lines",
+    "write_file",
+    "edit_file",
+    "apply_patch",
+    "move_path",
+    "delete_path",
+    "copy_path",
+    "create_directory",
+    "format_code",
+    "hash_file",
+    "file_watch",
+    // ── Search tools ──
+    "search_files",
+    "grep",
+    "code_index_search",
+    "go_to_definition",
+    "find_references",
+    // ── Git / Diff ──
+    "inspect_git_diff",
+    "file_diff",
+    "git",
+    // ── Build / Test / Lint ──
+    "cargo_check",
+    "cargo_test",
+    "run_tests",
+    "build_run",
+    "lint_run",
+    "diagnostics",
+    // ── Shell / Execution ──
+    "shell_exec",
+    // ── Directory ──
+    "list_directory",
+    // ── Archive ──
+    "archive_inspect",
+    "archive_extract",
+    "compress",
+    "decompress",
+    // ── Network ──
+    "http_request",
+    "web_search",
+    "dns_lookup",
+    "ping",
+    "port_scan",
+    // ── Data ──
+    "jsonl_read",
+    "jsonl_write",
+    "json_query",
+    "rss_read",
+    // ── Docker ──
+    "docker_ps",
+    "docker_logs",
+    "docker_exec",
+    "docker_build",
+    "docker_push",
+    "docker_compose",
+    // ── Utility ──
+    "date_time",
+    "environment_info",
+    "uuid_gen",
+    "random_token",
+    "encode_decode",
+    "template_render",
+    "code_metrics",
+    "security_scan",
+    "search_packages",
+    "dependency_add",
+    // ── Agent tools ──
+    "spawn_agent",
+    "apply_code_action",
+    // ── Skill tools (always available) ──
+    "skill_list",
+    "skill_execute",
+    "skill_create",
+    "skill_reload",
+];
+
+fn all_exec_tools() -> &'static [&'static str] {
+    ALL_EXEC_TOOL_NAMES
 }
 
 /// Core tools available to a task that is awaiting approval or has no agent
@@ -207,8 +216,8 @@ pub(crate) fn low_risk_tool_names() -> &'static [&'static str] {
 }
 
 /// Read-only degraded tool set (SafeGuard ReadOnly).
-fn read_only_tools() -> Vec<&'static str> {
-    READ_ONLY_TOOL_NAMES.to_vec()
+fn read_only_tools() -> &'static [&'static str] {
+    READ_ONLY_TOOL_NAMES
 }
 
 /// Supported chat/agent modes
@@ -419,7 +428,10 @@ async fn execute_agent_run_task_async(
 }
 
 /// Helper to build a chat message from the task envelope.
-fn build_chat_messages(task: &AgentTaskEnvelope) -> Vec<Message> {
+///
+/// Single implementation shared with `Agent::run_task` (the default trait
+/// implementation previously mirrored this exact message construction).
+pub(crate) fn build_chat_messages(task: &AgentTaskEnvelope) -> Vec<Message> {
     let mut messages = Vec::new();
 
     // If there is evidence (context), add it as a system-like message
@@ -1104,9 +1116,9 @@ impl ModeRuntime for GenericModeRuntime {
         if matches!(self.kind, ModeKind::SafeGuard)
             && !matches!(self.degrade_policy, AutoDegradePolicy::ReadOnly)
         {
-            return all_exec_tools().into_iter().map(String::from).collect();
+            return all_exec_tools().iter().map(|s| s.to_string()).collect();
         }
-        allowed
+        allowed.iter().map(|s| s.to_string()).collect()
     }
 
     fn max_tool_calls(&self) -> usize {
@@ -1145,14 +1157,12 @@ impl ModeRuntime for GenericModeRuntime {
 /// Single source of truth for the per-mode tool surface and max-call cap,
 /// consumed by the ACP tool-execution gate (`filter_tool_calls_by_policy`)
 /// and by `GenericModeRuntime::allowed_tools`/`max_tool_calls` (the CLI path).
-pub fn policy_for_kind(kind: &ModeKind) -> (Vec<String>, usize) {
-    let allowed: Vec<String> = match kind {
-        ModeKind::Ask => return (Vec::new(), 0),
-        ModeKind::Plan => plan_tools().into_iter().map(String::from).collect(),
-        ModeKind::Edit | ModeKind::FullAuto => {
-            all_exec_tools().into_iter().map(String::from).collect()
-        }
-        ModeKind::SafeGuard => read_only_tools().into_iter().map(String::from).collect(),
+pub fn policy_for_kind(kind: &ModeKind) -> (&'static [&'static str], usize) {
+    let allowed: &'static [&'static str] = match kind {
+        ModeKind::Ask => return (&[], 0),
+        ModeKind::Plan => plan_tools(),
+        ModeKind::Edit | ModeKind::FullAuto => all_exec_tools(),
+        ModeKind::SafeGuard => read_only_tools(),
     };
     let max_calls = match kind {
         ModeKind::Ask => 0,
@@ -1175,7 +1185,7 @@ pub fn filter_tool_calls_by_policy(
     let mut kept: Vec<(String, String)> = Vec::new();
     let mut blocked: Vec<String> = Vec::new();
     for (name, args) in tool_calls {
-        if kept.len() >= max_calls || !allowed.contains(name) {
+        if kept.len() >= max_calls || !allowed.contains(&name.as_str()) {
             blocked.push(name.clone());
             continue;
         }
@@ -1198,8 +1208,8 @@ mod tests {
     #[test]
     fn test_policy_for_kind_plan_is_read_only() {
         let (allowed, _max) = policy_for_kind(&ModeKind::Plan);
-        assert!(allowed.contains(&"read_file".to_string()));
-        assert!(!allowed.contains(&"write_file".to_string()));
+        assert!(allowed.contains(&"read_file"));
+        assert!(!allowed.contains(&"write_file"));
     }
 
     #[test]
@@ -1247,7 +1257,7 @@ mod tests {
             plan_tools(),
             all_exec_tools(),
             read_only_tools(),
-            low_risk_tool_names().to_vec(),
+            low_risk_tool_names(),
         ] {
             for name in list {
                 assert!(

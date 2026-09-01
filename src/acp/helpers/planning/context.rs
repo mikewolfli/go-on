@@ -4,6 +4,8 @@
 //! vector configuration, message optimization, and cache key generation.
 
 use std::future::Future;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -102,13 +104,57 @@ pub async fn probe_agent_runtime_readiness(
         return AgentRuntimeReadiness::Ready;
     }
 
-    match probe_local_endpoint(url, timeout_duration).await {
+    match probe_local_endpoint_cached(url, timeout_duration).await {
         EndpointProbeResult::Reachable | EndpointProbeResult::Skipped => {
             AgentRuntimeReadiness::Ready
         }
         EndpointProbeResult::Unreachable => AgentRuntimeReadiness::EndpointUnavailable,
         EndpointProbeResult::TimedOut => AgentRuntimeReadiness::EndpointTimedOut,
     }
+}
+
+/// Local-endpoint probe with a short TTL cache for `Reachable` outcomes.
+///
+/// Consecutive chat requests probe the same local model services on the
+/// observe→think hot path; a ready service was re-`lookup_host` + re-connected
+/// on every request. A `Reachable` result is reused for [`READY_PROBE_TTL`];
+/// failures (`Unreachable`/`TimedOut`) are never cached so a down service is
+/// re-probed (and its recovery detected) on the next request.
+pub async fn probe_local_endpoint_cached(
+    url: &str,
+    timeout_duration: Duration,
+) -> EndpointProbeResult {
+    const READY_PROBE_TTL: Duration = Duration::from_secs(30);
+    static READY_CACHE: OnceLock<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
+        OnceLock::new();
+
+    let key = url.to_string();
+    let now = std::time::Instant::now();
+    {
+        if let Ok(cache) = READY_CACHE
+            .get_or_init(|| Mutex::new(Default::default()))
+            .lock()
+        {
+            if let Some(cached_at) = cache.get(&key) {
+                if cached_at.elapsed() < READY_PROBE_TTL {
+                    return EndpointProbeResult::Reachable;
+                }
+            }
+        }
+    }
+
+    let result = probe_local_endpoint(url, timeout_duration).await;
+    if matches!(result, EndpointProbeResult::Reachable) {
+        if let Ok(mut cache) = READY_CACHE
+            .get_or_init(|| Mutex::new(Default::default()))
+            .lock()
+        {
+            cache.insert(key, now);
+            // Bounded: drop entries that fell out of the TTL window.
+            cache.retain(|_, cached_at| cached_at.elapsed() < READY_PROBE_TTL);
+        }
+    }
+    result
 }
 
 pub async fn probe_local_endpoint(url: &str, timeout_duration: Duration) -> EndpointProbeResult {

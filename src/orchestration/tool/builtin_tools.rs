@@ -1358,7 +1358,18 @@ impl Tool for SkillListTool {
                     descriptors
                         .into_iter()
                         .map(|d| {
-                            serde_json::json!({
+                            // M4.2: bundled skills surface their `[goon.bundle]`
+                            // config (allowed-tools whitelist + context
+                            // fragments) as an additive `bundle` key; plain
+                            // skills omit it.
+                            let bundle = d.bundle.map(|b| {
+                                serde_json::json!({
+                                    "allowed_tools": b.allowed_tools,
+                                    "context_fragments": b.context_fragments,
+                                    "when_to_use": b.when_to_use,
+                                })
+                            });
+                            let mut entry = serde_json::json!({
                                 "name": d.name,
                                 "description": d.description,
                                 "score": d.score,
@@ -1367,7 +1378,11 @@ impl Tool for SkillListTool {
                                 "success_calls": d.success_calls,
                                 "failure_calls": d.failure_calls,
                                 "average_latency_ms": d.average_latency_ms,
-                            })
+                            });
+                            if let Some(bundle) = bundle {
+                                entry["bundle"] = bundle;
+                            }
+                            entry
                         })
                         .collect::<Vec<_>>()
                 }
@@ -1536,8 +1551,8 @@ impl Tool for SkillExecuteTool {
         let input = input.clone();
         // Run on the shared dedicated blocking runtime so we never `block_on`
         // on an async worker (see `exec_common::blocking_runtime()`). The
-        // guard serializes concurrent sync `run()` calls on the shared
-        // current-thread runtime.
+        // multi-thread runtime allows concurrent sync `run()` calls to run in
+        // parallel.
         crate::orchestration::tool::exec_common::with_blocking_runtime(|rt| {
             rt.block_on(skill_execute_arc().run_async(input))
         })

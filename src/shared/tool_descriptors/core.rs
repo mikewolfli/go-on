@@ -4,7 +4,7 @@ use crate::mcp::McpTool;
 use serde_json::json;
 
 /// Returns the MCP tool descriptor for a known core tool name, or `None`.
-pub(super) fn descriptor(name: &'static str) -> Option<McpTool> {
+pub(super) fn descriptor(name: &str) -> Option<McpTool> {
     match name {
         "read_file" => Some(McpTool {
             name: name.to_string(),
@@ -65,11 +65,11 @@ pub(super) fn descriptor(name: &'static str) -> Option<McpTool> {
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "directory": {"type": "string", "description": "Project directory to run the tests in"},
+                    "directory": {"type": "string", "description": "Project directory to run the tests in (default: current)"},
                     "command": {"type": "string", "enum": ["cargo", "npm", "yarn", "pnpm", "make", "go", "python", "pytest", "mvn", "gradle", "git"], "description": "Test runner command (default: cargo)"},
                     "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments passed to the command (default: [\"test\"])"}
                 },
-                "required": ["directory"]
+                "required": []
             })),
         }),
         "inspect_git_diff" => Some(McpTool {
@@ -78,11 +78,11 @@ pub(super) fn descriptor(name: &'static str) -> Option<McpTool> {
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "directory": {"type": "string", "description": "Git repository directory"},
+                    "directory": {"type": "string", "description": "Git repository directory (default: current)"},
                     "staged": {"type": "boolean", "description": "If true, show staged diff (--cached); otherwise show unstaged"},
                     "files": {"type": "array", "items": {"type": "string"}, "description": "Optional list of file paths to filter the diff"}
                 },
-                "required": ["directory"]
+                "required": []
             })),
         }),
         "workflow_execute" => Some(McpTool {

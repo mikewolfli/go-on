@@ -957,9 +957,29 @@ impl Tool for CodeIndexTool {
             _ => {
                 let query = operation;
                 let limit = payload.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
-                let index = code_index()
+                let mut index = code_index()
                     .lock()
                     .map_err(|e| anyhow::anyhow!("lock error: {}", e))?;
+                // Documented lifecycle: the index is built on the first search
+                // call (module docs promise a first-call rebuild). Previously
+                // search silently returned empty results until an explicit
+                // `build`/`refresh` was issued — the docs and the code did not
+                // agree. The auto-build is one-time (the index stays warm).
+                if index.files_indexed == 0 && index.total_symbols == 0 {
+                    let directory = payload
+                        .get("directory")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(".");
+                    match sanitize_path_for_write(input, directory)
+                        .and_then(|dir| index.build(&dir))
+                    {
+                        Ok(summary) => info!(
+                            "CodeIndex: auto-built on first search ({} files, {} symbols)",
+                            summary.files_scanned, summary.symbols_found
+                        ),
+                        Err(e) => warn!("CodeIndex: first-search auto-build failed: {}", e),
+                    }
+                }
                 let results = index.search(query, limit);
                 Ok(ToolOutput {
                     success: true,
@@ -1135,6 +1155,47 @@ mod tests {
         let results = index.search("MyStruct", 10);
         assert!(!results.is_empty());
         assert_eq!(results[0].name, "MyStruct");
+    }
+
+    #[test]
+    fn test_first_search_auto_builds_index() {
+        // Regression: module docs promise a first-search auto-build, but the
+        // search branch previously returned empty results until an explicit
+        // `build`/`refresh` — docs and code disagreed (principle §18). This
+        // exercises the real `run` path: a bare search (no build/refresh)
+        // against the empty global index must trigger the one-time auto-build
+        // and return symbols. The global singleton is not touched by any other
+        // test, so its empty state at this test's start is deterministic.
+        let tmp = TempDir::new().expect("temp dir");
+        std::fs::write(
+            tmp.path().join("main.rs"),
+            "fn main() {}\npub fn auto_build_probe() {}",
+        )
+        .unwrap();
+
+        let input = ToolInput {
+            task_id: "code-index-test".to_string(),
+            phase: "act".to_string(),
+            agent_role: "coder".to_string(),
+            objective: "auto-build".to_string(),
+            constraints: None,
+            evidence: None,
+            payload: serde_json::json!({
+                "operation": "auto_build_probe",
+                "directory": tmp.path().to_string_lossy(),
+                "limit": 10,
+            }),
+            allowed_base_dir: None,
+        };
+        let output = CodeIndexTool.run(&input).expect("run should succeed");
+        assert!(output.success);
+        let result = output.result.expect("result");
+        assert_eq!(result["operation"], "search");
+        assert!(
+            result["total"].as_u64().unwrap_or(0) > 0,
+            "first search must auto-build and return symbols, got: {result}"
+        );
+        assert!(!result["results"].as_array().unwrap().is_empty());
     }
 
     #[test]
